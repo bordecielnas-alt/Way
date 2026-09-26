@@ -12,6 +12,7 @@ COPY apps/worker/package.json apps/worker/
 COPY apps/front/package.json apps/front/
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
+COPY tsconfig.base.json ./
 COPY packages packages
 COPY apps/api apps/api
 COPY apps/worker apps/worker

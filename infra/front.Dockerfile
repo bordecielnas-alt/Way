@@ -9,6 +9,7 @@ COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/
 COPY apps/front/package.json apps/front/
 RUN npm ci --ignore-scripts
+COPY tsconfig.base.json ./
 COPY packages packages
 COPY apps/front apps/front
 ARG VITE_SATELLITE_URL
