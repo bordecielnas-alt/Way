@@ -1,4 +1,6 @@
-# Way — V0 stack. Usage: cp .env.example .env && docker compose up -d --build
+# Way — V0 stack. Usage: cp .env.example .env, then either
+#   docker compose pull && docker compose up -d   (prebuilt images from ghcr.io)
+#   docker compose up -d --build                    (build locally)
 name: way
 
 x-node: &node
@@ -19,6 +21,7 @@ x-node: &node
 
 services:
   front:
+    image: ${WAY_IMAGE_PREFIX:-ghcr.io/bordecielnas-alt/way}-front:${WAY_TAG:-latest}
     build:
       context: .
       dockerfile: infra/front.Dockerfile
@@ -38,6 +41,7 @@ services:
 
   api:
     <<: *node
+    image: ${WAY_IMAGE_PREFIX:-ghcr.io/bordecielnas-alt/way}-api:${WAY_TAG:-latest}
     build:
       context: .
       dockerfile: infra/node.Dockerfile
@@ -60,6 +64,7 @@ services:
 
   worker:
     <<: *node
+    image: ${WAY_IMAGE_PREFIX:-ghcr.io/bordecielnas-alt/way}-worker:${WAY_TAG:-latest}
     build:
       context: .
       dockerfile: infra/node.Dockerfile

@@ -12,8 +12,12 @@ avec cache et push WebSocket, fiches sourcées, frontières historiques animées
 
 ```bash
 cp .env.example .env   # renseigner POSTGRES_PASSWORD et WAY_CONTACT
-docker compose up -d --build
+docker compose pull    # images publiées sur ghcr.io par GitHub Actions à chaque push sur main
+docker compose up -d
 ```
+
+Pour construire localement plutôt que télécharger : `docker compose up -d --build`.
+Images : `ghcr.io/bordecielnas-alt/way-{front,api,worker}`, tags `latest`, `sha-<commit>` et `<version>` (tags git `v*`).
 
 Puis ouvrir http://localhost:8080. Au premier lancement, le service `borders` télécharge les
 frontières historiques (~66 Mo) dans un volume.
