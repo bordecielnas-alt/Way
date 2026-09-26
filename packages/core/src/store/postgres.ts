@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Category, Poi, PoiLite } from '@way/shared';
-import type { KeyRecord, KeyStatus, Store, ViewQuery } from './types.ts';
+import type { KeyRecord, KeyStatus, Store, StoredDoors, ViewQuery } from './types.ts';
 
 /** Minimal query interface shared by node-postgres Pool and PGlite (tests). */
 interface Conn {
@@ -131,6 +131,33 @@ export class PostgresStore implements Store {
 
   async touchPoi(id: string): Promise<void> {
     await this.db.query('UPDATE pois SET view_count = view_count + 1, last_viewed_at = now() WHERE id = $1', [id]);
+  }
+
+  async getPoisByQids(qids: string[]): Promise<Poi[]> {
+    if (qids.length === 0) return [];
+    const r = await this.db.query<Poi>(`SELECT ${POI_COLS.join(', ')} FROM pois WHERE wikidata_qid = ANY($1::text[])`, [qids]);
+    return r.rows;
+  }
+
+  async queryTimeRange(t0: number, t1: number, limit: number): Promise<PoiLite[]> {
+    const r = await this.db.query<PoiLite>(
+      `SELECT ${LITE_COLS} FROM pois WHERE date_start <= $2 AND COALESCE(date_end, date_start) >= $1
+       ORDER BY importance DESC LIMIT $3`,
+      [t0, t1, limit],
+    );
+    return r.rows;
+  }
+
+  async getDoors(id: string): Promise<StoredDoors | null> {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+    const r = await this.db.query<{ related: unknown }>('SELECT related FROM pois WHERE id = $1', [id]);
+    const v = r.rows[0]?.related;
+    // The column defaults to '[]': no doors computed yet.
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as StoredDoors) : null;
+  }
+
+  async setDoors(id: string, doors: StoredDoors): Promise<void> {
+    await this.db.query('UPDATE pois SET related = $2 WHERE id = $1', [id, JSON.stringify(doors)]);
   }
 
   async getKeys(keys: string[]): Promise<Map<string, KeyRecord>> {

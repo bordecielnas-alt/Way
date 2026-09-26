@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { cellsForPoint, makeKey, type Poi } from '@way/shared';
 import { listSnapshots, snapshotFor } from './borders.ts';
 import { loadConfig } from './config.ts';
+import { meanwhileRange, nextCandidates, surpriseCandidates, timeCandidates } from './doors.ts';
+import type { DatedRow, RelatedRow } from '@way/providers';
 import { planJobs } from './pipeline.ts';
 import { MemoryStore } from './store/memory.ts';
 import { PostgresStore } from './store/postgres.ts';
@@ -94,6 +96,14 @@ async function exerciseStore(store: Store) {
   expect(classes.get('Q515')).toBe('city');
   expect(classes.has('Q1')).toBe(true);
   expect(classes.has('Q2')).toBe(false);
+
+  // Doors helpers.
+  expect((await store.getPoisByQids(['Q1012797', 'Q404'])).map((p) => p.title)).toEqual(['Ostie']);
+  expect((await store.queryTimeRange(100, 120, 5)).map((p) => p.title)).toEqual(['Empire romain']);
+  expect(await store.getDoors(rome.id)).toBeNull();
+  const stored = { v: 1, doors: [{ kind: 'next' as const, title: 'La suite', hint: 'x', poi_id: ostia.id }], empty: [] };
+  await store.setDoors(rome.id, stored);
+  expect(await store.getDoors(rome.id)).toEqual(stored);
 }
 
 describe('stores', () => {
@@ -117,5 +127,44 @@ describe('borders', () => {
     expect(snapshotFor(snaps, 1920)?.year).toBe(1914);
     expect(snapshotFor(snaps, -4000)?.year).toBe(-2000);
     expect(listSnapshots('/nonexistent')).toEqual([]);
+  });
+});
+
+const row = (qid: string, year: number, over: Partial<DatedRow> = {}): DatedRow => ({
+  qid, year, lat: 41.89, lon: 12.49, precision: 9, prop: 'P585', sitelinks: 20, ...over,
+});
+
+describe('doors', () => {
+  const battle = poi({ wikidata_qid: 'Q1', title: 'Bataille A', category: 'battle', date_start: -333 });
+
+  it('"next" prefers the closest later part of the same whole over earlier ones', () => {
+    const rel = (qid: string, year: number, r: RelatedRow['rel'], sitelinks = 20): RelatedRow =>
+      ({ ...row(qid, year, { sitelinks }), rel: r, via: 'guerres d’Alexandre' });
+    const c = nextCandidates(battle, [rel('Q2', -334, 'sibling', 90), rel('Q3', -326, 'sibling'), rel('Q4', -331, 'sibling'), rel('Q1', -333, 'sibling')]);
+    expect(c.map((x) => x.row.qid)).toEqual(['Q4', 'Q3', 'Q2']);
+    expect(c[0]!.title(battle)).toBe('La suite');
+    expect(c[2]!.title(battle)).toBe('Avant cela');
+    expect(c[0]!.hint(battle)).toBe('Guerres d’Alexandre');
+  });
+
+  it('"time" goes later at the same place when it can, earlier otherwise', () => {
+    const later = timeCandidates(battle, [row('Q5', 1900, { sitelinks: 5 }), row('Q6', 400, { sitelinks: 50 }), row('Q7', -300)]);
+    expect(later.map((x) => x.row.qid)).toEqual(['Q6', 'Q5']); // -300 is too close in time
+    expect(later[0]!.title(battle)).toBe('Ici, 730 ans plus tard');
+    const modern = poi({ wikidata_qid: 'Q8', date_start: 2020 });
+    const earlier = timeCandidates(modern, [row('Q9', 1850)]);
+    expect(earlier[0]!.title(modern)).toBe('Ici, 170 ans plus tôt');
+    // Far away is not "here".
+    expect(timeCandidates(battle, [row('Q10', 1900, { lat: 45 })])).toEqual([]);
+  });
+
+  it('"surprise" skips landmarks and destinations taken by other doors', () => {
+    const c = surpriseCandidates(battle, [row('Q11', 100, { sitelinks: 200 }), row('Q12', 100), row('Q13', 100)], new Set(['Q13']));
+    expect(c.map((x) => x.row.qid)).toEqual(['Q12']);
+  });
+
+  it('"meanwhile" window follows the time resolution of the era', () => {
+    expect(meanwhileRange(battle)).toEqual([-358, -308]);
+    expect(meanwhileRange(poi({ wikidata_qid: 'Q14', date_start: 1914 }))).toEqual([1913, 1915]);
   });
 });

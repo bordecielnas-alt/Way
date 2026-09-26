@@ -1,10 +1,17 @@
-import type { Category, Poi, PoiLite } from '@way/shared';
+import type { Category, DoorKind, Poi, PoiLite } from '@way/shared';
 
 export type KeyStatus = 'pending' | 'done' | 'partial' | 'failed';
 
 export interface KeyRecord {
   status: KeyStatus;
   updatedAt: number; // epoch ms
+}
+
+/** Doors cached on a POI (`related` column): destinations by id, and kinds searched without result. */
+export interface StoredDoors {
+  v: number;
+  doors: { kind: DoorKind; title: string; hint: string; poi_id: string }[];
+  empty: DoorKind[];
 }
 
 export interface ViewQuery {
@@ -28,6 +35,11 @@ export interface Store {
   getPoi(id: string): Promise<Poi | null>;
   updatePoi(id: string, patch: Partial<Pick<Poi, 'summary' | 'summary_lang' | 'image_url' | 'sources'>>): Promise<void>;
   touchPoi(id: string): Promise<void>;
+  getPoisByQids(qids: string[]): Promise<Poi[]>;
+  /** Most important POIs whose dates intersect [t0, t1]. */
+  queryTimeRange(t0: number, t1: number, limit: number): Promise<PoiLite[]>;
+  getDoors(id: string): Promise<StoredDoors | null>;
+  setDoors(id: string, doors: StoredDoors): Promise<void>;
 
   getKeys(keys: string[]): Promise<Map<string, KeyRecord>>;
   setKeys(keys: string[], status: KeyStatus, providers?: string[]): Promise<void>;

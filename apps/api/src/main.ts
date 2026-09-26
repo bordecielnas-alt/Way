@@ -5,7 +5,7 @@ import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { ClientMessage, type ServerMessage } from '@way/shared';
 import {
-  createStore, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
+  createStore, DoorService, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
 } from '@way/core';
 import { ViewService, type View } from './views.ts';
 
@@ -13,6 +13,7 @@ const cfg = loadConfig();
 const store = await createStore(cfg);
 const bus: JobBus = cfg.redisUrl ? new RedisBus(cfg.redisUrl) : new InlineBus(store, cfg);
 const views = new ViewService(store, bus, cfg);
+const doors = new DoorService(store);
 const mode = {
   store: cfg.databaseUrl ? 'postgres' : cfg.dataDir ? 'embedded-postgres' : 'memory',
   queue: cfg.redisUrl ? 'redis' : 'inline',
@@ -47,14 +48,21 @@ app.get('/api/pois', async (req, reply) => {
   return { pois, pendingKeys: [...pending] };
 });
 
-app.get<{ Params: { id: string } }>('/api/poi/:id', async (req, reply) => {
-  const poi = await loadPoiDetail(req.params.id, store);
+app.get<{ Params: { id: string }; Querystring: { prefetch?: string } }>('/api/poi/:id', async (req, reply) => {
+  const prefetch = req.query.prefetch === '1';
+  const poi = await loadPoiDetail(req.params.id, store, { touch: !prefetch });
   if (!poi) return reply.code(404).send({ error: 'not found' });
+  // A card is being read: look for its doors meanwhile (brief §4.5).
+  if (!prefetch) doors.warm(poi);
   return poi;
 });
 
-// Doors (brief §4.5) arrive in V1.
-app.get('/api/poi/:id/doors', async () => ({ doors: [], status: 'not_implemented' }));
+// Doors arrive progressively: `pending` lists kinds still being searched.
+app.get<{ Params: { id: string } }>('/api/poi/:id/doors', async (req, reply) => {
+  const res = await doors.get(req.params.id);
+  if (!res) return reply.code(404).send({ error: 'not found' });
+  return res;
+});
 
 app.get<{ Querystring: { year?: string } }>('/api/borders', async (req, reply) => {
   const snapshots = listSnapshots(cfg.bordersDir);

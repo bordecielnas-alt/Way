@@ -88,13 +88,19 @@ export class PoiLayer {
     this.animate(0);
   }
 
-  /** Fly the camera to a POI with a slight tilt. */
-  flyTo(p: PoiLite): void {
-    const h = this.viewer.camera.positionCartographic.height;
-    const range = Math.min(1.8e6, Math.max(2.5e4, h * 0.45));
-    this.viewer.camera.flyToBoundingSphere(new BoundingSphere(Cartesian3.fromDegrees(p.lon, p.lat), 0), {
+  /**
+   * Fly the camera to a POI with a slight tilt. A `journey` (door) keeps
+   * roughly the current altitude and takes longer over long distances.
+   */
+  flyTo(p: PoiLite, { journey = false } = {}): void {
+    const camera = this.viewer.camera;
+    const h = camera.positionCartographic.height;
+    const range = journey ? Math.min(1.5e6, Math.max(1.2e5, h)) : Math.min(1.8e6, Math.max(2.5e4, h * 0.45));
+    const target = Cartesian3.fromDegrees(p.lon, p.lat);
+    const km = Cartesian3.distance(camera.positionWC, target) / 1000;
+    camera.flyToBoundingSphere(new BoundingSphere(target, 0), {
       offset: new HeadingPitchRange(0, CesiumMath.toRadians(-55), range),
-      duration: 2.2,
+      duration: journey ? Math.min(4, 1.8 + km / 3000) : 2.2,
     });
   }
 

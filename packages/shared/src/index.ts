@@ -4,3 +4,4 @@ export * from './geo.ts';
 export * from './keys.ts';
 export * from './poi.ts';
 export * from './protocol.ts';
+export * from './doors.ts';

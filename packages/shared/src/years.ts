@@ -39,6 +39,11 @@ export function bucketOf(y: number): number {
   return t.start + Math.floor((cy - t.start) / t.step) * t.step;
 }
 
+/** Bucket size (years) at year `y`: a natural time resolution for that era. */
+export function bucketStep(y: number): number {
+  return tierOf(y).step;
+}
+
 /** Exclusive end year of the bucket starting at `b`. */
 export function bucketEnd(b: number): number {
   return Math.min(b + tierOf(b).step, MAX_YEAR + 1);

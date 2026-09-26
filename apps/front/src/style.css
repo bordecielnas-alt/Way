@@ -153,6 +153,25 @@ body.card-open .basemap { right: 452px; }
 .card-sources a { color: var(--ink-soft); text-decoration: none; font-size: 13px; border-bottom: 1px solid rgba(217, 164, 65, 0.35); }
 .card-sources a:hover { color: var(--gold); border-color: var(--gold); }
 .card-coords { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* ---------- doors ---------- */
+.door-list { display: grid; gap: 8px; }
+.door {
+  display: flex; gap: 12px; align-items: flex-start; width: 100%; padding: 11px 12px;
+  background: rgba(255, 255, 255, 0.03); border: 1px solid var(--panel-border); border-radius: 8px;
+  color: var(--ink); text-align: left; cursor: pointer; font: inherit;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+  animation: door-in 0.35s ease-out both;
+}
+.door:hover, .door:focus-visible { border-color: rgba(217, 164, 65, 0.55); background: var(--gold-soft); outline: none; }
+.door:active { transform: scale(0.99); }
+.door.skeleton { height: 68px; cursor: default; animation: shimmer 1.2s linear infinite; }
+.door-icon { font-size: 20px; line-height: 1.2; flex: none; }
+.door-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.door-title { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--gold); }
+.door-dest { font-family: var(--serif); font-size: 18px; line-height: 1.2; }
+.door-meta { font-size: 12px; color: var(--muted); }
+@keyframes door-in { from { opacity: 0; transform: translateY(4px); } }
+
 .skeleton { background: linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.09), rgba(255,255,255,0.04)); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; border-radius: 4px; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 

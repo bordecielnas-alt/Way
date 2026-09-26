@@ -12,6 +12,7 @@ export * from './config.ts';
 export * from './pipeline.ts';
 export * from './bus.ts';
 export * from './detail.ts';
+export * from './doors.ts';
 export * from './borders.ts';
 export * from './store/types.ts';
 export { MemoryStore } from './store/memory.ts';

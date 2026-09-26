@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { poiInWindow, toLite, type Category, type Poi, type PoiLite } from '@way/shared';
-import type { KeyRecord, KeyStatus, Store, ViewQuery } from './types.ts';
+import type { KeyRecord, KeyStatus, Store, StoredDoors, ViewQuery } from './types.ts';
 
 interface Snapshot {
   pois: Poi[];
+  doors?: [string, StoredDoors][];
   keys: [string, KeyRecord][];
   classes: [string, Category | null][];
 }
@@ -19,6 +20,7 @@ export class MemoryStore implements Store {
   private byCell = new Map<string, Set<string>>();
   private keys = new Map<string, KeyRecord>();
   private classes = new Map<string, Category | null>();
+  private doors = new Map<string, StoredDoors>();
   private saveTimer: NodeJS.Timeout | null = null;
 
   constructor(private file?: string) {}
@@ -30,6 +32,7 @@ export class MemoryStore implements Store {
     // Pending keys from a previous run will never complete: drop them.
     this.keys = new Map(snap.keys.filter(([, r]) => r.status !== 'pending'));
     this.classes = new Map(snap.classes);
+    this.doors = new Map(snap.doors ?? []);
   }
 
   async close(): Promise<void> {
@@ -45,7 +48,7 @@ export class MemoryStore implements Store {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = null;
     if (!this.file) return;
-    const snap: Snapshot = { pois: [...this.pois.values()], keys: [...this.keys], classes: [...this.classes] };
+    const snap: Snapshot = { pois: [...this.pois.values()], keys: [...this.keys], classes: [...this.classes], doors: [...this.doors] };
     mkdirSync(dirname(this.file), { recursive: true });
     writeFileSync(this.file, JSON.stringify(snap));
   }
@@ -104,6 +107,27 @@ export class MemoryStore implements Store {
   async touchPoi(id: string): Promise<void> {
     const p = this.pois.get(id);
     if (p) p.view_count++;
+    this.scheduleSave();
+  }
+
+  async getPoisByQids(qids: string[]): Promise<Poi[]> {
+    return qids.map((q) => this.byQid.get(q)).filter((id): id is string => !!id).map((id) => this.pois.get(id)!);
+  }
+
+  async queryTimeRange(t0: number, t1: number, limit: number): Promise<PoiLite[]> {
+    return [...this.pois.values()]
+      .filter((p) => poiInWindow(p, t0, t1))
+      .sort((a, b) => b.importance - a.importance)
+      .slice(0, limit)
+      .map(toLite);
+  }
+
+  async getDoors(id: string): Promise<StoredDoors | null> {
+    return this.doors.get(id) ?? null;
+  }
+
+  async setDoors(id: string, doors: StoredDoors): Promise<void> {
+    this.doors.set(id, doors);
     this.scheduleSave();
   }
 

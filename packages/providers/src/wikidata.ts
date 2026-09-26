@@ -200,3 +200,77 @@ export function commonsThumb(filePathUrl: string, width = 800): string {
   const url = filePathUrl.replace(/^http:/, 'https:');
   return `${url}?width=${width}`;
 }
+
+// ---------- doors ----------
+
+export type Relation = 'next' | 'effect' | 'cause' | 'prev' | 'partof' | 'part' | 'event' | 'person' | 'sibling';
+
+export interface RelatedRow extends DatedRow {
+  rel: Relation;
+  /** Shared protagonist (person) or shared whole (sibling), in French. */
+  via: string | null;
+}
+
+const REL_PRIORITY: Relation[] = ['next', 'effect', 'sibling', 'person', 'event', 'partof', 'part', 'prev', 'cause'];
+
+// "source ?p item" and "item ?p source" statements, and what they mean for the source.
+const OUT_RELS = '(wdt:P156 "next") (wdt:P1542 "effect") (wdt:P1536 "effect") (wdt:P155 "prev") (wdt:P828 "cause") (wdt:P361 "partof") (wdt:P793 "event") (wdt:P1344 "event")';
+const IN_RELS = '(wdt:P155 "next") (wdt:P828 "effect") (wdt:P156 "prev") (wdt:P1542 "cause") (wdt:P1536 "cause") (wdt:P361 "part")';
+// People attached to an event or place (participant, founder, creator, architect, namesake)...
+const PERSON_OF = 'wdt:P710|wdt:P112|wdt:P170|wdt:P84|wdt:P61|wdt:P138';
+// ...and how other dated places relate to the same person.
+const OF_PERSON = 'wdt:P710|wdt:P112|wdt:P170|wdt:P84|wdt:P61';
+
+/**
+ * Dated, located entities linked to `qid`: what follows or results from it,
+ * what caused it, what it belongs to, other parts of the same whole (the
+ * next battle of a war) and events sharing a protagonist.
+ */
+export async function queryRelated(qid: string): Promise<RelatedRow[]> {
+  const q = `
+SELECT ?item ?coord ?t ?prec ?kind ?sl ?rel ?viaLabel WITH {
+  SELECT DISTINCT ?item ?rel ?viaLabel WHERE {
+    { VALUES (?p ?rel) { ${OUT_RELS} } wd:${qid} ?p ?item . }
+    UNION
+    { VALUES (?p ?rel) { ${IN_RELS} } ?item ?p wd:${qid} . }
+    UNION
+    {
+      { wd:${qid} ${PERSON_OF} ?via } UNION { ?via wdt:P1344|wdt:P793 wd:${qid} }
+      ?via wdt:P31 wd:Q5 .
+      { ?item ${OF_PERSON} ?via } UNION { ?via wdt:P1344|wdt:P793 ?item }
+      OPTIONAL { ?via rdfs:label ?viaLabel . FILTER(LANG(?viaLabel) = "fr") }
+      BIND("person" AS ?rel)
+    }
+    UNION
+    {
+      # Wars, revolutions and campaigns rarely have coordinates; their parts do.
+      wd:${qid} wdt:P361|wdt:P607 ?via .
+      ?item wdt:P361|wdt:P607 ?via .
+      OPTIONAL { ?via rdfs:label ?viaLabel . FILTER(LANG(?viaLabel) = "fr") }
+      BIND("sibling" AS ?rel)
+    }
+    FILTER(?item != wd:${qid})
+  } LIMIT 500
+} AS %rel WHERE {
+  INCLUDE %rel
+  ?item wdt:P625 ?coord .
+  ${datedBlock(-5000, new Date().getFullYear() + 1)}
+  ?item wikibase:sitelinks ?sl .
+}`;
+  const bindings = await sparql(q);
+  // rowsToDated keeps one row per item; attach the strongest relation found for it.
+  const dated = new Map(rowsToDated(bindings).map((r) => [r.qid, r]));
+  const out = new Map<string, RelatedRow>();
+  for (const b of bindings) {
+    const row = b.item && dated.get(qidOf(b.item.value));
+    const rel = b.rel?.value as Relation | undefined;
+    if (!row || !rel || !REL_PRIORITY.includes(rel)) continue;
+    const prev = out.get(row.qid);
+    if (!prev || REL_PRIORITY.indexOf(rel) < REL_PRIORITY.indexOf(prev.rel)) {
+      out.set(row.qid, { ...row, rel, via: rel === 'person' || rel === 'sibling' ? (b.viaLabel?.value ?? null) : null });
+    }
+  }
+  return [...out.values()];
+}
+
+export const relationRank = (r: Relation) => REL_PRIORITY.indexOf(r);

@@ -9,7 +9,7 @@ import './style.css';
 import { ScreenSpaceEventType, Cartesian2, BoundingSphere, Cartesian3, type Entity } from 'cesium';
 import {
   cellsForRect, formatPoiDate, rectAreaKm2, resolutionForArea, CATEGORY_LABELS,
-  type Category, type ViewMessage,
+  type Category, type Door, type ViewMessage,
 } from '@way/shared';
 import { BordersLayer } from './borders.ts';
 import { Card } from './card.ts';
@@ -86,7 +86,17 @@ basemapButtons.forEach((b) =>
 syncBasemap();
 
 // ---------- card ----------
-const card = new Card(document.getElementById('card')!, () => pois.select(null));
+const card = new Card(document.getElementById('card')!, () => pois.select(null), travel);
+
+/** Going through a door: the globe flies there while the timeline glides to its date. */
+function travel(door: Door): void {
+  const p = door.poi;
+  pois.upsert([p]);
+  pois.select(p.id);
+  timeline.glideTo(p.date_start);
+  pois.flyTo(p, { journey: true });
+  void card.open(p.id);
+}
 
 // ---------- live search over WebSocket ----------
 let online = false;

@@ -2,8 +2,11 @@ import type { Poi } from '@way/shared';
 import { wikipedia } from '@way/providers';
 import type { Store } from './store/types.ts';
 
-/** Full POI for the side panel; fetches the Wikipedia summary on first open. */
-export async function loadPoiDetail(id: string, store: Store): Promise<Poi | null> {
+/**
+ * Full POI for the side panel; fetches the Wikipedia summary on first open.
+ * `touch: false` for prefetches, which are not real visits.
+ */
+export async function loadPoiDetail(id: string, store: Store, { touch = true } = {}): Promise<Poi | null> {
   const poi = await store.getPoi(id);
   if (!poi) return null;
   if (poi.summary == null && poi.wiki_title && poi.wiki_lang) {
@@ -18,6 +21,6 @@ export async function loadPoiDetail(id: string, store: Store): Promise<Poi | nul
       console.warn(`[detail] summary fetch failed for ${poi.wiki_title}:`, (e as Error).message);
     }
   }
-  await store.touchPoi(id);
+  if (touch) await store.touchPoi(id);
   return poi;
 }

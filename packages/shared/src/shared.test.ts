@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { distanceKm, formatDistance, formatYears } from './doors.ts';
 import {
   bucketEnd, bucketOf, bucketsInRange, cellsForRect, formatPoiDate, formatYear, makeKey, parseKey,
   posToYear, rectAreaKm2, resolutionForArea, yearToPos, CURRENT_YEAR, MIN_YEAR, poiInWindow,
@@ -77,5 +78,22 @@ describe('keys and windows', () => {
   it('tests window overlap', () => {
     expect(poiInWindow({ date_start: -27, date_end: 476 }, 100, 200)).toBe(true);
     expect(poiInWindow({ date_start: -753, date_end: null }, -700, -600)).toBe(false);
+  });
+});
+
+describe('door formatting', () => {
+  it('formats distances with a direction', () => {
+    const athens = { lat: 37.98, lon: 23.73 };
+    expect(Math.round(distanceKm(athens, { lat: 41.9, lon: 12.5 }))).toBeGreaterThan(1000);
+    expect(formatDistance(athens, { lat: 39.9, lon: 116.4 }).endsWith('km au nord-est')).toBe(true); // great-circle initial bearing
+    expect(formatDistance(athens, { lat: 38.03, lon: 23.73 })).toBe('à 6 km au nord');
+  });
+
+  it('rounds years', () => {
+    expect(formatYears(1)).toBe('un an');
+    expect(formatYears(-37)).toBe('37 ans');
+    expect(formatYears(98)).toBe('98 ans');
+    expect(formatYears(101)).toBe('un siècle');
+    expect(formatYears(1487).replace(/\s/g, ' ')).toBe('1 500 ans');
   });
 });

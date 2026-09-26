@@ -32,6 +32,7 @@ export class Timeline {
   private bordersEl: HTMLElement;
   private statusEl: HTMLElement;
   private statusText: HTMLElement;
+  private glide = 0;
 
   constructor(root: HTMLElement, initial: TimeWindow, private onChange: (w: TimeWindow) => void) {
     this.a = yearToPos(initial.tStart);
@@ -86,6 +87,25 @@ export class Timeline {
     this.commit();
   }
 
+  /** Glides the window, keeping its visual width, until it is centered on `year`. */
+  glideTo(year: number, ms = 1800): void {
+    const w = this.b - this.a;
+    const target = Math.max(0, Math.min(1 - w, yearToPos(year) - w / 2));
+    const from = this.a;
+    const start = performance.now();
+    const token = ++this.glide;
+    const step = () => {
+      if (token !== this.glide) return; // superseded, or the user grabbed the window
+      const t = Math.min(1, (performance.now() - start) / ms);
+      const e = t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2; // ease-in-out
+      this.a = from + (target - from) * e;
+      this.b = this.a + w;
+      this.commit();
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
   setBordersNote(text: string): void {
     this.bordersEl.textContent = text;
   }
@@ -136,6 +156,7 @@ export class Timeline {
         const w = this.b - this.a;
         this.setRange(p - w / 2, p + w / 2);
       }
+      this.glide++; // the user takes over
       drag = { mode, origin: p, a: this.a, b: this.b };
       this.track.setPointerCapture(e.pointerId);
       e.preventDefault();
