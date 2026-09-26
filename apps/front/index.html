@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Way — 7 000 ans d'histoire</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%23d9a441' stroke-width='2.5'/><path d='M3 16h26M16 3c-5 4-5 22 0 26M16 3c5 4 5 22 0 26' fill='none' stroke='%23d9a441' stroke-width='1.6'/></svg>" />
+  </head>
+  <body>
+    <div id="globe"></div>
+
+    <header class="brand panel">
+      <div class="brand-mark">Way</div>
+      <div class="brand-sub">7 000 ans d'histoire</div>
+    </header>
+
+    <nav id="filters" class="filters panel" aria-label="Filtres"></nav>
+
+    <aside id="card" class="card panel" aria-live="polite" hidden></aside>
+
+    <div id="tooltip" class="tooltip" hidden></div>
+
+    <div class="basemap panel" role="group" aria-label="Fond de carte">
+      <button data-basemap="natural-earth" type="button">Relief</button>
+      <button data-basemap="satellite" type="button">Satellite</button>
+    </div>
+
+    <footer id="timeline" class="timeline panel"></footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

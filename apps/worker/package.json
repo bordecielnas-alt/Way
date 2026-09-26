@@ -1,0 +1,15 @@
+{
+  "name": "@way/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/main.ts",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@way/core": "*",
+    "tsx": "^4.23.15"
+  }
+}

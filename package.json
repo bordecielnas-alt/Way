@@ -1,0 +1,31 @@
+{
+  "name": "way",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "npm run dev -w @way/api",
+    "dev:front": "npm run dev -w @way/front",
+    "build:front": "npm run build -w @way/front",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "borders:fetch": "node scripts/fetch-borders.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "msgpackr-extract": false
+  }
+}

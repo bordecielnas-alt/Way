@@ -1,0 +1,169 @@
+import { randomUUID } from 'node:crypto';
+import {
+  bucketEnd, cellCenter, cellsForPoint, GLOBAL_SPACE, makeKey, parseKey, Poi, cellRadiusKm,
+  type DatePrecisionName,
+} from '@way/shared';
+import { wikidata, wikipedia, type DatedRow } from '@way/providers';
+import { cellToParent, getResolution } from 'h3-js';
+import { categoryFor, classifyClasses } from './categories.ts';
+import type { Config } from './config.ts';
+import type { Store } from './store/types.ts';
+
+export type SearchJob =
+  | { kind: 'global'; buckets: number[]; filter: string }
+  /** Fine view: one radius query around `area` (an ancestor cell) fills all `cells`. */
+  | { kind: 'area'; area: string; cells: string[]; buckets: number[]; filter: string };
+
+/** Fine cells are searched in groups sharing an ancestor: 2 levels up for close views, 1 for regions (keeps radius queries cheap). */
+const areaLevels = (res: number) => (res >= 6 ? 2 : 1);
+
+export interface JobResult {
+  keys: string[];
+  found: number;
+  providers: string[];
+}
+
+export function jobKeys(job: SearchJob): string[] {
+  if (job.kind === 'global') return job.buckets.map((b) => makeKey(GLOBAL_SPACE, b, job.filter));
+  return job.cells.flatMap((c) => job.buckets.map((b) => makeKey(c, b, job.filter)));
+}
+
+/** Group missing keys into as few provider queries as reasonable. */
+export function planJobs(keys: string[], cfg: Config): SearchJob[] {
+  const groups = new Map<string, number[]>();
+  for (const k of keys) {
+    const { space, bucket, filter } = parseKey(k);
+    const g = `${space}|${filter}`;
+    (groups.get(g) ?? groups.set(g, []).get(g)!).push(bucket);
+  }
+  const jobs: SearchJob[] = [];
+  const areas = new Map<string, Extract<SearchJob, { kind: 'area' }>>();
+  for (const [g, buckets] of groups) {
+    const [space, filter] = g.split('|') as [string, string];
+    buckets.sort((a, b) => a - b);
+    if (space !== GLOBAL_SPACE) {
+      // Neighboring cells share one radius query around their common ancestor.
+      const area = cellToParent(space, Math.max(0, getResolution(space) - areaLevels(getResolution(space))));
+      const id = `${area}|${filter}`;
+      let job = areas.get(id);
+      if (!job) {
+        job = { kind: 'area', area, cells: [], buckets: [], filter };
+        areas.set(id, job);
+        jobs.push(job);
+      }
+      job.cells.push(space);
+      job.buckets = [...new Set([...job.buckets, ...buckets])].sort((a, b) => a - b);
+      continue;
+    }
+    // Global queries are expensive per year of span: merge only adjacent small buckets.
+    let run: number[] = [];
+    for (const b of buckets) {
+      const first = run[0];
+      const contiguous = run.length > 0 && bucketEnd(run[run.length - 1]!) === b;
+      if (first !== undefined && contiguous && bucketEnd(b) - first <= cfg.search.globalMaxSpan) run.push(b);
+      else {
+        if (run.length) jobs.push({ kind: 'global', buckets: run, filter });
+        run = [b];
+      }
+    }
+    if (run.length) jobs.push({ kind: 'global', buckets: run, filter });
+  }
+  return jobs;
+}
+
+function precisionName(p: number): DatePrecisionName {
+  if (p >= 9) return 'exact_year';
+  if (p === 8) return 'decade';
+  if (p === 7) return 'century';
+  if (p === 6) return 'millennium';
+  return 'approximate';
+}
+
+/** Importance from Wikipedia language coverage (sitelinks), log-scaled to 0..1. */
+export function importanceFromSitelinks(sl: number): number {
+  return Math.min(1, Math.log1p(sl) / Math.log1p(300));
+}
+
+/** Turn dated Wikidata rows into validated POIs (skips entities already cached). */
+export async function buildPois(rows: DatedRow[], store: Store): Promise<Poi[]> {
+  const existing = await store.existingQids(rows.map((r) => r.qid));
+  const fresh = rows.filter((r) => !existing.has(r.qid));
+  if (fresh.length === 0) return [];
+  const info = await wikidata.queryEntityInfo(fresh.map((r) => r.qid));
+  const classMap = await classifyClasses([...info.values()].flatMap((i) => i.classes), store);
+
+  const pois: Poi[] = [];
+  for (const r of fresh) {
+    const e = info.get(r.qid);
+    if (!e || !e.label) continue;
+    // Rigor: no Wikipedia article, no summary and no readable source -> skip.
+    const wikiLang = e.frTitle ? 'fr' : e.enTitle ? 'en' : null;
+    const wikiTitle = e.frTitle ?? e.enTitle;
+    if (!wikiLang || !wikiTitle) continue;
+    const end = e.endYear != null && e.endYear > r.year && e.endYear - r.year < 3000 ? e.endYear : null;
+    const candidate = {
+      id: randomUUID(),
+      title: e.label.charAt(0).toUpperCase() + e.label.slice(1),
+      summary: null,
+      summary_lang: null,
+      description: e.description,
+      category: categoryFor(e.classes, classMap, r.prop),
+      tags: [],
+      date_start: r.year,
+      date_end: end,
+      date_precision: precisionName(r.precision),
+      lat: r.lat,
+      lon: r.lon,
+      geo_precision: 'exact',
+      h3_cells: cellsForPoint(r.lat, r.lon),
+      importance: importanceFromSitelinks(r.sitelinks),
+      confidence: 'verified',
+      provenance: 'wikidata',
+      sources: [
+        { url: wikipedia.articleUrl(wikiLang, wikiTitle), title: `Wikipédia (${wikiLang}) — ${wikiTitle}`, kind: 'wikipedia' },
+        { url: `https://www.wikidata.org/wiki/${r.qid}`, title: `Wikidata — ${r.qid}`, kind: 'wikidata' },
+      ],
+      image_url: e.image,
+      wikidata_qid: r.qid,
+      wiki_title: wikiTitle,
+      wiki_lang: wikiLang,
+      view_count: 0,
+    };
+    const parsed = Poi.safeParse(candidate);
+    if (parsed.success) pois.push(parsed.data);
+    else console.warn(`[pipeline] invalid POI ${r.qid}:`, parsed.error.issues[0]?.message);
+  }
+  return pois;
+}
+
+/** Run one level-1 search job (Wikidata + Wikipedia GeoSearch) and cache the results. */
+export async function runSearchJob(job: SearchJob, store: Store, cfg: Config): Promise<JobResult> {
+  const t0 = job.buckets[0]!;
+  const t1 = bucketEnd(job.buckets[job.buckets.length - 1]!);
+  const providers = ['wikidata'];
+  let rows: DatedRow[];
+
+  if (job.kind === 'global') {
+    rows = await wikidata.queryGlobal(t0, t1, cfg.search.globalMinSitelinks, cfg.search.globalLimit);
+  } else {
+    const { lat, lon } = cellCenter(job.area);
+    const radiusKm = cellRadiusKm(getResolution(job.area));
+    rows = await wikidata.queryAround(lat, lon, radiusKm, t0, t1, cfg.search.cellLimit);
+    // Close-up views: Wikipedia GeoSearch catches articles Wikidata's radius query missed.
+    if (getResolution(job.cells[0]!) >= 6) {
+      providers.push('wikipedia');
+      const hits = await wikipedia.geosearch('fr', lat, lon, Math.min(10, radiusKm) * 1000, 200);
+      const seen = new Set(rows.map((r) => r.qid));
+      const extra = [...new Set(hits.map((h) => h.qid).filter((q): q is string => !!q && !seen.has(q)))];
+      rows.push(...(await wikidata.queryDatedByQids(extra, t0, t1)));
+    }
+  }
+
+  // Consistency check: date must fall in the requested range (1-year slack for BC numbering).
+  rows = rows.filter((r) => r.year >= t0 - 1 && r.year < t1 + 1);
+  const pois = await buildPois(rows, store);
+  await store.upsertPois(pois);
+  const keys = jobKeys(job);
+  await store.setKeys(keys, 'done', providers);
+  return { keys, found: pois.length, providers };
+}

@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "way-api", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev:api"], "port": 3000 },
+    { "name": "way-front", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev:front"], "port": 5173 }
+  ]
+}
