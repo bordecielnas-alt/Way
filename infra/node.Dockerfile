@@ -16,6 +16,8 @@ COPY tsconfig.base.json ./
 COPY packages packages
 COPY apps/api apps/api
 COPY apps/worker apps/worker
+# Lets a one-shot container fetch the border snapshots without the repo.
+COPY scripts/fetch-borders.mjs scripts/
 
 ARG APP=api
 ENV APP=${APP}
