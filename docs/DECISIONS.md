@@ -55,12 +55,16 @@ Les classes Wikidata (P31) sont rattachées à des classes racines par `P279*`, 
 
 ## Front
 
-- CesiumJS sans Cesium ion : fond **Natural Earth II** livré avec Cesium (relief sans frontières modernes,
-  cohérent avec un globe historique), bascule satellite (Esri par défaut, configurable). Ceci tranche
-  provisoirement le point ouvert « fournisseur de tuiles ».
-- Frontières rendues dans un canvas équirectangulaire 4096×2048, posé comme couche d'imagerie : fondu
-  enchaîné peu coûteux entre instantanés. Couleur par entité suzeraine (`SUBJECTO`), donc les empires
-  apparaissent d'un seul tenant. Atténuées en zoom rapproché.
+- CesiumJS sans Cesium ion. Fond « Relief » : **Esri World Physical Map** (relief naturel sans frontières
+  modernes, routes ni noms, jusqu'au niveau 8) + **ombrage Esri** plus fin (jusqu'au niveau 13) mêlé en zoom
+  rapproché. Natural Earth II livré avec Cesium s'arrêtait au niveau 2 : pixellisé dès l'échelle d'un pays.
+  Bascule satellite (Esri par défaut, configurable).
+- Frontières dessinées **tuile par tuile** à la résolution de chaque tuile (trait net à tout zoom), dans un
+  budget de 6 ms par image pour ne pas saccader. Fondu enchaîné entre instantanés. Couleur par entité
+  suzeraine (`SUBJECTO`), donc les empires apparaissent d'un seul tenant. Atténuées en zoom rapproché.
+- Performances : rendu à la demande (`requestRenderMode`, aucune image calculée quand rien ne bouge),
+  pas de MSAA, entités créées seulement pour les POI de la fenêtre et des filtres actifs, survol limité à
+  un pick par image et suspendu pendant le glisser.
 - Timeline : échelle par morceaux (`packages/shared/src/timeline.ts`). La fenêtre garde sa largeur
   **visuelle** en se déplaçant, elle couvre donc naturellement plus d'années dans l'Antiquité.
 - Point de départ : dernier endroit et dernière fenêtre (localStorage), sinon la Méditerranée de −500 à −300.

@@ -1,6 +1,5 @@
 import {
-  buildModuleUrl, Cartesian3, Color, Credit, ImageryLayer, Ion, Math as CesiumMath, Rectangle,
-  TileMapServiceImageryProvider, UrlTemplateImageryProvider, Viewer,
+  Cartesian3, Color, Credit, ImageryLayer, Ion, Math as CesiumMath, Rectangle, UrlTemplateImageryProvider, Viewer,
 } from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import type { Rect } from '@way/shared';
@@ -15,21 +14,42 @@ const SATELLITE_URL =
   'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 const SATELLITE_CREDIT = import.meta.env.VITE_SATELLITE_CREDIT || 'Imagerie © Esri, Maxar, Earthstar Geographics';
 
-function basemapLayer(name: Basemap): ImageryLayer {
-  if (name === 'satellite') {
-    return new ImageryLayer(
-      new UrlTemplateImageryProvider({ url: SATELLITE_URL, maximumLevel: 18, credit: new Credit(SATELLITE_CREDIT) }),
-    );
-  }
-  // Natural Earth II ships with Cesium: a relief map without modern borders or roads.
-  return ImageryLayer.fromProviderAsync(
-    TileMapServiceImageryProvider.fromUrl(buildModuleUrl('Assets/Textures/NaturalEarthII')),
-  );
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services';
+
+function esri(service: string, maximumLevel: number, credit: string): UrlTemplateImageryProvider {
+  return new UrlTemplateImageryProvider({
+    url: `${ESRI}/${service}/MapServer/tile/{z}/{y}/{x}`,
+    maximumLevel,
+    credit: new Credit(credit),
+  });
 }
 
-export function createGlobe(container: HTMLElement, basemap: Basemap): Viewer {
+function basemapLayers(name: Basemap): ImageryLayer[] {
+  if (name === 'satellite') {
+    return [
+      new ImageryLayer(
+        new UrlTemplateImageryProvider({ url: SATELLITE_URL, maximumLevel: 18, credit: new Credit(SATELLITE_CREDIT) }),
+      ),
+    ];
+  }
+  // Relief: a physical map without modern borders, roads or labels (to level 8, ~600 m/px),
+  // with a finer hillshade (to level 13) blended in when zooming close.
+  return [
+    new ImageryLayer(esri('World_Physical_Map', 8, 'Relief © Esri, US National Park Service'), {
+      brightness: 0.82,
+    }),
+    new ImageryLayer(esri('World_Shaded_Relief', 13, 'Ombrage © Esri'), {
+      minimumTerrainLevel: 7,
+      alpha: 0.35,
+    }),
+  ];
+}
+
+const basemap = new Set<ImageryLayer>();
+
+export function createGlobe(container: HTMLElement, name: Basemap): Viewer {
   const viewer = new Viewer(container, {
-    baseLayer: basemapLayer(basemap),
+    baseLayer: false,
     animation: false,
     timeline: false,
     baseLayerPicker: false,
@@ -40,24 +60,36 @@ export function createGlobe(container: HTMLElement, basemap: Basemap): Viewer {
     fullscreenButton: false,
     infoBox: false,
     selectionIndicator: false,
-    msaaSamples: 4,
+    // Performance: no MSAA (costly on integrated GPUs), and frames are only
+    // rendered when something changes instead of 60 times per second.
+    msaaSamples: 1,
+    requestRenderMode: true,
+    maximumRenderTimeChange: Infinity,
   });
   const scene = viewer.scene;
   scene.globe.baseColor = Color.fromCssColorString('#0b1624');
   scene.backgroundColor = Color.fromCssColorString('#05070b');
   scene.globe.showGroundAtmosphere = true;
   scene.fog.enabled = true;
+  scene.globe.tileCacheSize = 400; // keep tiles of recently visited places while strolling
   scene.screenSpaceCameraController.minimumZoomDistance = 400;
   scene.screenSpaceCameraController.maximumZoomDistance = 40_000_000;
   scene.renderError.addEventListener((_s, e) => console.error('[render]', e, (e as Error)?.stack));
+  setBasemap(viewer, name);
   return viewer;
 }
 
 export function setBasemap(viewer: Viewer, name: Basemap): void {
   const layers = viewer.imageryLayers;
-  const old = layers.get(0);
-  layers.add(basemapLayer(name), 0);
-  if (old) layers.remove(old, true);
+  const old = [...basemap];
+  basemap.clear();
+  // New layers go at the bottom, under the borders; the old ones are then dropped.
+  basemapLayers(name).forEach((l, i) => {
+    layers.add(l, i);
+    basemap.add(l);
+  });
+  for (const l of old) layers.remove(l, true);
+  viewer.scene.requestRender();
 }
 
 /** Visible lon/lat rectangle in degrees, with a fallback for sky-facing views. */

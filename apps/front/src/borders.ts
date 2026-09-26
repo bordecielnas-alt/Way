@@ -1,6 +1,7 @@
 import {
-  Cartesian3, Color, DistanceDisplayCondition, HorizontalOrigin, ImageryLayer, LabelCollection, LabelStyle,
-  NearFarScalar, Rectangle, SingleTileImageryProvider, VerticalOrigin, type Viewer,
+  Cartesian3, Color, DistanceDisplayCondition, Event as CesiumEvent, GeographicTilingScheme, HorizontalOrigin,
+  ImageryLayer, LabelCollection, LabelStyle, Math as CesiumMath, NearFarScalar, VerticalOrigin,
+  type ImageryProvider, type Viewer,
 } from 'cesium';
 import { formatYear } from '@way/shared';
 
@@ -10,9 +11,18 @@ interface Feature {
   geometry: { type: 'Polygon'; coordinates: Ring[] } | { type: 'MultiPolygon'; coordinates: Ring[][] } | null;
 }
 
-const W = 4096;
-const H = 2048;
+/** One territory, ready to draw: its rings, bounding box (degrees) and colors. */
+interface Shape {
+  rings: Ring[];
+  west: number; south: number; east: number; north: number;
+  fill: string;
+  stroke: string;
+}
+
+const TILE = 256;
 const FADE_MS = 700;
+/** Main-thread time spent drawing border tiles per frame, so panning stays smooth. */
+const FRAME_BUDGET_MS = 6;
 
 function hue(name: string): number {
   let h = 2166136261;
@@ -31,9 +41,119 @@ function ringBoxArea(ring: Ring): number {
   return (e - w) * (n - s);
 }
 
+function toShape(f: Feature): Shape | null {
+  const rings = polygons(f).flat();
+  if (rings.length === 0) return null;
+  let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+  for (const ring of rings) {
+    for (const [x, y] of ring) {
+      if (x < west) west = x;
+      if (x > east) east = x;
+      if (y < south) south = y;
+      if (y > north) north = y;
+    }
+  }
+  const h = hue(f.properties.SUBJECTO || f.properties.PARTOF || f.properties.NAME || '?');
+  return {
+    rings, west, south, east, north,
+    fill: `hsla(${h}, 48%, 58%, 0.30)`,
+    stroke: `hsla(${h}, 55%, 78%, 0.8)`,
+  };
+}
+
+// ---------- frame-budgeted drawing queue shared by all border layers ----------
+const queue: (() => void)[] = [];
+let scheduled = false;
+let onDrained: (() => void) | null = null;
+function enqueue(task: () => void): void {
+  queue.push(task);
+  if (scheduled) return;
+  scheduled = true;
+  requestAnimationFrame(function run() {
+    const start = performance.now();
+    while (queue.length > 0 && performance.now() - start < FRAME_BUDGET_MS) queue.shift()!();
+    onDrained?.();
+    if (queue.length > 0) requestAnimationFrame(run);
+    else scheduled = false;
+  });
+}
+
 /**
- * Historical borders rendered to an equirectangular canvas and draped on
- * the globe as a single imagery layer: cheap to draw and easy to cross-fade.
+ * Imagery provider that rasterizes the border polygons tile by tile, at the
+ * tile's own resolution: lines stay one pixel wide and sharp at every zoom.
+ */
+class BordersTiles {
+  readonly tilingScheme = new GeographicTilingScheme();
+  readonly rectangle = this.tilingScheme.rectangle;
+  readonly tileWidth = TILE;
+  readonly tileHeight = TILE;
+  readonly maximumLevel = 14;
+  readonly minimumLevel = 0;
+  readonly tileDiscardPolicy = undefined;
+  readonly errorEvent = new CesiumEvent();
+  readonly credit = undefined;
+  readonly proxy = undefined;
+  readonly hasAlphaChannel = true;
+
+  constructor(private shapes: Shape[]) {}
+
+  getTileCredits(): undefined {
+    return undefined;
+  }
+
+  pickFeatures(): undefined {
+    return undefined;
+  }
+
+  requestImage(x: number, y: number, level: number): Promise<HTMLCanvasElement> {
+    return new Promise((resolve) => enqueue(() => resolve(this.draw(x, y, level))));
+  }
+
+  private draw(x: number, y: number, level: number): HTMLCanvasElement {
+    const r = this.tilingScheme.tileXYToRectangle(x, y, level);
+    const west = CesiumMath.toDegrees(r.west);
+    const east = CesiumMath.toDegrees(r.east);
+    const south = CesiumMath.toDegrees(r.south);
+    const north = CesiumMath.toDegrees(r.north);
+    const sx = TILE / (east - west);
+    const sy = TILE / (north - south);
+    const pad = 2 / sx; // strokes straddle the tile edge
+
+    const canvas = document.createElement('canvas');
+    canvas.width = TILE;
+    canvas.height = TILE;
+    const g = canvas.getContext('2d')!;
+    g.lineJoin = 'round';
+    g.lineWidth = 1.2;
+    for (const s of this.shapes) {
+      if (s.east < west - pad || s.west > east + pad || s.north < south - pad || s.south > north + pad) continue;
+      g.beginPath();
+      for (const ring of s.rings) {
+        let lx = NaN, ly = NaN;
+        for (let i = 0; i < ring.length; i++) {
+          const px = (ring[i]![0] - west) * sx;
+          const py = (north - ring[i]![1]) * sy;
+          if (i === 0) g.moveTo(px, py);
+          // Skip sub-pixel steps: at world scale most vertices collapse.
+          else if (Math.abs(px - lx) + Math.abs(py - ly) < 0.7) continue;
+          else g.lineTo(px, py);
+          lx = px;
+          ly = py;
+        }
+        g.closePath();
+      }
+      g.fillStyle = s.fill;
+      g.fill('evenodd');
+      g.strokeStyle = s.stroke;
+      g.stroke();
+    }
+    return canvas;
+  }
+}
+
+/**
+ * Historical borders draped on the globe as an imagery layer: tiles are drawn
+ * on demand, and snapshots cross-fade when the timeline moves.
  */
 export class BordersLayer {
   private years: number[] = [];
@@ -42,13 +162,14 @@ export class BordersLayer {
   private labels: LabelCollection;
   private cache = new Map<number, Feature[]>();
   private loading: number | null = null;
-  private urls = new Map<ImageryLayer, string>();
   private alpha = 0.85;
   private fading = false;
   private wanted: number | null = null;
+  private visible = true;
 
   constructor(private viewer: Viewer, private onNote: (text: string) => void) {
     this.labels = viewer.scene.primitives.add(new LabelCollection());
+    onDrained = () => viewer.scene.requestRender();
   }
 
   async init(): Promise<void> {
@@ -87,7 +208,7 @@ export class BordersLayer {
         this.cache.set(snap, features);
       }
       if (this.loading !== snap) return; // superseded
-      await this.show(features);
+      this.show(features);
       this.current = snap;
       this.onNote(`Frontières approximatives · état de ${formatYear(snap)}`);
     } catch (e) {
@@ -97,46 +218,32 @@ export class BordersLayer {
     }
   }
 
-  private async show(features: Feature[]): Promise<void> {
-    const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = H;
-    const g = canvas.getContext('2d')!;
-    g.lineJoin = 'round';
-    const px = (lon: number) => ((lon + 180) / 360) * W;
-    const py = (lat: number) => ((90 - lat) / 180) * H;
+  private show(features: Feature[]): void {
+    const shapes = features.map(toShape).filter((s): s is Shape => s !== null);
+    const layer = new ImageryLayer(new BordersTiles(shapes) as unknown as ImageryProvider, { alpha: 0 });
+    layer.show = this.visible;
+    this.viewer.imageryLayers.add(layer); // above the basemap
+    this.crossFade(this.layer, layer);
+    this.layer = layer;
+    this.setLabels(features);
+  }
 
+  private setLabels(features: Feature[]): void {
     this.labels.removeAll();
     for (const f of features) {
-      const polys = polygons(f);
-      if (polys.length === 0) continue;
-      const owner = f.properties.SUBJECTO || f.properties.PARTOF || f.properties.NAME || '?';
-      const h = hue(owner);
-      g.beginPath();
-      for (const poly of polys) {
-        for (const ring of poly) {
-          ring.forEach(([lon, lat], i) => (i === 0 ? g.moveTo(px(lon), py(lat)) : g.lineTo(px(lon), py(lat))));
-          g.closePath();
-        }
-      }
-      g.fillStyle = `hsla(${h}, 48%, 58%, 0.30)`;
-      g.fill('evenodd');
-      g.strokeStyle = `hsla(${h}, 55%, 78%, 0.75)`;
-      g.lineWidth = 1.4;
-      g.stroke();
-
       const name = f.properties.NAME;
       if (!name) continue;
       // Label at the center of the largest outer ring's bounding box.
       let best: Ring | null = null;
       let bestArea = 0;
-      for (const poly of polys) {
+      for (const poly of polygons(f)) {
         const a = poly[0] ? ringBoxArea(poly[0]) : 0;
         if (a > bestArea) { bestArea = a; best = poly[0]!; }
       }
       if (!best || bestArea < 0.5) continue;
       let sx = 0, sy = 0;
       for (const [x, y] of best) { sx += x; sy += y; }
+      const h = hue(f.properties.SUBJECTO || f.properties.PARTOF || name);
       this.labels.add({
         position: Cartesian3.fromDegrees(sx / best.length, sy / best.length, 2000),
         text: name.toUpperCase(),
@@ -152,15 +259,7 @@ export class BordersLayer {
         distanceDisplayCondition: new DistanceDisplayCondition(3e5, Math.min(2.5e7, Math.sqrt(bestArea) * 9e5)),
       });
     }
-
-    const blob = await new Promise<Blob>((res) => canvas.toBlob((b) => res(b!), 'image/png'));
-    const url = URL.createObjectURL(blob);
-    const provider = await SingleTileImageryProvider.fromUrl(url, { rectangle: Rectangle.MAX_VALUE });
-    const layer = new ImageryLayer(provider, { alpha: 0 });
-    this.urls.set(layer, url);
-    this.viewer.imageryLayers.add(layer); // above the basemap
-    this.crossFade(this.layer, layer);
-    this.layer = layer;
+    this.viewer.scene.requestRender();
   }
 
   private crossFade(from: ImageryLayer | null, to: ImageryLayer): void {
@@ -170,13 +269,9 @@ export class BordersLayer {
       this.fading = t < 1;
       to.alpha = this.alpha * t;
       if (from) from.alpha = this.alpha * (1 - t);
+      this.viewer.scene.requestRender();
       if (t < 1) requestAnimationFrame(step);
-      else if (from) {
-        this.viewer.imageryLayers.remove(from, true);
-        const old = this.urls.get(from);
-        if (old) URL.revokeObjectURL(old);
-        this.urls.delete(from);
-      }
+      else if (from) this.viewer.imageryLayers.remove(from, true);
     };
     requestAnimationFrame(step);
   }
@@ -189,7 +284,9 @@ export class BordersLayer {
   }
 
   setVisible(v: boolean): void {
+    this.visible = v;
     if (this.layer) this.layer.show = v;
     this.labels.show = v;
+    this.viewer.scene.requestRender();
   }
 }

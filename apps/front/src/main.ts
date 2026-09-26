@@ -136,18 +136,35 @@ viewer.camera.moveEnd.addEventListener(() => {
 // ---------- picking ----------
 const tooltip = document.getElementById('tooltip')!;
 const handler = viewer.screenSpaceEventHandler;
-handler.setInputAction((m: { endPosition: Cartesian2 }) => {
-  const { poi, cluster } = pois.pick(m.endPosition);
+// Picking renders the scene into an offscreen buffer: do it at most once per
+// frame, and not at all while a mouse button drags the globe.
+let dragging = false;
+let hoverAt: Cartesian2 | null = null;
+function hover(): void {
+  const at = hoverAt;
+  hoverAt = null;
+  if (!at || dragging) return;
+  const { poi, cluster } = pois.pick(at);
   viewer.canvas.style.cursor = poi || cluster ? 'pointer' : '';
   if (poi) {
     tooltip.hidden = false;
-    tooltip.style.left = `${m.endPosition.x}px`;
-    tooltip.style.top = `${m.endPosition.y}px`;
+    tooltip.style.left = `${at.x}px`;
+    tooltip.style.top = `${at.y}px`;
     tooltip.innerHTML = `<div class="tooltip-title"></div><div class="tooltip-meta"></div>`;
     tooltip.firstElementChild!.textContent = poi.title;
     tooltip.lastElementChild!.textContent =
       `${formatPoiDate(poi.date_start, poi.date_end, poi.date_precision)} · ${CATEGORY_LABELS[poi.category]}`;
   } else tooltip.hidden = true;
+}
+viewer.canvas.addEventListener('pointerdown', () => {
+  dragging = true;
+  tooltip.hidden = true;
+});
+window.addEventListener('pointerup', () => (dragging = false));
+handler.setInputAction((m: { endPosition: Cartesian2 }) => {
+  if (dragging) return;
+  if (!hoverAt) requestAnimationFrame(hover);
+  hoverAt = Cartesian2.clone(m.endPosition);
 }, ScreenSpaceEventType.MOUSE_MOVE);
 
 handler.setInputAction((c: { position: Cartesian2 }) => {
