@@ -18,6 +18,7 @@ export class PoiLayer {
   private pois = new Map<string, PoiLite>();
   private window = { tStart: -500, tEnd: -300 };
   private hidden = new Set<Category>();
+  private minImportance = 0;
   private selected: string | null = null;
   private syncQueued = false;
   private animateUntil = 0;
@@ -65,8 +66,7 @@ export class PoiLayer {
       }
     }
     ents.resumeEvents();
-    if (popped) this.animate(POP_MS + 100);
-    this.viewer.scene.requestRender();
+    this.animate(popped ? POP_MS + 100 : 250);
   }
 
   setWindow(tStart: number, tEnd: number): void {
@@ -79,12 +79,20 @@ export class PoiLayer {
     this.queueSync();
   }
 
+  /** Semantic zoom (brief §4.3): minor points only show up close. */
+  setMinImportance(v: number): void {
+    if (v === this.minImportance) return;
+    this.minImportance = v;
+    this.queueSync();
+  }
+
   select(id: string | null): void {
     const prev = this.selected ? this.source.entities.getById(this.selected) : undefined;
     if (prev?.billboard) prev.billboard.color = new ConstantProperty(Color.WHITE);
     this.selected = id;
     const cur = id ? this.source.entities.getById(id) : undefined;
     if (cur) this.pulse(cur);
+    else if (id) this.queueSync();
     this.animate(0);
   }
 
@@ -117,7 +125,9 @@ export class PoiLayer {
   }
 
   private isVisible(p: PoiLite): boolean {
-    return !this.hidden.has(p.category) && poiInWindow(p, this.window.tStart, this.window.tEnd);
+    if (this.hidden.has(p.category) || !poiInWindow(p, this.window.tStart, this.window.tEnd)) return false;
+    // The selected point (e.g. a door destination) stays visible at any altitude.
+    return p.importance >= this.minImportance || p.id === this.selected;
   }
 
   /** Timeline drags fire many times per frame: reconcile entities at most once per frame. */
@@ -140,7 +150,8 @@ export class PoiLayer {
       else if (!vis && e) ents.remove(e);
     }
     ents.resumeEvents();
-    this.viewer.scene.requestRender();
+    // Clusters are rebuilt during the next update: render a few frames, not just one.
+    this.animate(250);
   }
 
   private addEntity(p: PoiLite, pop: boolean): void {

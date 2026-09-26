@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   bucketEnd, cellCenter, cellsForPoint, GLOBAL_SPACE, makeKey, parseKey, Poi, cellRadiusKm,
-  type DatePrecisionName,
+  type Category, type DatePrecisionName,
 } from '@way/shared';
 import { wikidata, wikipedia, type DatedRow } from '@way/providers';
 import { cellToParent, getResolution } from 'h3-js';
@@ -79,9 +79,19 @@ function precisionName(p: number): DatePrecisionName {
   return 'approximate';
 }
 
-/** Importance from Wikipedia language coverage (sitelinks), log-scaled to 0..1. */
-export function importanceFromSitelinks(sl: number): number {
-  return Math.min(1, Math.log1p(sl) / Math.log1p(300));
+/**
+ * Category nudges (brief §6.3): the globe view is about empires and major
+ * events; unclassified places rarely matter from far away. Mirrored in
+ * migrations/002_importance.sql for POIs cached before.
+ */
+export const CATEGORY_WEIGHT: Partial<Record<Category, number>> = {
+  polity: 0.08, battle: 0.04, disaster: 0.04, event: 0.03, city: 0.02, place: -0.1,
+};
+
+/** Importance from Wikipedia language coverage (sitelinks), log-scaled to 0..1, nudged by category. */
+export function importanceFor(sl: number, category: Category): number {
+  const base = Math.log1p(sl) / Math.log1p(300);
+  return Math.min(1, Math.max(0, base + (CATEGORY_WEIGHT[category] ?? 0)));
 }
 
 /** Turn dated Wikidata rows into validated POIs (skips entities already cached). */
@@ -101,13 +111,14 @@ export async function buildPois(rows: DatedRow[], store: Store): Promise<Poi[]> 
     const wikiTitle = e.frTitle ?? e.enTitle;
     if (!wikiLang || !wikiTitle) continue;
     const end = e.endYear != null && e.endYear > r.year && e.endYear - r.year < 3000 ? e.endYear : null;
+    const category = categoryFor(e.classes, classMap, r.prop);
     const candidate = {
       id: randomUUID(),
       title: e.label.charAt(0).toUpperCase() + e.label.slice(1),
       summary: null,
       summary_lang: null,
       description: e.description,
-      category: categoryFor(e.classes, classMap, r.prop),
+      category,
       tags: [],
       date_start: r.year,
       date_end: end,
@@ -116,7 +127,7 @@ export async function buildPois(rows: DatedRow[], store: Store): Promise<Poi[]> 
       lon: r.lon,
       geo_precision: 'exact',
       h3_cells: cellsForPoint(r.lat, r.lon),
-      importance: importanceFromSitelinks(r.sitelinks),
+      importance: importanceFor(r.sitelinks, category),
       confidence: 'verified',
       provenance: 'wikidata',
       sources: [

@@ -14,13 +14,13 @@ import {
 import { BordersLayer } from './borders.ts';
 import { Card } from './card.ts';
 import { Connection } from './connection.ts';
-import { Filters } from './filters.ts';
+import { Filters, importanceFloor, type Scale } from './filters.ts';
 import { cameraState, createGlobe, restoreCamera, setBasemap, viewRect, type Basemap, type CameraState } from './globe.ts';
 import { PoiLayer } from './markers.ts';
 import { Timeline, type TimeWindow } from './timeline.ts';
 
 // ---------- persisted per-viewer preferences ----------
-interface Saved { camera?: CameraState; window?: TimeWindow; hidden?: Category[]; basemap?: Basemap }
+interface Saved { camera?: CameraState; window?: TimeWindow; hidden?: Category[]; basemap?: Basemap; scale?: Scale }
 const STORAGE_KEY = 'way:state';
 function load(): Saved {
   try {
@@ -64,11 +64,26 @@ const borders = new BordersLayer(viewer, (t) => timeline.setBordersNote(t));
 pois.setWindow(timeline.window.tStart, timeline.window.tEnd);
 
 // ---------- filters ----------
-const filters = new Filters(document.getElementById('filters')!, saved.hidden ?? [], (hidden) => {
-  pois.setHidden(hidden);
-  save({ hidden: [...hidden] });
-});
+const filters = new Filters(
+  document.getElementById('filters')!,
+  saved.hidden ?? [],
+  (hidden) => {
+    pois.setHidden(hidden);
+    save({ hidden: [...hidden] });
+  },
+  saved.scale ?? 'selection',
+  (scale) => {
+    save({ scale });
+    applyZoom();
+  },
+);
 pois.setHidden(filters.hiddenSet);
+
+/** Semantic zoom: the camera height and the impact scale set the importance floor. */
+function applyZoom(): void {
+  pois.setMinImportance(importanceFloor(filters.scale, viewer.camera.positionCartographic.height));
+}
+applyZoom();
 
 // ---------- basemap switch ----------
 const basemapButtons = document.querySelectorAll<HTMLButtonElement>('[data-basemap]');
@@ -136,7 +151,10 @@ function sendView(): void {
   const view: ViewMessage = { type: 'view', res, cells, tStart, tEnd, filter: 'all' };
   conn.sendView(view);
 }
-viewer.camera.changed.addEventListener(() => borders.setCameraHeight(viewer.camera.positionCartographic.height));
+viewer.camera.changed.addEventListener(() => {
+  borders.setCameraHeight(viewer.camera.positionCartographic.height);
+  applyZoom();
+});
 viewer.camera.percentageChanged = 0.05;
 viewer.camera.moveEnd.addEventListener(() => {
   save({ camera: cameraState(viewer) });

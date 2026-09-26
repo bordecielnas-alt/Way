@@ -67,6 +67,10 @@ button { font: inherit; color: inherit; }
 .chip[aria-pressed='false'] { opacity: 0.38; }
 .chip[aria-pressed='false'] .chip-dot { background: transparent !important; box-shadow: inset 0 0 0 1.5px var(--muted); }
 
+.scale { display: flex; gap: 2px; padding: 3px; margin-bottom: 12px; background: rgba(255, 255, 255, 0.03); border-radius: 8px; }
+.scale button { flex: 1; background: none; border: 0; padding: 5px 6px; border-radius: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.scale button[aria-pressed='true'] { background: var(--gold-soft); color: var(--ink); }
+
 /* ---------- basemap switch ---------- */
 .basemap { right: 16px; bottom: 150px; padding: 3px; display: flex; gap: 2px; }
 .basemap button { background: none; border: 0; padding: 5px 10px; border-radius: 7px; font-size: 12px; color: var(--muted); cursor: pointer; }

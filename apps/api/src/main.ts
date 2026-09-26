@@ -24,10 +24,13 @@ await app.register(websocket);
 
 // Single-container mode: the API also serves the built front (SPA fallback).
 if (cfg.staticDir) {
-  await app.register(fastifyStatic, { root: cfg.staticDir, wildcard: false });
-  app.setNotFoundHandler((req, reply) =>
-    req.url.startsWith('/api/') ? reply.code(404).send({ error: 'not found' }) : reply.sendFile('index.html'),
-  );
+  await app.register(fastifyStatic, { root: cfg.staticDir });
+  // Unknown app routes get the SPA; unknown files (a stale hashed bundle) and API paths get a 404.
+  app.setNotFoundHandler((req, reply) => {
+    const path = req.url.split('?')[0]!;
+    if (path.startsWith('/api/') || /\.[a-z0-9]+$/i.test(path)) return reply.code(404).send({ error: 'not found' });
+    return reply.sendFile('index.html');
+  });
 }
 
 app.get('/api/health', async () => ({ ok: true, ...mode }));
