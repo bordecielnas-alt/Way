@@ -13,7 +13,7 @@
     "build:front": "npm run build -w @way/front",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "vitest run",
-    "borders:fetch": "node scripts/fetch-borders.mjs"
+    "borders:fetch": "tsx scripts/fetch-borders.ts"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",

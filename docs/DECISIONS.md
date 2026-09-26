@@ -65,6 +65,16 @@ Les classes Wikidata (P31) sont rattachées à des classes racines par `P279*`, 
   **visuelle** en se déplaçant, elle couvre donc naturellement plus d'années dans l'Antiquité.
 - Point de départ : dernier endroit et dernière fenêtre (localStorage), sinon la Méditerranée de −500 à −300.
 
+## Déploiement : un seul conteneur
+
+Le brief prévoyait six services Compose. À la demande de l'auteur, l'image publiée est **unique** :
+un processus Node sert le front, l'API et le WebSocket, exécute les recherches (file en mémoire) et
+stocke le cache dans un **Postgres embarqué** (PGlite, fichiers dans `/data/pgdata`). Mêmes migrations
+et même code SQL que Postgres. Les frontières sont téléchargées dans `/data/borders` au premier démarrage.
+
+Le code multi-services reste disponible (`DATABASE_URL` pour un Postgres externe, `REDIS_URL` + `apps/worker`
+pour une file BullMQ) si la charge le justifie un jour.
+
 ## Hors V0 (prévu)
 
 Niveau 2 (IA + web), routeur de fournisseurs, portes, SearXNG, Ollama, éviction du cache,
@@ -74,5 +84,4 @@ dans le compose : il n'a pas d'usage avant le niveau 2.
 ## Limites connues
 
 - Libellés des frontières en anglais (données sources).
-- La partie Redis/BullMQ (API ↔ worker) n'a pas pu être exécutée sur la machine de développement
-  (pas de Docker) : le mode inline, qui partage tout le pipeline, est testé ; le compose est à valider sur l'hôte.
+- Le mode multi-services (Redis/BullMQ) n'a pas été exécuté ; le mode conteneur unique est testé.

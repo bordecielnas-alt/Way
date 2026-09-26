@@ -5,3 +5,4 @@ data/borders/*.geojson
 *.log
 .vite/
 .dev/
+data-way/

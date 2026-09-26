@@ -8,19 +8,17 @@ avec cache et push WebSocket, fiches sourcées, frontières historiques animées
 
 ## Démarrer
 
-### Docker (hôte cible)
+### Docker : un seul conteneur
 
 ```bash
-cp .env.example .env   # renseigner POSTGRES_PASSWORD et WAY_CONTACT
-docker compose pull    # images publiées sur ghcr.io par GitHub Actions à chaque push sur main
-docker compose up -d
+docker run -d --name way -p 8080:8080 -v ./data-way:/data ghcr.io/bordecielnas-alt/way:latest
 ```
 
-Pour construire localement plutôt que télécharger : `docker compose up -d --build`.
-Images : `ghcr.io/bordecielnas-alt/way-{front,api,worker}`, tags `latest`, `sha-<commit>` et `<version>` (tags git `v*`).
+Puis ouvrir http://localhost:8080. Tout est dans l'image (site, API, recherche, Postgres embarqué) ;
+tout ce qui persiste est dans `/data`. Au premier démarrage, les frontières historiques (~66 Mo) se
+téléchargent en arrière-plan. Variable optionnelle : `WAY_CONTACT` (ton email, demandé par Wikimedia).
 
-Puis ouvrir http://localhost:8080. Au premier lancement, le service `borders` télécharge les
-frontières historiques (~66 Mo) dans un volume.
+Unraid : voir [infra/unraid/README.md](infra/unraid/README.md). Avec Compose : `docker compose up -d`.
 
 ### Développement local (sans Docker)
 
@@ -42,12 +40,12 @@ npm run typecheck
 
 ```
 apps/front         Vite + CesiumJS : globe, timeline, fiche, filtres
-apps/api           Fastify + WebSocket : cache d'abord, sinon mise en file
-apps/worker        BullMQ : exécute la cascade de recherche
+apps/api           Fastify + WebSocket ; sert aussi le front en mode conteneur unique
+apps/worker        Worker BullMQ optionnel (mode multi-services, non utilisé par l'image)
 packages/shared    Types, schémas Zod, tranches de temps, H3, protocole
 packages/providers Clients Wikidata (SPARQL) et Wikipédia (GeoSearch, résumés)
 packages/core      Pipeline de recherche, stores (Postgres / mémoire), bus de jobs
-infra              Dockerfiles, nginx
+infra/unraid       Template et guide Unraid
 scripts            Téléchargement des frontières, smoke test des fournisseurs
 data/borders       Frontières historiques (GPL-3.0, non versionnées)
 ```

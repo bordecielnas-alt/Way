@@ -1,3 +1,6 @@
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 import { setUserAgent } from '@way/providers';
 import type { Config } from './config.ts';
@@ -14,12 +17,18 @@ export * from './store/types.ts';
 export { MemoryStore } from './store/memory.ts';
 export { PostgresStore, type Queryable } from './store/postgres.ts';
 
-/** Store selected by config: Postgres when DATABASE_URL is set, memory otherwise. */
+/**
+ * Store selected by config: external Postgres (DATABASE_URL), embedded
+ * Postgres on disk (DATA_DIR, single-container mode), or memory (dev).
+ */
 export async function createStore(cfg: Config): Promise<Store> {
   setUserAgent(cfg.userAgent);
-  const store = cfg.databaseUrl
-    ? new PostgresStore(new pg.Pool({ connectionString: cfg.databaseUrl, max: 5 }))
-    : new MemoryStore(cfg.memoryStoreFile ?? undefined);
+  let store: Store;
+  if (cfg.databaseUrl) store = new PostgresStore(new pg.Pool({ connectionString: cfg.databaseUrl, max: 5 }));
+  else if (cfg.dataDir) {
+    mkdirSync(cfg.dataDir, { recursive: true });
+    store = new PostgresStore(new PGlite(join(cfg.dataDir, 'pgdata')));
+  } else store = new MemoryStore(cfg.memoryStoreFile ?? undefined);
   await store.init();
   return store;
 }

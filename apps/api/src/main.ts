@@ -1,10 +1,11 @@
 import { createReadStream } from 'node:fs';
 import Fastify from 'fastify';
+import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { ClientMessage, type ServerMessage } from '@way/shared';
 import {
-  createStore, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
+  createStore, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
 } from '@way/core';
 import { ViewService, type View } from './views.ts';
 
@@ -12,10 +13,21 @@ const cfg = loadConfig();
 const store = await createStore(cfg);
 const bus: JobBus = cfg.redisUrl ? new RedisBus(cfg.redisUrl) : new InlineBus(store, cfg);
 const views = new ViewService(store, bus, cfg);
-const mode = { store: cfg.databaseUrl ? 'postgres' : 'memory', queue: cfg.redisUrl ? 'redis' : 'inline' };
+const mode = {
+  store: cfg.databaseUrl ? 'postgres' : cfg.dataDir ? 'embedded-postgres' : 'memory',
+  queue: cfg.redisUrl ? 'redis' : 'inline',
+};
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
 await app.register(websocket);
+
+// Single-container mode: the API also serves the built front (SPA fallback).
+if (cfg.staticDir) {
+  await app.register(fastifyStatic, { root: cfg.staticDir, wildcard: false });
+  app.setNotFoundHandler((req, reply) =>
+    req.url.startsWith('/api/') ? reply.code(404).send({ error: 'not found' }) : reply.sendFile('index.html'),
+  );
+}
 
 app.get('/api/health', async () => ({ ok: true, ...mode }));
 
@@ -99,4 +111,11 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 await app.listen({ port: cfg.port, host: cfg.host });
+
+// Border snapshots are fetched once, in the background, on first start.
+if (cfg.dataDir && listSnapshots(cfg.bordersDir).length < 40) {
+  ensureBorders(cfg.bordersDir, cfg.userAgent)
+    .then((n) => app.log.info(`borders: ${n} snapshot(s) downloaded`))
+    .catch((e) => app.log.warn(`borders download failed: ${(e as Error).message}`));
+}
 app.log.info(`Way API ready (store=${mode.store}, queue=${mode.queue})`);

@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
+    "@fastify/static": "^10.1.5",
     "@fastify/websocket": "^11.3.1",
     "@way/core": "*",
     "@way/shared": "*",

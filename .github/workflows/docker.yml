@@ -1,4 +1,4 @@
-# Builds and publishes the Docker images to GitHub Packages (ghcr.io).
+# Builds the single-container image and publishes it to GitHub Packages (ghcr.io).
 name: docker
 
 on:
@@ -14,19 +14,6 @@ permissions:
 jobs:
   image:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: front
-            dockerfile: infra/front.Dockerfile
-            app: ''
-          - name: api
-            dockerfile: infra/node.Dockerfile
-            app: api
-          - name: worker
-            dockerfile: infra/node.Dockerfile
-            app: worker
     steps:
       - uses: actions/checkout@v4
 
@@ -41,7 +28,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/way-${{ matrix.name }}
+          images: ghcr.io/${{ github.repository_owner }}/way
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
@@ -50,11 +37,9 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
-          build-args: ${{ matrix.app && format('APP={0}', matrix.app) || '' }}
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

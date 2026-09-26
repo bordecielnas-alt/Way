@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@way/providers": "*",
     "@way/shared": "*",
     "bullmq": "^6.3.9",
@@ -19,7 +20,6 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.8",
     "@types/pg": "^8.23.1"
   }
 }

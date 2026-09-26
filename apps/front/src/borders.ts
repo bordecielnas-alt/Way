@@ -45,6 +45,7 @@ export class BordersLayer {
   private urls = new Map<ImageryLayer, string>();
   private alpha = 0.85;
   private fading = false;
+  private wanted: number | null = null;
 
   constructor(private viewer: Viewer, private onNote: (text: string) => void) {
     this.labels = viewer.scene.primitives.add(new LabelCollection());
@@ -57,7 +58,14 @@ export class BordersLayer {
     } catch {
       this.years = [];
     }
-    if (this.years.length === 0) this.onNote('Frontières historiques non installées');
+    if (this.years.length === 0) {
+      // First start of the server: snapshots are still downloading. Retry.
+      this.onNote('Frontières historiques en cours de téléchargement…');
+      setTimeout(async () => {
+        await this.init();
+        if (this.wanted != null) await this.setYear(this.wanted);
+      }, 20_000);
+    }
   }
 
   snapshotFor(year: number): number | null {
@@ -67,6 +75,7 @@ export class BordersLayer {
   }
 
   async setYear(year: number): Promise<void> {
+    this.wanted = year;
     const snap = this.snapshotFor(year);
     if (snap === null || snap === this.current || snap === this.loading) return;
     this.loading = snap;
