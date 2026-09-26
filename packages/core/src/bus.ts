@@ -3,6 +3,7 @@ import { Queue, Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import type { Config } from './config.ts';
 import { jobKeys, runSearchJob, type SearchJob } from './pipeline.ts';
+import type { ProviderRouter } from './router.ts';
 import type { Store } from './store/types.ts';
 
 const QUEUE_NAME = 'search';
@@ -16,47 +17,62 @@ export interface JobBus {
   close(): Promise<void>;
 }
 
-async function runAndRecord(job: SearchJob, store: Store, cfg: Config): Promise<string[]> {
+async function runAndRecord(
+  job: SearchJob, store: Store, cfg: Config, router?: ProviderRouter,
+): Promise<{ keys: string[]; followUp?: SearchJob }> {
   const started = Date.now();
   try {
-    const r = await runSearchJob(job, store, cfg);
-    console.log(`[search] ${describe(job)} -> ${r.found} new POIs in ${Date.now() - started} ms`);
-    return r.keys;
+    const r = await runSearchJob(job, store, cfg, router);
+    const next = r.followUp ? ' (poor: level 2 queued)' : '';
+    console.log(`[search] ${describe(job)} -> ${r.found} new POIs in ${Date.now() - started} ms${next}`);
+    return { keys: r.keys, followUp: r.followUp };
   } catch (e) {
     console.warn(`[search] ${describe(job)} failed after ${Date.now() - started} ms:`, (e as Error).message);
     const keys = jobKeys(job);
     await store.setKeys(keys, 'failed');
-    return keys;
+    return { keys };
   }
 }
 
 function describe(job: SearchJob): string {
   const range = `${job.buckets[0]}..${job.buckets[job.buckets.length - 1]}`;
-  return job.kind === 'global' ? `global ${range}` : `area ${job.area} (${job.cells.length} cells) ${range}`;
+  if (job.kind === 'global') return `global ${range}`;
+  return `${job.kind === 'deep' ? 'level-2 area' : 'area'} ${job.area} (${job.cells.length} cells) ${range}`;
 }
 
-/** Local dev: runs jobs in-process, newest first (the current view wins). */
+interface Lane { queue: SearchJob[]; active: number; concurrency: number }
+
+/**
+ * In-process queue, newest first (the current view wins). Level-2 jobs run
+ * in their own lane, one at a time, so they never delay level 1.
+ */
 export class InlineBus implements JobBus {
-  private queue: SearchJob[] = [];
-  private active = 0;
+  private fast: Lane;
+  private deep: Lane = { queue: [], active: 0, concurrency: 1 };
   private events = new EventEmitter();
 
-  constructor(private store: Store, private cfg: Config) {}
-
-  async enqueue(jobs: SearchJob[]): Promise<void> {
-    this.queue.push(...[...jobs].reverse());
-    this.pump();
+  constructor(private store: Store, private cfg: Config, private router?: ProviderRouter) {
+    this.fast = { queue: [], active: 0, concurrency: cfg.workerConcurrency };
   }
 
-  private pump(): void {
-    while (this.active < this.cfg.workerConcurrency && this.queue.length > 0) {
-      const job = this.queue.pop()!;
-      this.active++;
-      runAndRecord(job, this.store, this.cfg)
-        .then((keys) => this.events.emit('done', keys))
+  async enqueue(jobs: SearchJob[]): Promise<void> {
+    for (const job of [...jobs].reverse()) (job.kind === 'deep' ? this.deep : this.fast).queue.push(job);
+    this.pump(this.fast);
+    this.pump(this.deep);
+  }
+
+  private pump(lane: Lane): void {
+    while (lane.active < lane.concurrency && lane.queue.length > 0) {
+      const job = lane.queue.pop()!;
+      lane.active++;
+      runAndRecord(job, this.store, this.cfg, this.router)
+        .then(({ keys, followUp }) => {
+          if (followUp) void this.enqueue([followUp]);
+          this.events.emit('done', keys);
+        })
         .finally(() => {
-          this.active--;
-          this.pump();
+          lane.active--;
+          this.pump(lane);
         });
     }
   }
@@ -66,11 +82,16 @@ export class InlineBus implements JobBus {
   }
 
   async stats() {
-    return { waiting: this.queue.length, active: this.active };
+    return {
+      waiting: this.fast.queue.length + this.deep.queue.length,
+      active: this.fast.active + this.deep.active,
+      level2: { waiting: this.deep.queue.length, active: this.deep.active },
+    };
   }
 
   async close(): Promise<void> {
-    this.queue = [];
+    this.fast.queue = [];
+    this.deep.queue = [];
   }
 }
 
@@ -121,12 +142,14 @@ export class RedisBus implements JobBus {
 }
 
 /** Worker process side of RedisBus. */
-export function startRedisWorker(url: string, store: Store, cfg: Config): { close(): Promise<void> } {
+export function startRedisWorker(url: string, store: Store, cfg: Config, router?: ProviderRouter): { close(): Promise<void> } {
   const pub = redis(url);
+  const followUps = new Queue(QUEUE_NAME, { connection: redis(url) });
   const worker = new Worker<SearchJob>(
     QUEUE_NAME,
     async (job) => {
-      const keys = await runAndRecord(job.data, store, cfg);
+      const { keys, followUp } = await runAndRecord(job.data, store, cfg, router);
+      if (followUp) await followUps.add(followUp.kind, followUp, { removeOnComplete: 500, removeOnFail: 500 });
       await pub.publish(DONE_CHANNEL, JSON.stringify(keys));
     },
     { connection: redis(url), concurrency: cfg.workerConcurrency },
@@ -135,6 +158,7 @@ export function startRedisWorker(url: string, store: Store, cfg: Config): { clos
   return {
     async close() {
       await worker.close();
+      await followUps.close();
       pub.disconnect();
     },
   };

@@ -16,6 +16,13 @@ export interface Config {
   bordersDir: string;
   userAgent: string;
   workerConcurrency: number;
+  level2: {
+    enabled: boolean;
+    /** An area is "poor" below this many POIs for the searched period. */
+    minPois: number;
+    /** Only regional and finer views (level 2 is costly). */
+    minRes: number;
+  };
   cache: {
     /** Ceiling for cached POIs and search keys (brief §6.4). */
     maxBytes: number;
@@ -52,6 +59,11 @@ export function loadConfig(env = process.env): Config {
     // Wikimedia asks for a contact in the User-Agent: set WAY_CONTACT.
     userAgent: `Way/0.1 (personal history globe${contact ? `; ${contact}` : ''})`,
     workerConcurrency: num(env.WORKER_CONCURRENCY, 2),
+    level2: {
+      enabled: env.LEVEL2 !== 'off',
+      minPois: num(env.LEVEL2_MIN_POIS, 5),
+      minRes: num(env.LEVEL2_MIN_RES, 5),
+    },
     cache: {
       maxBytes: num(env.CACHE_MAX_MB, 10_240) * 1024 * 1024,
       pinImportance: num(env.CACHE_PIN_IMPORTANCE, 0.75),

@@ -79,12 +79,17 @@ export class Card {
 
   private render(p: Poi, token: number): void {
     const conf = CONFIDENCE[p.confidence];
+    // Say where the text comes from whenever it is not a French Wikipedia intro.
+    const note =
+      p.provenance === 'web_ai'
+        ? 'Fiche rédigée par IA à partir des sources ci-dessous : vérifiez-les.'
+        : p.tags.includes('summary:ai-translated')
+          ? 'Résumé traduit de l’anglais par IA.'
+          : p.summary_lang && p.summary_lang !== 'fr'
+            ? 'Résumé disponible uniquement en anglais.'
+            : null;
     const summary = p.summary
-      ? `<p class="card-summary">${esc(p.summary)}</p>${
-          p.summary_lang && p.summary_lang !== 'fr'
-            ? '<div class="card-summary-note">Résumé disponible uniquement en anglais.</div>'
-            : ''
-        }`
+      ? `<p class="card-summary">${esc(p.summary)}</p>${note ? `<div class="card-summary-note">${note}</div>` : ''}`
       : '<div class="card-summary-note">Aucun résumé disponible : consultez les sources.</div>';
     const image = p.image_url
       ? `<div class="card-image"><img alt="" src="${esc(p.image_url)}" referrerpolicy="no-referrer">

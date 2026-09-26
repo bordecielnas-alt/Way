@@ -15,4 +15,7 @@
   <Config Name="WebUI" Target="8080" Default="8080" Mode="tcp" Description="Port de l'interface web" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
   <Config Name="Data" Target="/data" Default="/mnt/user/appdata/way" Mode="rw" Description="Base de données et frontières historiques" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/way</Config>
   <Config Name="WAY_CONTACT" Target="WAY_CONTACT" Default="" Mode="" Description="Ton email ou une URL (Wikimedia demande un contact aux clients de ses API)" Type="Variable" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="GEMINI_API_KEY" Target="GEMINI_API_KEY" Default="" Mode="" Description="Recherche approfondie par IA (niveau 2) : clé gratuite sur aistudio.google.com" Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="GROQ_API_KEY" Target="GROQ_API_KEY" Default="" Mode="" Description="IA de secours (niveau 2) : clé gratuite sur console.groq.com" Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="TAVILY_API_KEY" Target="TAVILY_API_KEY" Default="" Mode="" Description="Recherche web en plus de Wikipédia (niveau 2) : crédits gratuits sur tavily.com" Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
 </Container>

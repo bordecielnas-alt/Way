@@ -1,0 +1,45 @@
+{
+  "_comment": "Level 2 providers (brief §8). Keys come from environment variables; a provider without its key is skipped. Free quotas change often: check them and override this file with PROVIDERS_FILE. Each model can be overridden with <ID>_MODEL (e.g. GROQ_MODEL).",
+  "providers": {
+    "wikipedia": { "type": "search", "adapter": "wikipedia", "perMinute": 30, "perDay": 3000 },
+    "tavily": { "type": "search", "adapter": "tavily", "keyEnv": "TAVILY_API_KEY", "perMinute": 10, "perDay": 30 },
+    "brave": { "type": "search", "adapter": "brave", "keyEnv": "BRAVE_API_KEY", "perMinute": 1, "perDay": 30 },
+    "searxng": { "type": "search", "adapter": "searxng", "urlEnv": "SEARXNG_URL", "perMinute": 6, "perDay": 300 },
+
+    "gemini-flash-lite": {
+      "type": "llm", "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "keyEnv": "GEMINI_API_KEY", "model": "gemini-2.5-flash-lite", "perMinute": 14, "perDay": 950
+    },
+    "gemini-flash": {
+      "type": "llm", "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "keyEnv": "GEMINI_API_KEY", "model": "gemini-2.5-flash", "perMinute": 9, "perDay": 240
+    },
+    "groq": {
+      "type": "llm", "baseUrl": "https://api.groq.com/openai/v1",
+      "keyEnv": "GROQ_API_KEY", "model": "openai/gpt-oss-120b", "perMinute": 28, "perDay": 950
+    },
+    "github": {
+      "type": "llm", "baseUrl": "https://models.github.ai/inference",
+      "keyEnv": "GITHUB_MODELS_TOKEN", "model": "openai/gpt-4.1-mini", "perMinute": 10, "perDay": 140
+    },
+    "openrouter": {
+      "type": "llm", "baseUrl": "https://openrouter.ai/api/v1",
+      "keyEnv": "OPENROUTER_API_KEY", "model": "meta-llama/llama-3.3-70b-instruct:free", "perMinute": 15, "perDay": 45
+    },
+    "mistral": {
+      "type": "llm", "baseUrl": "https://api.mistral.ai/v1",
+      "keyEnv": "MISTRAL_API_KEY", "model": "mistral-small-latest", "perMinute": 30, "perDay": 1000
+    },
+    "ollama": {
+      "type": "llm", "urlEnv": "OLLAMA_URL", "urlSuffix": "/v1",
+      "model": "qwen2.5:7b", "perMinute": 2, "perDay": 100000, "timeoutMs": 600000
+    }
+  },
+  "routes": {
+    "search": ["wikipedia", "tavily", "brave", "searxng"],
+    "extract": ["gemini-flash-lite", "groq", "mistral", "github", "openrouter", "gemini-flash", "ollama"],
+    "write": ["gemini-flash", "groq", "mistral", "github", "openrouter", "gemini-flash-lite"]
+  },
+  "breaker": { "failures": 2, "cooldownMinutes": 10 },
+  "headroom": 0.95
+}

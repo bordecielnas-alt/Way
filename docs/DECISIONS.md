@@ -79,13 +79,65 @@ et même code SQL que Postgres. Les frontières sont téléchargées dans `/data
 Le code multi-services reste disponible (`DATABASE_URL` pour un Postgres externe, `REDIS_URL` + `apps/worker`
 pour une file BullMQ) si la charge le justifie un jour.
 
-## Hors V0 (prévu)
+## V1 : portes
 
-Niveau 2 (IA + web), routeur de fournisseurs, portes, SearXNG, Ollama, éviction du cache,
-histogramme de densité, bouton Play, carnet de voyage. Le service `searxng` du brief n'est pas encore
-dans le compose : il n'a pas d'usage avant le niveau 2.
+Construites **sans IA**, à partir des relations Wikidata (`packages/core/src/doors.ts`) :
+
+| Porte | Choix |
+|---|---|
+| 🕰️ Ici, plus tard (ou plus tôt) | entités datées à moins de 8 km (40 km si les environs sont vides), plus tard si possible ; célébrité pondérée, les entités après 1900 comptent moins |
+| 🌍 Pendant ce temps | même époque (± une demi-tranche), à plus de 1 500 km ; cache d'abord, sinon requête mondiale |
+| 🔗 La suite | suite ou conséquence explicite (P156, P1542…), sinon la partie suivante du même ensemble (P361 : la bataille suivante d'une guerre), sinon un événement du même protagoniste ; « Avant cela » en dernier recours |
+| ❓ Surprise | voisin peu connu (2 à 40 langues), d'une autre catégorie |
+
+Routes, stations et communes créées par des réformes modernes sont exclues de « ici » et « surprise ».
+Les portes sont cherchées en parallèle à l'ouverture d'une fiche, servies au fur et à mesure,
+mises en cache (colonne `related`, versionnée) ; les fiches de destination sont préchargées.
+
+## V1 : zoom sémantique
+
+L'importance ajoute un léger poids par catégorie (empires +0,08, lieux non classés −0,1). Le front
+cache les points dont l'importance est sous un seuil qui monte avec l'altitude ; l'échelle
+« Majeurs / Sélection / Tout » le décale. Les filtres géographiques du brief (montagnes, forêts,
+fleuves) n'ont pas de sens ici : ces entités ne sont presque jamais datées.
+
+## V1 : cache borné
+
+Plafond `CACHE_MAX_MB` (10 Go), vérifié une minute après le démarrage puis toutes les heures.
+Mesure : taille logique des lignes (~800 octets par POI). Éviction des moins vus, puis des plus
+anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zones touchées sont oubliées.
+
+## V1 : niveau 2 (IA + web)
+
+- **Déclenchement** : après une recherche de niveau 1 sur une zone régionale ou plus fine (résolution
+  ≥ 5), s'il reste moins de 5 POI pour la période. Les clés passent `partial`, le niveau 2 tourne dans
+  une file à part (un à la fois) pour ne jamais retarder le niveau 1.
+- **Chaîne** : nom de la zone (Nominatim inverse) → recherche web (Wikipédia sans clé, puis Tavily,
+  Brave, SearXNG si configurés) → extraction JSON par IA, validée par Zod → géocodage indépendant
+  (Wikidata puis Nominatim, 1 req/s) → contrôles §7 → cache et push.
+- **Garde-fous** : chaque fait cite une source réellement fournie ; date dans la tranche ; lieu à moins
+  de 1,8 rayon de la zone ; doublons écartés (≤ 10 km, ± 10 ans, titres proches) ; importance plafonnée
+  à 0,35 ; `verified` si Wikipédia est citée, `disputed` si l'IA signale des sources contradictoires,
+  sinon `web_single_source`. La fiche dit « rédigée par IA ».
+- **Routeur** (`packages/core/src/router.ts`, config `packages/core/providers.default.json`, remplaçable
+  par `PROVIDERS_FILE`) : tous les LLM du brief passent par leur API compatible OpenAI. Quotas par
+  minute et par jour avec 5 % de marge (compteurs du jour conservés dans `/data`), disjoncteur
+  (429 immédiat, sinon 2 échecs de suite, 10 min), routes par tâche (`extract` rapide, `write` meilleur),
+  mode dégradé si tout est épuisé. Page `/admin.html`.
+- **Tâche `write`** : traduit en français les résumés disponibles seulement en anglais (signalé sur la fiche).
+- **Quotas vérifiés en septembre 2026** : Gemini 2.5 Flash-Lite 15/min et 1 000/jour, Flash 10/min et
+  250/jour ; Groq 30/min et 1 000/jour. Brave n'a plus d'offre gratuite sans carte bancaire (le
+  dépassement est facturé) : présent mais inactif sans clé. Gemini avec ancrage Google Search n'est pas
+  utilisé : il n'est pas exposé par l'API compatible OpenAI.
+
+## Hors V1 (prévu)
+
+Histogramme de densité, bouton Play, carnet de voyage, brouillard de connaissance, fils rouges,
+campagnes animées, préchargement nocturne.
 
 ## Limites connues
 
 - Libellés des frontières en anglais (données sources).
 - Le mode multi-services (Redis/BullMQ) n'a pas été exécuté ; le mode conteneur unique est testé.
+- Niveau 2 : testé avec des fournisseurs simulés (tests) et les adaptateurs sans clé en réel ; pas encore
+  avec une vraie clé d'IA.

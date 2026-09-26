@@ -5,13 +5,14 @@ import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { ClientMessage, type ServerMessage } from '@way/shared';
 import {
-  createStore, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
+  createRouter, createStore, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
 } from '@way/core';
 import { ViewService, type View } from './views.ts';
 
 const cfg = loadConfig();
 const store = await createStore(cfg);
-const bus: JobBus = cfg.redisUrl ? new RedisBus(cfg.redisUrl) : new InlineBus(store, cfg);
+const router = createRouter(cfg);
+const bus: JobBus = cfg.redisUrl ? new RedisBus(cfg.redisUrl) : new InlineBus(store, cfg, router);
 const views = new ViewService(store, bus, cfg);
 const doors = new DoorService(store);
 const mode = {
@@ -53,7 +54,7 @@ app.get('/api/pois', async (req, reply) => {
 
 app.get<{ Params: { id: string }; Querystring: { prefetch?: string } }>('/api/poi/:id', async (req, reply) => {
   const prefetch = req.query.prefetch === '1';
-  const poi = await loadPoiDetail(req.params.id, store, { touch: !prefetch });
+  const poi = await loadPoiDetail(req.params.id, store, { touch: !prefetch, router });
   if (!poi) return reply.code(404).send({ error: 'not found' });
   // A card is being read: look for its doors meanwhile (brief §4.5).
   if (!prefetch) doors.warm(poi);
@@ -85,10 +86,16 @@ app.get('/api/admin/providers', async () => ({
   keys: await store.keyStats(),
   pois: await store.poiCount(),
   cache: { bytes: await store.cacheBytes(), maxBytes: cfg.cache.maxBytes },
-  providers: [
-    { name: 'wikidata', level: 1, status: 'active' },
-    { name: 'wikipedia', level: 1, status: 'active' },
+  level1: [
+    { name: 'wikidata', status: 'active' },
+    { name: 'wikipedia', status: 'active' },
   ],
+  level2: {
+    enabled: cfg.level2.enabled,
+    // Degraded mode (§8.4): no LLM configured or every quota spent.
+    mode: !cfg.level2.enabled ? 'off' : router.canRun('extract') ? 'active' : router.hasProvider('extract') ? 'degraded' : 'no-llm',
+    providers: router.status(),
+  },
 }));
 
 app.get('/ws', { websocket: true }, (socket) => {

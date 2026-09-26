@@ -43,9 +43,10 @@ export class ViewService {
     for (const k of keys) {
       const r = records.get(k);
       if (!r) missing.push(k);
-      else if (r.status === 'pending') {
-        if (now - r.updatedAt > pendingTimeoutMs) missing.push(k);
-        else pending.add(k);
+      // partial: level 1 is cached, level 2 still runs; both count as "in progress".
+      else if (r.status === 'pending' || r.status === 'partial') {
+        if (now - r.updatedAt <= pendingTimeoutMs) pending.add(k);
+        else if (r.status === 'pending') missing.push(k); // abandoned search: run it again
       } else if (r.status === 'failed' && now - r.updatedAt > failedRetryMs) missing.push(k);
     }
     if (missing.length > 0) {

@@ -7,12 +7,16 @@ import { wikidata, wikipedia, type DatedRow } from '@way/providers';
 import { cellToParent, getResolution } from 'h3-js';
 import { categoryFor, classifyClasses } from './categories.ts';
 import type { Config } from './config.ts';
+import { runDeepJob, type DeepJob } from './level2.ts';
+import type { ProviderRouter } from './router.ts';
 import type { Store } from './store/types.ts';
 
 export type SearchJob =
   | { kind: 'global'; buckets: number[]; filter: string }
   /** Fine view: one radius query around `area` (an ancestor cell) fills all `cells`. */
-  | { kind: 'area'; area: string; cells: string[]; buckets: number[]; filter: string };
+  | { kind: 'area'; area: string; cells: string[]; buckets: number[]; filter: string }
+  /** Level 2 (web + LLM) for an area level 1 left poor. */
+  | DeepJob;
 
 /** Fine cells are searched in groups sharing an ancestor: 2 levels up for close views, 1 for regions (keeps radius queries cheap). */
 const areaLevels = (res: number) => (res >= 6 ? 2 : 1);
@@ -21,6 +25,8 @@ export interface JobResult {
   keys: string[];
   found: number;
   providers: string[];
+  /** Level 2 to run next, in the background. */
+  followUp?: SearchJob;
 }
 
 export function jobKeys(job: SearchJob): string[] {
@@ -147,8 +153,19 @@ export async function buildPois(rows: DatedRow[], store: Store): Promise<Poi[]> 
   return pois;
 }
 
-/** Run one level-1 search job (Wikidata + Wikipedia GeoSearch) and cache the results. */
-export async function runSearchJob(job: SearchJob, store: Store, cfg: Config): Promise<JobResult> {
+/**
+ * Run one search job and cache the results: level 1 (Wikidata + Wikipedia
+ * GeoSearch), or level 2 for a `deep` job. A poor level-1 area comes back
+ * with a level-2 follow-up; its keys stay `partial` until then.
+ */
+export async function runSearchJob(job: SearchJob, store: Store, cfg: Config, router?: ProviderRouter): Promise<JobResult> {
+  const keys = jobKeys(job);
+  if (job.kind === 'deep') {
+    const r = router ? await runDeepJob(job, store, router) : { found: 0, provider: null };
+    const providers = r.provider ? ['web', r.provider] : ['degraded'];
+    await store.setKeys(keys, 'done', providers);
+    return { keys, found: r.found, providers };
+  }
   const t0 = job.buckets[0]!;
   const t1 = bucketEnd(job.buckets[job.buckets.length - 1]!);
   const providers = ['wikidata'];
@@ -174,7 +191,20 @@ export async function runSearchJob(job: SearchJob, store: Store, cfg: Config): P
   rows = rows.filter((r) => r.year >= t0 - 1 && r.year < t1 + 1);
   const pois = await buildPois(rows, store);
   await store.upsertPois(pois);
-  const keys = jobKeys(job);
+
+  if (job.kind === 'area' && router && (await isPoor(job, t0, t1 - 1, store, cfg, router))) {
+    await store.setKeys(keys, 'partial', providers);
+    return { keys, found: pois.length, providers, followUp: { ...job, kind: 'deep' } };
+  }
   await store.setKeys(keys, 'done', providers);
   return { keys, found: pois.length, providers };
+}
+
+async function isPoor(
+  job: Extract<SearchJob, { kind: 'area' }>, t0: number, t1: number, store: Store, cfg: Config, router: ProviderRouter,
+): Promise<boolean> {
+  const res = getResolution(job.cells[0]!);
+  if (!cfg.level2.enabled || res < cfg.level2.minRes || !router.hasProvider('extract')) return false;
+  const known = await store.queryView({ res, cells: job.cells, tStart: t0, tEnd: t1, perCell: cfg.level2.minPois });
+  return known.length < cfg.level2.minPois;
 }

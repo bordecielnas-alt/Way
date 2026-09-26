@@ -5,6 +5,7 @@ import pg from 'pg';
 import { setUserAgent } from '@way/providers';
 import type { Config } from './config.ts';
 import { MemoryStore } from './store/memory.ts';
+import { loadRouterConfig, ProviderRouter } from './router.ts';
 import { PostgresStore } from './store/postgres.ts';
 import type { Store } from './store/types.ts';
 
@@ -13,6 +14,8 @@ export * from './pipeline.ts';
 export * from './bus.ts';
 export * from './detail.ts';
 export * from './cache.ts';
+export * from './router.ts';
+export * from './level2.ts';
 export * from './doors.ts';
 export * from './borders.ts';
 export * from './store/types.ts';
@@ -33,4 +36,10 @@ export async function createStore(cfg: Config): Promise<Store> {
   } else store = new MemoryStore(cfg.memoryStoreFile ?? undefined);
   await store.init();
   return store;
+}
+
+/** Level-2 provider router; daily quota counters are kept next to the data. */
+export function createRouter(cfg: Config): ProviderRouter {
+  const usage = cfg.dataDir ? join(cfg.dataDir, 'provider-usage.json') : null;
+  return new ProviderRouter(loadRouterConfig(), process.env, usage);
 }

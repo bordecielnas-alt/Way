@@ -1,4 +1,4 @@
-import { createStore, loadConfig, startRedisWorker } from '@way/core';
+import { createRouter, createStore, loadConfig, startRedisWorker } from '@way/core';
 
 const cfg = loadConfig();
 if (!cfg.redisUrl) {
@@ -7,7 +7,7 @@ if (!cfg.redisUrl) {
 }
 
 const store = await createStore(cfg);
-const worker = startRedisWorker(cfg.redisUrl, store, cfg);
+const worker = startRedisWorker(cfg.redisUrl, store, cfg, createRouter(cfg));
 console.log(`[worker] ready (concurrency=${cfg.workerConcurrency})`);
 
 const shutdown = async () => {

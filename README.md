@@ -18,6 +18,11 @@ Puis ouvrir http://localhost:8080. Tout est dans l'image (site, API, recherche, 
 tout ce qui persiste est dans `/data`. Au premier démarrage, les frontières historiques (~66 Mo) se
 téléchargent en arrière-plan. Variable optionnelle : `WAY_CONTACT` (ton email, demandé par Wikimedia).
 
+Recherche approfondie par IA (facultatif) : ajouter au moins une clé gratuite, par exemple
+`-e GEMINI_API_KEY=… -e GROQ_API_KEY=…` (liste complète dans
+[packages/core/providers.default.json](packages/core/providers.default.json)). État des quotas :
+http://localhost:8080/admin.html.
+
 Unraid : voir [infra/unraid/README.md](infra/unraid/README.md). Avec Compose : `docker compose up -d`.
 
 ### Développement local (sans Docker)

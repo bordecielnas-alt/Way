@@ -33,7 +33,7 @@ export interface Store {
   /** Top POIs by importance per cell, whose dates intersect the window. */
   queryView(q: ViewQuery): Promise<PoiLite[]>;
   getPoi(id: string): Promise<Poi | null>;
-  updatePoi(id: string, patch: Partial<Pick<Poi, 'summary' | 'summary_lang' | 'image_url' | 'sources'>>): Promise<void>;
+  updatePoi(id: string, patch: Partial<Pick<Poi, 'summary' | 'summary_lang' | 'image_url' | 'sources' | 'tags'>>): Promise<void>;
   touchPoi(id: string): Promise<void>;
   getPoisByQids(qids: string[]): Promise<Poi[]>;
   /** Most important POIs whose dates intersect [t0, t1]. */

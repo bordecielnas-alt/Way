@@ -45,5 +45,10 @@ export default defineConfig({
       '/ws': { target: api.replace(/^http/, 'ws'), ws: true },
     },
   },
-  build: { target: 'es2022', chunkSizeWarningLimit: 6000 },
+  build: {
+    target: 'es2022',
+    chunkSizeWarningLimit: 6000,
+    // The globe, and the providers admin page (/admin.html).
+    rollupOptions: { input: { main: resolve(__dirname, 'index.html'), admin: resolve(__dirname, 'admin.html') } },
+  },
 });
