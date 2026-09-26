@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { poiInWindow, toLite, type Category, type Poi, type PoiLite } from '@way/shared';
+import { bucketsInRange, GLOBAL_SPACE, parseKey, poiInWindow, toLite, type Category, type Poi, type PoiLite } from '@way/shared';
 import type { KeyRecord, KeyStatus, Store, StoredDoors, ViewQuery } from './types.ts';
 
 interface Snapshot {
@@ -154,6 +154,36 @@ export class MemoryStore implements Store {
 
   async poiCount(): Promise<number> {
     return this.pois.size;
+  }
+
+  async cacheBytes(): Promise<number> {
+    let n = 0;
+    for (const p of this.pois.values()) n += JSON.stringify(p).length;
+    return n + this.keys.size * 60;
+  }
+
+  async evict(count: number, pinImportance: number): Promise<number> {
+    const victims = [...this.pois.values()]
+      .filter((p) => p.importance < pinImportance)
+      .sort((a, b) => a.view_count - b.view_count || a.importance - b.importance)
+      .slice(0, Math.max(0, count));
+    const spaces = new Set<string>();
+    const buckets = new Set<number>();
+    for (const p of victims) {
+      this.pois.delete(p.id);
+      if (p.wikidata_qid) this.byQid.delete(p.wikidata_qid);
+      for (const c of p.h3_cells) {
+        this.byCell.get(c)?.delete(p.id);
+        spaces.add(c);
+      }
+      bucketsInRange(p.date_start, p.date_end ?? p.date_start).forEach((b) => buckets.add(b));
+    }
+    for (const k of [...this.keys.keys()]) {
+      const { space, bucket } = parseKey(k);
+      if (spaces.has(space) || (space === GLOBAL_SPACE && buckets.has(bucket))) this.keys.delete(k);
+    }
+    if (victims.length) this.scheduleSave();
+    return victims.length;
   }
 
   async getClassCategories(classes: string[]): Promise<Map<string, Category | null>> {

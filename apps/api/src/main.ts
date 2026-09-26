@@ -5,7 +5,7 @@ import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { ClientMessage, type ServerMessage } from '@way/shared';
 import {
-  createStore, DoorService, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
+  createStore, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
 } from '@way/core';
 import { ViewService, type View } from './views.ts';
 
@@ -84,6 +84,7 @@ app.get('/api/admin/providers', async () => ({
   queue: await bus.stats(),
   keys: await store.keyStats(),
   pois: await store.poiCount(),
+  cache: { bytes: await store.cacheBytes(), maxBytes: cfg.cache.maxBytes },
   providers: [
     { name: 'wikidata', level: 1, status: 'active' },
     { name: 'wikipedia', level: 1, status: 'active' },
@@ -129,4 +130,14 @@ if (cfg.dataDir && listSnapshots(cfg.bordersDir).length < 40) {
     .then((n) => app.log.info(`borders: ${n} snapshot(s) downloaded`))
     .catch((e) => app.log.warn(`borders download failed: ${(e as Error).message}`));
 }
+// Bounded cache: checked shortly after start, then hourly.
+const checkCache = () =>
+  enforceCacheLimit(store, cfg)
+    .then(({ bytes, removed }) => {
+      if (removed) app.log.info(`cache: evicted ${removed} POIs, now ${Math.round(bytes / 1048576)} MB`);
+    })
+    .catch((e) => app.log.warn(`cache check failed: ${(e as Error).message}`));
+setTimeout(checkCache, 60_000).unref();
+setInterval(checkCache, 3_600_000).unref();
+
 app.log.info(`Way API ready (store=${mode.store}, queue=${mode.queue})`);

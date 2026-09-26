@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import type { Category, Poi, PoiLite } from '@way/shared';
+import { bucketsInRange, type Category, type Poi, type PoiLite } from '@way/shared';
 import type { KeyRecord, KeyStatus, Store, StoredDoors, ViewQuery } from './types.ts';
 
 /** Minimal query interface shared by node-postgres Pool and PGlite (tests). */
@@ -189,6 +189,46 @@ export class PostgresStore implements Store {
   async poiCount(): Promise<number> {
     const r = await this.db.query<{ n: string }>('SELECT count(*) AS n FROM pois');
     return Number(r.rows[0]?.n ?? 0);
+  }
+
+  async cacheBytes(): Promise<number> {
+    const r = await this.db.query<{ n: string | null }>(
+      `SELECT (SELECT COALESCE(sum(pg_column_size(p.*)), 0) FROM pois p)
+            + (SELECT COALESCE(sum(pg_column_size(k.*)), 0) FROM search_keys k) AS n`,
+    );
+    return Number(r.rows[0]?.n ?? 0);
+  }
+
+  async evict(count: number, pinImportance: number): Promise<number> {
+    if (count <= 0) return 0;
+    const gone = await this.db.query<{ h3_cells: string[]; date_start: number; date_end: number }>(
+      `WITH victims AS (
+         SELECT id FROM pois WHERE importance < $2
+         ORDER BY view_count ASC, COALESCE(last_viewed_at, created_at) ASC, importance ASC
+         LIMIT $1
+       )
+       DELETE FROM pois p USING victims v WHERE p.id = v.id
+       RETURNING p.h3_cells, p.date_start, COALESCE(p.date_end, p.date_start) AS date_end`,
+      [count, pinImportance],
+    );
+    await this.forgetKeys(gone.rows);
+    return gone.rows.length;
+  }
+
+  /** Coarse but safe: re-searching an area only costs a provider query. */
+  private async forgetKeys(rows: { h3_cells: string[]; date_start: number; date_end: number }[]): Promise<void> {
+    if (rows.length === 0) return;
+    const spaces = new Set<string>();
+    const buckets = new Set<string>();
+    for (const r of rows) {
+      r.h3_cells.forEach((c) => spaces.add(c));
+      bucketsInRange(r.date_start, r.date_end).forEach((b) => buckets.add(String(b)));
+    }
+    await this.db.query(
+      `DELETE FROM search_keys WHERE split_part(key, '|', 1) = ANY($1::text[])
+         OR (split_part(key, '|', 1) = 'g' AND split_part(key, '|', 2) = ANY($2::text[]))`,
+      [[...spaces], [...buckets]],
+    );
   }
 
   async getClassCategories(classes: string[]): Promise<Map<string, Category | null>> {

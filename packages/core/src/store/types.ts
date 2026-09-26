@@ -45,6 +45,14 @@ export interface Store {
   setKeys(keys: string[], status: KeyStatus, providers?: string[]): Promise<void>;
   keyStats(): Promise<Record<KeyStatus, number>>;
   poiCount(): Promise<number>;
+  /** Approximate size of the cached data, in bytes (brief §6.4). */
+  cacheBytes(): Promise<number>;
+  /**
+   * Deletes up to `count` POIs, least viewed and longest unseen first, never
+   * those at or above `pinImportance`. Search keys that found them are
+   * forgotten so the area can be searched again. Returns the number removed.
+   */
+  evict(count: number, pinImportance: number): Promise<number>;
 
   getClassCategories(classes: string[]): Promise<Map<string, Category | null>>;
   setClassCategories(map: Map<string, Category | null>): Promise<void>;

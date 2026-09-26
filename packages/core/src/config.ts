@@ -16,6 +16,12 @@ export interface Config {
   bordersDir: string;
   userAgent: string;
   workerConcurrency: number;
+  cache: {
+    /** Ceiling for cached POIs and search keys (brief §6.4). */
+    maxBytes: number;
+    /** POIs at or above this importance are never evicted. */
+    pinImportance: number;
+  };
   search: {
     globalMinSitelinks: number;
     globalLimit: number;
@@ -46,6 +52,10 @@ export function loadConfig(env = process.env): Config {
     // Wikimedia asks for a contact in the User-Agent: set WAY_CONTACT.
     userAgent: `Way/0.1 (personal history globe${contact ? `; ${contact}` : ''})`,
     workerConcurrency: num(env.WORKER_CONCURRENCY, 2),
+    cache: {
+      maxBytes: num(env.CACHE_MAX_MB, 10_240) * 1024 * 1024,
+      pinImportance: num(env.CACHE_PIN_IMPORTANCE, 0.75),
+    },
     search: {
       globalMinSitelinks: num(env.GLOBAL_MIN_SITELINKS, 5),
       globalLimit: num(env.GLOBAL_LIMIT, 1200),

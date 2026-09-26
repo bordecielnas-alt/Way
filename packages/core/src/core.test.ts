@@ -2,6 +2,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { describe, expect, it } from 'vitest';
 import { cellsForPoint, makeKey, type Poi } from '@way/shared';
 import { listSnapshots, snapshotFor } from './borders.ts';
+import { enforceCacheLimit } from './cache.ts';
 import { loadConfig } from './config.ts';
 import { meanwhileRange, nextCandidates, surpriseCandidates, timeCandidates } from './doors.ts';
 import type { DatedRow, RelatedRow } from '@way/providers';
@@ -104,6 +105,20 @@ async function exerciseStore(store: Store) {
   const stored = { v: 1, doors: [{ kind: 'next' as const, title: 'La suite', hint: 'x', poi_id: ostia.id }], empty: [] };
   await store.setDoors(rome.id, stored);
   expect(await store.getDoors(rome.id)).toEqual(stored);
+
+  // Eviction: important POIs are pinned; the searches that found the evicted one are forgotten.
+  const ostiaKey = makeKey(ostia.h3_cells[5]!, -650);
+  const globalKey = makeKey('g', -650);
+  await store.setKeys([ostiaKey, globalKey], 'done');
+  expect(await store.cacheBytes()).toBeGreaterThan(0);
+  expect(await store.evict(10, 0.75)).toBe(1);
+  expect(await store.getPoi(ostia.id)).toBeNull();
+  expect(await store.poiCount()).toBe(2);
+  const left = await store.getKeys([ostiaKey, globalKey, k]);
+  expect([...left.keys()]).toEqual([k]);
+  const tiny = { ...cfg, cache: { maxBytes: 1, pinImportance: 0.95 } };
+  expect((await enforceCacheLimit(store, tiny)).removed).toBe(2);
+  expect(await store.poiCount()).toBe(0);
 }
 
 describe('stores', () => {
