@@ -135,6 +135,10 @@ input.model { padding: 5px 8px; font-size: 12.5px; font-family: ui-monospace, Co
 .volume label { display: block; color: var(--ink); font-size: 14px; }
 .volume .num-input { width: 90px; flex: none; }
 .volume input[type='range'] { flex: 1; max-width: 360px; accent-color: var(--gold); padding: 0; border: 0; background: none; }
-.sound-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.sound-list { display: grid; gap: 6px; }
+.sound-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sound-row > .ghost:first-child { min-width: 210px; }
+.sound-src { font-size: 12px; color: var(--muted); min-width: 110px; }
+.sound-import { cursor: pointer; }
 .sound-list .ghost { display: inline-flex; align-items: center; gap: 8px; }
 .sound-list i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }

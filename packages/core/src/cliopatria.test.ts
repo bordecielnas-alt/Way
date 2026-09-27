@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Cliopatria } from './cliopatria.ts';
-import { fitsEra, frenchTitle } from './polity.ts';
+import { fitsEra, frenchTitle, sameplace } from './polity.ts';
 
 const square = [[[0, 0, 100, 0, 0, 100, -100, 0, 0, -100]]];
 
@@ -55,7 +55,7 @@ describe('frenchTitle', () => {
     expect(frenchTitle('Duchy of Athens')).toBe("duché d'Athens");
     expect(frenchTitle('Kingdom of Naples')).toBe('royaume de Naples');
     expect(frenchTitle('Kamakura Shogunate')).toBe('shogunat Kamakura');
-    expect(frenchTitle('Novgorod Republic')).toBe('république Novgorod');
+    expect(frenchTitle('Swedish Empire')).toBe('Swedish Empire');
     expect(frenchTitle('Venice')).toBe('Venice');
   });
 });
@@ -66,5 +66,14 @@ describe('fitsEra', () => {
     expect(fitsEra(987, 1792, 1300)).toBe(true);
     expect(fitsEra(null, null, 1300)).toBe(true);
     expect(fitsEra(1320, null, 1300)).toBe(true); // within the slack
+  });
+});
+
+describe('sameplace', () => {
+  it('catches an office linked instead of the realm', () => {
+    expect(sameplace('Sultanate of Bone', 'sultan')).toBe(false);
+    expect(sameplace('Swedish Empire', 'Swedish Empire')).toBe(true);
+    expect(sameplace('Kingdom of Portugal', 'Kingdom of Portugal')).toBe(true);
+    expect(sameplace('Morocco', null)).toBe(true);
   });
 });

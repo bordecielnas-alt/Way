@@ -53,7 +53,7 @@ button { font: inherit; color: inherit; }
 .brand-settings:hover, .brand-settings:focus-visible { color: var(--gold); }
 
 /* ---------- filters ---------- */
-.filters { top: 76px; left: 16px; width: 232px; padding: 10px; max-height: calc(100vh - 76px - 170px); overflow: auto; }
+.filters { top: 76px; left: 16px; width: 232px; padding: 10px; max-height: calc(100vh - 76px - 226px); overflow: auto; }
 .filters-head { display: flex; justify-content: space-between; align-items: center; padding: 2px 4px 8px; }
 .filters-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .filters-toggle { background: none; border: 0; padding: 2px 4px; font-size: 12px; color: var(--gold); cursor: pointer; }
@@ -239,4 +239,58 @@ body.card-open .cesium-viewer-bottom { right: 452px; }
   .tl-head { flex-wrap: wrap; row-gap: 6px; align-items: center; }
   .tl-range { font-size: 18px; }
   .tl-borders { display: none; }
+}
+
+/* ---------- people followed, armies ---------- */
+.people { left: 16px; bottom: 150px; width: 232px; padding: 4px; z-index: 3; max-height: calc(100vh - 240px); display: flex; flex-direction: column; }
+.people.open { padding-bottom: 10px; }
+.people-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; background: none; border: 0; border-radius: 7px; cursor: pointer; text-align: left; }
+.people-toggle:hover { background: rgba(255, 255, 255, 0.04); }
+.people-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.people-count { font-size: 11px; color: var(--gold); font-variant-numeric: tabular-nums; }
+.people-caret { margin-left: auto; color: var(--muted); font-size: 11px; transition: transform 0.15s; }
+.people.open .people-caret { transform: rotate(180deg); }
+.people-body { padding: 4px 6px 0; overflow: auto; }
+.people-search {
+  width: 100%; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.04); color: var(--ink); font: inherit; font-size: 13px;
+}
+.people-search:focus { outline: none; border-color: rgba(217, 164, 65, 0.6); }
+.people-results, .people-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.people-results { border-bottom: 1px solid var(--panel-border); padding-bottom: 6px; }
+.people-results button {
+  display: flex; gap: 8px; align-items: center; width: 100%; padding: 5px; border: 0; border-radius: 6px;
+  background: none; cursor: pointer; text-align: left;
+}
+.people-results button:hover { background: rgba(255, 255, 255, 0.06); }
+.people-results img, .people-noimg { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; flex: none; background: rgba(255, 255, 255, 0.06); }
+.people-results b, .people-list b { display: block; font-size: 13px; font-weight: 600; color: var(--ink); }
+.people-results small, .people-list small { display: block; font-size: 11px; color: var(--muted); line-height: 1.3; }
+.people-empty { padding: 6px 4px; font-size: 12px; color: var(--muted); }
+.people-list li { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
+.people-color { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid rgba(0, 0, 0, 0.5); flex: none; cursor: pointer; padding: 0; }
+.people-name { flex: 1; min-width: 0; background: none; border: 0; padding: 3px 4px; border-radius: 6px; cursor: pointer; text-align: left; }
+.people-name:hover { background: rgba(255, 255, 255, 0.05); }
+.people-name small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.people-remove { background: none; border: 0; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0 4px; }
+.people-remove:hover { color: var(--ink); }
+.people-opts { display: grid; gap: 6px; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.people-opts select { margin-left: 6px; background: rgba(255, 255, 255, 0.05); color: var(--ink); border: 1px solid var(--panel-border); border-radius: 6px; padding: 3px 6px; font: inherit; }
+.people-check { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+.people-check input { accent-color: var(--gold); }
+.people-note { margin-top: 8px; font-size: 11px; color: var(--muted); line-height: 1.4; }
+.people-note:empty { display: none; }
+
+.journey { list-style: none; margin: 0; padding: 0; }
+.journey button {
+  display: grid; grid-template-columns: 86px 1fr; gap: 8px; width: 100%; padding: 5px 4px; border: 0;
+  border-radius: 6px; background: none; cursor: pointer; text-align: left; font-size: 13px; color: var(--ink-soft);
+}
+.journey button:hover { background: rgba(255, 255, 255, 0.05); }
+.journey button.unplaced { opacity: 0.55; }
+.journey-when { color: var(--gold); font-variant-numeric: tabular-nums; font-size: 12px; padding-top: 1px; }
+.journey-what b { color: var(--ink); font-weight: 600; margin-right: 4px; }
+
+@media (max-width: 520px) {
+  .people { bottom: auto; top: 16px; left: auto; right: 16px; width: 200px; }
 }

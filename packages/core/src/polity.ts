@@ -143,6 +143,25 @@ const tokens = (s: string) =>
   s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().split(/[^a-z0-9]+/)
     .filter((t) => t.length > 2 && !GENERIC.has(t));
 
+/** Words of titles, not of places ("Sultanate of Bone": only "bone" names the place). */
+const TITLE_WORDS = new Set([
+  'sultanate', 'sultan', 'kingdom', 'king', 'empire', 'emperor', 'principality', 'prince', 'duchy', 'duke', 'county', 'count',
+  'republic', 'dynasty', 'khanate', 'khan', 'emirate', 'emir', 'caliphate', 'caliph', 'grand', 'margraviate', 'lordship',
+  'shogunate', 'confederation', 'city', 'states', 'crown', 'house',
+]);
+
+/**
+ * Whether an item's English label names the same place as the dataset's name
+ * (the dataset sometimes links the office, "sultan", instead of the realm).
+ */
+export function sameplace(name: string, labelEn: string | null): boolean {
+  if (!labelEn) return true;
+  const core = tokens(name).filter((t) => !TITLE_WORDS.has(t));
+  if (!core.length) return true;
+  const other = tokens(labelEn);
+  return core.some((x) => other.some((y) => x === y || (Math.min(x.length, y.length) >= 4 && (x.startsWith(y.slice(0, -1)) || y.startsWith(x.slice(0, -1))))));
+}
+
 /** Share of words in common, a word matching another spelled a little differently. */
 export function nameSimilarity(a: string, b: string): number {
   const ta = tokens(a);
@@ -329,7 +348,8 @@ export class PolityService {
       if (f.qid && (!hit || hit.start === undefined || Date.now() - hit.at > REFRESH_MS)) this.labelQueue.add(f.qid);
       // The dataset sometimes links another era's item (the Restoration for the medieval kingdom).
       const fr = hit && fitsEra(hit.start, hit.end, year) ? hit.fr : null;
-      const fits = fr && (!this.clio?.ambiguous(f.qid!) || nameSimilarity(f.name, hit?.en ?? '') >= 0.75);
+      const fits = fr && sameplace(f.name, hit?.en ?? null)
+        && (!this.clio?.ambiguous(f.qid!) || nameSimilarity(f.name, hit?.en ?? '') >= 0.75);
       const name = fits ? fr : frenchTitle(f.name);
       if (name && name !== f.name) labels[f.name] = name;
     }
@@ -528,10 +548,10 @@ export function frenchTitle(name: string): string {
     const rest = name.replace(re, '').replace(/^the /i, '');
     return `${fr} ${/^[aeiouyàâéèêîïôûh]/i.test(rest) ? `d'${rest}` : `de ${rest}`}`;
   }
+  // Only after proper names: "Swedish Empire" would give "empire Swedish".
   const suffix: [RegExp, string][] = [
-    [/ Dynasty$/i, 'dynastie'], [/ Kingdom$/i, 'royaume'], [/ Sultanate$/i, 'sultanat'], [/ Caliphate$/i, 'califat'],
-    [/ Khanate$/i, 'khanat'], [/ Emirate$/i, 'émirat'], [/ City-States$/i, 'cités-États'], [/ Empire$/i, 'empire'],
-    [/ Shogunate$/i, 'shogunat'], [/ Republic$/i, 'république'], [/ Confederation$/i, 'confédération'],
+    [/ Dynasty$/i, 'dynastie'], [/ Sultanate$/i, 'sultanat'], [/ Caliphate$/i, 'califat'],
+    [/ Khanate$/i, 'khanat'], [/ Emirate$/i, 'émirat'], [/ City-States$/i, 'cités-États'], [/ Shogunate$/i, 'shogunat'],
   ];
   for (const [re, fr] of suffix) if (re.test(name)) return `${fr} ${name.replace(re, '')}`;
   return name;

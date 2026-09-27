@@ -18,6 +18,7 @@ import { bounds, contains, divide, type Area, type Region } from './divisions.ts
 import { Filters, importanceFloor, type Scale } from './filters.ts';
 import { cameraState, createGlobe, restoreCamera, setBasemap, viewRect, type Basemap, type CameraState } from './globe.ts';
 import { PoiLayer } from './markers.ts';
+import { PeopleLayer, type Picked } from './people.ts';
 import { fetchCached } from './localcache.ts';
 import { loadUiSettings, playSound } from './sounds.ts';
 import { Timeline, type TimeWindow } from './timeline.ts';
@@ -51,12 +52,14 @@ else viewer.camera.setView({ destination: Cartesian3.fromDegrees(20, 30, 9_000_0
 if (import.meta.env.DEV) (window as unknown as { __viewer: unknown }).__viewer = viewer; // debugging aid
 
 const pois = new PoiLayer(viewer);
+const people = new PeopleLayer(viewer, document.getElementById('people')!);
 
 // ---------- timeline & borders ----------
 const timelineEl = document.getElementById('timeline')!;
 let bordersTimer: number | undefined;
 const timeline = new Timeline(timelineEl, saved.window ?? { tStart: -500, tEnd: -300 }, (w) => {
   pois.setWindow(w.tStart, w.tEnd);
+  people.setWindow(w.tStart, w.tEnd);
   filters.setCounts(pois.countsInWindow());
   clearTimeout(bordersTimer);
   bordersTimer = window.setTimeout(() => borders.setYear(Math.round((w.tStart + w.tEnd) / 2)), 250);
@@ -67,6 +70,37 @@ const timeline = new Timeline(timelineEl, saved.window ?? { tStart: -500, tEnd: 
 });
 const borders = new BordersLayer(viewer, (t) => timeline.setBordersNote(t));
 pois.setWindow(timeline.window.tStart, timeline.window.tEnd);
+people.setWindow(timeline.window.tStart, timeline.window.tEnd);
+
+/** Following someone: to where they are, and into their lifetime if the window is outside it. */
+people.onGoTo = (qid) => {
+  const j = people.journey(qid);
+  const t = (timeline.window.tStart + timeline.window.tEnd) / 2;
+  if (j && ((j.born !== null && t < j.born) || (j.died !== null && t > j.died))) {
+    const first = j.stops.find((s) => s.lat !== null && s.kind !== 'birth') ?? j.stops[0];
+    if (first) timeline.glideTo(first.start);
+  }
+  window.setTimeout(() => {
+    const at = people.whereIs(qid);
+    if (at) viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(at.lon, at.lat, 2_500_000), duration: 1.6 });
+  }, 400);
+};
+
+function openFigure(f: Picked): void {
+  clearTerritory();
+  pois.select(null);
+  const goTo = (year: number, lat: number | null, lon: number | null) => {
+    timeline.glideTo(year);
+    if (lat !== null && lon !== null) viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(lon, lat, 1_500_000), duration: 1.6 });
+  };
+  if (f.kind === 'person') {
+    playSound('person');
+    card.openPerson(f.journey, f.presence.text, (s) => goTo(s.start, s.lat, s.lon));
+  } else {
+    playSound('army');
+    card.openArmy(f.army, f.presence.text, (b) => goTo(b.t, b.lat, b.lon));
+  }
+}
 
 // ---------- filters ----------
 const filters = new Filters(
@@ -199,6 +233,17 @@ function hover(): void {
   const at = hoverAt;
   hoverAt = null;
   if (!at || dragging) return;
+  const figure = people.pick(at);
+  if (figure) {
+    viewer.canvas.style.cursor = 'pointer';
+    tooltip.hidden = false;
+    tooltip.style.left = `${at.x}px`;
+    tooltip.style.top = `${at.y}px`;
+    tooltip.innerHTML = '<div class="tooltip-title"></div><div class="tooltip-meta"></div>';
+    tooltip.firstElementChild!.textContent = figure.kind === 'person' ? figure.journey.name : `Armée : ${figure.army.side}`;
+    tooltip.lastElementChild!.textContent = figure.presence.text;
+    return;
+  }
   const { poi, cluster } = pois.pick(at);
   viewer.canvas.style.cursor = poi || cluster ? 'pointer' : '';
   if ((poi?.id ?? null) !== hoverPoi) {
@@ -241,6 +286,12 @@ handler.setInputAction((m: { endPosition: Cartesian2 }) => {
 }, ScreenSpaceEventType.MOUSE_MOVE);
 
 handler.setInputAction((c: { position: Cartesian2 }) => {
+  const figure = people.pick(c.position);
+  if (figure) {
+    tooltip.hidden = true;
+    openFigure(figure);
+    return;
+  }
   const { poi, cluster } = pois.pick(c.position);
   clearTimeout(hoverTimer);
   if (poi) {

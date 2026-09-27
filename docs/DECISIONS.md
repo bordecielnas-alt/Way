@@ -204,14 +204,58 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
   des périodes juste avant et après la fenêtre, en file basse priorité qui ne tourne que quand la file
   principale est vide (24 recherches au plus, sans niveau 2).
 
+## Frontières à l'année, personnages, armées
+
+- **Frontières à l'année** : [Cliopatria](https://github.com/Seshat-Global-History-Databank/cliopatria)
+  (Seshat Global History Databank, CC BY 4.0) remplace les ~50 instantanés d'historical-basemaps à
+  partir de −3400 : ~1 600 entités, 13 765 polygones datés à l'année, 509 périodes distinctes. Le
+  fichier (165 Mo) est simplifié au kilomètre et quantifié au 0,01° pendant la construction de l'image
+  (`scripts/build-cliopatria.ts` → 23 Mo) ; une période pèse 80 à 200 Ko et le navigateur la garde
+  (URL versionnée, `immutable`). Avant −3400, les instantanés restent.
+- **Vassaux réels** : Cliopatria décrit les royaumes composites (« (Kingdom of France) ») et leurs
+  membres (domaine royal, duchés, comtés). Le 2e clic découpe selon ces vraies frontières, déjà chargées,
+  sans requête ; les chefs-lieux Wikidata (Voronoï) ne servent plus qu'en dessous. Les découpages estimés
+  sont gardés en mémoire.
+- **Noms peints façon jeu de stratégie** : dans les tuiles des frontières, en capitales espacées, nom
+  court (« FRANCE »), le long de l'axe principal du royaume (analyse en composantes principales,
+  inclinaison ≤ 30°) sur une parabole passant par le milieu de ses sections, taille selon l'étendue ;
+  ils apparaissent et s'effacent avec le zoom. Le nom du royaume découpé laisse place à ceux de ses régions.
+- **Noms français** : les entités Cliopatria portent leur élément Wikidata : libellés par lots de 50,
+  sans recherche. Le jeu de données relie parfois un autre élément (la Restauration pour le royaume
+  médiéval, « sultan » pour un sultanat) : les dates de l'élément doivent couvrir l'époque (± 50 ans) et
+  son nom anglais nommer le même lieu, sinon le titre est traduit par motif (« Duchy of Athens » →
+  « duché d'Athens ») et la fiche cherche par nom.
+- **Cache renforcé** : fiches, régions et libellés gardés 90 jours avant vérification (noms introuvables
+  retentés après 30 jours), recherches échouées retentées après 1 h, 600 entrées dans le navigateur.
+- **Personnages suivis** (panneau Personnages, mémorisé par navigateur) : parcours tiré de Wikidata en
+  trois requêtes simples (naissance, mort, résidences P551, études P69, lieux de travail P937 / P108,
+  fonctions P39, moments P793 / P1344, événements où la personne est participante ou commandante
+  P710 / P4791), gardé 180 jours. Entre deux lieux connus, le personnage attend, puis voyage en ligne
+  droite au rythme d'un voyageur (~6 000 km/an) ; un événement daté le retient une part de la fenêtre
+  (1/10), pour que la lecture année par année attrape les batailles. Fonctions sans lieu (empereur,
+  consul) : décrivent l'attente sans déplacer. Guerres et révolutions ne servent pas de lieu (leurs
+  coordonnées sont un centre de carte). Trois styles : figurine, médaillon (portrait Wikimedia), étendard,
+  avec un signe d'activité (couronne, épées, livre, sablier, flèche de route…).
+- **Armées** (masquables) : par décennie, les guerres ayant une bataille datée, puis toutes leurs
+  batailles (deux requêtes : la requête imbriquée échouait côté WDQS). Une bataille citée par plusieurs
+  guerres va à la plus précise ; chaque guerre donne une armée par camp (les deux plus cités, P710 non
+  humains, commandants en qualificatif P4791), qui marche de bataille en bataille (~3 000 km/an).
+  Affichées pour une fenêtre de 120 ans au plus.
+- **Sons importés** : Réglages → Interface, un fichier audio par type (mp3, ogg, wav, m4a, flac ; 3 Mo),
+  gardé dans `/data/sounds`, joué à la place du son synthétisé. Way n'embarque aucun son de jeu
+  commercial (droits d'auteur) ; chacun peut importer les fichiers qu'il possède.
+
 ## Hors V1 (prévu)
 
 Histogramme de densité, carnet de voyage, brouillard de connaissance, fils rouges,
-campagnes animées, préchargement nocturne.
+préchargement nocturne.
 
 ## Limites connues
 
-- Noms des territoires : en anglais tant que la traduction n'est pas trouvée ou pas sûre. Rapprochement avec Wikidata automatique, donc parfois faux sur les noms vagues (« Hunter-gatherers »).
+- Noms des territoires : en anglais tant que la traduction n'est pas trouvée ou pas sûre ; titre traduit par motif sinon, le lieu restant en anglais (« duché d'Athens »).
+- Frontières Cliopatria : couverture des vassaux inégale selon les régions et les époques ; en dessous, régions estimées.
+- Personnages : aussi précis que Wikidata ; trajets supposés en ligne droite ; un personnage peu renseigné (naissance et mort seulement) attend puis traverse la carte.
+- Armées : seules les batailles rattachées à une guerre (P361) et localisées ; les camps viennent des participants de chaque bataille.
 - Régions : tracé approximatif ; couverture Wikidata inégale (bonne pour l'Empire ottoman, le Saint-Empire, la France ; faible pour les niveaux fins : aucun comté rattaché au duché de Bourgogne).
 - Sons : vérifiés sans erreur, pas à l'oreille.
 - Wikimedia limite le débit : premier clic sur un territoire parfois lent (jusqu'à une minute) si le serveur vient de beaucoup interroger Wikidata ; ensuite en cache.

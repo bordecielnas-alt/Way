@@ -3,7 +3,7 @@ import '@fontsource-variable/inter';
 import './admin.css';
 import { CATEGORY_LABELS, type Category } from '@way/shared';
 import { CATEGORY_COLORS } from './icons.ts';
-import { configureSounds, playSound, type SoundKind } from './sounds.ts';
+import { configureSounds, loadCustomSounds, playSound, type SoundKind } from './sounds.ts';
 
 // Settings page: login, level-2 providers (keys, models, on/off, test),
 // live status (brief §8.4) and the account password.
@@ -394,7 +394,40 @@ addEventListener('beforeunload', (e) => {
 const SOUND_KINDS: [SoundKind, string, string][] = [
   ...(Object.keys(CATEGORY_LABELS) as Category[]).map((c): [SoundKind, string, string] => [c, CATEGORY_LABELS[c], CATEGORY_COLORS[c]]),
   ['territory', 'Territoire', '#d9a441'],
+  ['army', 'Armée en campagne', '#c8554f'],
 ];
+let imported: Record<string, string> = {};
+
+function renderSounds(): void {
+  $('sound-list').innerHTML = SOUND_KINDS.map(([k, label, color]) => `
+    <div class="sound-row">
+      <button type="button" class="ghost" data-sound="${k}" title="Écouter"><i style="background:${color}"></i>${esc(label)}</button>
+      <span class="sound-src">${imported[k] ? 'Fichier importé' : 'Son d’origine'}</span>
+      <label class="ghost sound-import" title="Importer un fichier audio (mp3, ogg, wav… 3 Mo au plus)">Importer…
+        <input type="file" accept="audio/*" data-import="${k}" hidden>
+      </label>
+      ${imported[k] ? `<button type="button" class="ghost" data-reset="${k}" title="Revenir au son d’origine">Rétablir</button>` : ''}
+    </div>`).join('');
+}
+
+async function sendSound(kind: string, file: File | null): Promise<void> {
+  const r = await fetch(`/api/admin/sounds/${kind}`, file
+    ? { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file }
+    : { method: 'DELETE' });
+  if (r.status === 401) {
+    showLogin();
+    return;
+  }
+  const data = (await r.json().catch(() => ({}))) as Record<string, string> & { error?: string };
+  if (!r.ok) {
+    flash(`Échec : ${data.error ?? r.status}`);
+    return;
+  }
+  imported = data;
+  await loadCustomSounds();
+  renderSounds();
+  flash(file ? 'Son importé.' : 'Son d’origine rétabli.');
+}
 
 const percent = (v: number) => `${Math.round(v * 100)} %`;
 
@@ -406,9 +439,11 @@ function renderUi(): void {
   $('volume-value').textContent = percent(ui.volume);
   $<HTMLInputElement>('hover-open').checked = ui.hoverOpen;
   $<HTMLInputElement>('meanwhile-span').value = String(ui.meanwhileMaxSpan);
-  $('sound-list').innerHTML = SOUND_KINDS.map(
-    ([k, label, color]) => `<button type="button" class="ghost" data-sound="${k}"><i style="background:${color}"></i>${esc(label)}</button>`,
-  ).join('');
+  renderSounds();
+  void loadCustomSounds().then((c) => {
+    imported = c;
+    renderSounds();
+  });
 }
 
 let uiTimer: number | undefined;
@@ -440,8 +475,20 @@ $('volume').addEventListener('input', saveUi);
 $('hover-open').addEventListener('change', saveUi);
 $('meanwhile-span').addEventListener('change', saveUi);
 $('sound-list').addEventListener('click', (e) => {
-  const kind = (e.target as HTMLElement).closest<HTMLElement>('[data-sound]')?.dataset.sound as SoundKind | undefined;
+  const el = e.target as HTMLElement;
+  const kind = el.closest<HTMLElement>('[data-sound]')?.dataset.sound as SoundKind | undefined;
   if (kind) playSound(kind, { force: true });
+  const reset = el.closest<HTMLElement>('[data-reset]')?.dataset.reset;
+  if (reset) void sendSound(reset, null);
+});
+$('sound-list').addEventListener('change', (e) => {
+  const input = e.target as HTMLInputElement;
+  const kind = input.dataset.import;
+  const file = input.files?.[0];
+  if (!kind || !file) return;
+  if (file.size > 3 * 1024 * 1024) flash('Fichier trop lourd : 3 Mo au plus.');
+  else void sendSound(kind, file);
+  input.value = '';
 });
 
 // ---------- status ----------

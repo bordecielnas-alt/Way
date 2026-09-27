@@ -1,5 +1,5 @@
 import {
-  CATEGORY_LABELS, DOOR_KINDS, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
+  ACTIVITY_LABELS, CATEGORY_LABELS, DOOR_KINDS, type Army, type JourneyStop, type PersonJourney, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
   type PolityInfo, type PolityRulerInfo,
 } from '@way/shared';
 import { CATEGORY_COLORS } from './icons.ts';
@@ -149,6 +149,90 @@ export class Card {
     } finally {
       clearTimeout(slow);
     }
+  }
+
+  /**
+   * Card of someone followed on the map: what they are doing now, and their
+   * life as dated places; a moment clicked takes the map there.
+   */
+  openPerson(j: PersonJourney, now: string, onStop: (s: JourneyStop) => void): void {
+    this.token++;
+    this.shown = null;
+    this.root.hidden = false;
+    document.body.classList.add('card-open');
+    const years = (s: JourneyStop) =>
+      s.end !== null && Math.floor(s.end) !== Math.floor(s.start)
+        ? `${formatYear(Math.floor(s.start))} – ${formatYear(Math.floor(s.end))}`
+        : formatYear(Math.floor(s.start));
+    const life = j.born !== null || j.died !== null
+      ? `${j.born !== null ? formatYear(Math.floor(j.born)) : '?'} – ${j.died !== null ? formatYear(Math.floor(j.died)) : ''}`
+      : '';
+    this.root.innerHTML = `
+      <button class="card-close" type="button" aria-label="Fermer">×</button>
+      <div class="card-scroll">
+        ${j.image ? `<div class="card-image"><img alt="" src="${esc(j.image)}" referrerpolicy="no-referrer"></div>` : ''}
+        <div class="card-body">
+          <div class="card-kicker"><span class="card-cat"><i style="background:#e377c2"></i>Personnage suivi</span></div>
+          <h2 class="card-title">${esc(j.name)}</h2>
+          ${life ? `<div class="card-date">${esc(life)}</div>` : ''}
+          ${j.description ? `<div class="card-desc">${esc(j.description)}</div>` : ''}
+          <div class="polity-hint">${esc(now)}</div>
+          <div class="card-section">
+            <div class="card-section-title">Parcours</div>
+            <ol class="journey">${j.stops.map((s, i) => `
+              <li><button type="button" data-i="${i}" ${s.lat === null ? 'class="unplaced"' : ''}>
+                <span class="journey-when">${esc(years(s))}</span>
+                <span class="journey-what"><b>${esc(ACTIVITY_LABELS[s.kind])}</b> ${esc(s.label)}</span>
+              </button></li>`).join('')}</ol>
+            <div class="card-summary-note">Lieux et dates de Wikidata. Entre deux lieux connus, le trajet est supposé en ligne droite, au rythme d’un voyageur de l’époque. Les moments sans lieu (en gris) ne déplacent pas le personnage.</div>
+          </div>
+          <div class="card-section">
+            <div class="card-section-title">Sources</div>
+            <ul class="card-sources"><li><a href="https://www.wikidata.org/wiki/${esc(j.qid)}" target="_blank" rel="noopener">Wikidata : ${esc(j.name)}</a></li></ul>
+          </div>
+        </div>
+      </div>`;
+    this.bindClose();
+    this.root.querySelectorAll<HTMLButtonElement>('.journey button').forEach((b) =>
+      b.addEventListener('click', () => onStop(j.stops[Number(b.dataset.i)]!)),
+    );
+    this.root.querySelectorAll<HTMLImageElement>('img').forEach((img) => {
+      img.addEventListener('load', () => img.classList.add('loaded'));
+      img.addEventListener('error', () => (img.closest('.card-image') ?? img).remove());
+    });
+  }
+
+  /** Card of an army: its war, side and battles in order. */
+  openArmy(a: Army, now: string, onBattle: (b: Army['battles'][number]) => void): void {
+    this.token++;
+    this.shown = null;
+    this.root.hidden = false;
+    document.body.classList.add('card-open');
+    this.root.innerHTML = `
+      <button class="card-close" type="button" aria-label="Fermer">×</button>
+      <div class="card-scroll"><div class="card-body">
+        <div class="card-kicker"><span class="card-cat"><i style="background:#c8554f"></i>Armée en campagne</span></div>
+        <h2 class="card-title">${esc(a.side)}</h2>
+        <div class="card-desc">${esc(a.war)}</div>
+        <div class="polity-hint">${esc(now)}</div>
+        <div class="card-section">
+          <div class="card-section-title">Batailles</div>
+          <ol class="journey">${a.battles.map((b, i) => `
+            <li><button type="button" data-i="${i}">
+              <span class="journey-when">${esc(formatYear(Math.floor(b.t)))}</span>
+              <span class="journey-what"><b>${esc(b.label)}</b>${b.commanders.length ? ` ${esc(b.commanders.join(', '))}` : ''}</span>
+            </button></li>`).join('')}</ol>
+          <div class="card-summary-note">Batailles de cette guerre où ce camp est cité dans Wikidata, reliées dans l’ordre : la marche entre deux batailles est supposée en ligne droite.</div>
+        </div>
+        <div class="card-section">
+          <div class="card-section-title">Sources</div>
+          <ul class="card-sources"><li><a href="https://www.wikidata.org/wiki/${esc(a.warQid)}" target="_blank" rel="noopener">Wikidata : ${esc(a.war)}</a></li></ul>
+        </div>
+      </div></div>`;
+    this.bindClose();
+    this.root.querySelectorAll<HTMLButtonElement>('.journey button').forEach((b) =>
+      b.addEventListener('click', () => onBattle(a.battles[Number(b.dataset.i)]!)),
+    );
   }
 
   /** Replaces the card's hint line (what another click will do). */

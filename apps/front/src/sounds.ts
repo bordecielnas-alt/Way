@@ -3,9 +3,10 @@ import type { Category } from '@way/shared';
 // Click sounds by category, in the spirit of strategy games (war drums,
 // fanfares, horns, choirs), synthesized with Web Audio: no files to host or
 // license. A shared hall reverb gives them room. Turned on or off in the
-// Réglages page.
+// Réglages page, where the owner can also import their own sound files
+// for any kind (they then replace the synthesized one).
 
-export type SoundKind = Category | 'territory';
+export type SoundKind = Category | 'territory' | 'army';
 
 export interface UiPrefs { sounds: boolean; volume: number; hoverOpen: boolean; meanwhileMaxSpan: number }
 
@@ -21,8 +22,37 @@ export function configureSounds(opts: { sounds: boolean; volume: number }): void
   if (rig) rig.master.gain.value = volume * 0.7;
 }
 
+/** Imported sounds: kind -> version. */
+let custom: Record<string, string> = {};
+const decoded = new Map<string, Promise<AudioBuffer | null>>();
+
+/** Reads which kinds have an imported sound (the files are fetched on first play). */
+export async function loadCustomSounds(): Promise<Record<string, string>> {
+  try {
+    const r = await fetch('/api/sounds');
+    if (r.ok) custom = (await r.json()) as Record<string, string>;
+  } catch {
+    /* synthesized sounds only */
+  }
+  return custom;
+}
+
+function importedBuffer(r: Rig, kind: string, version: string): Promise<AudioBuffer | null> {
+  const key = `${kind}@${version}`;
+  let p = decoded.get(key);
+  if (!p) {
+    p = fetch(`/api/sounds/${kind}?v=${version}`)
+      .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(String(res.status)))))
+      .then((data) => r.ac.decodeAudioData(data))
+      .catch(() => null);
+    decoded.set(key, p);
+  }
+  return p;
+}
+
 /** Loads the shared interface preferences and applies the sound ones; null when unreachable. */
 export async function loadUiSettings(): Promise<UiPrefs | null> {
+  void loadCustomSounds();
   try {
     const r = await fetch('/api/ui');
     if (!r.ok) return null;
@@ -317,6 +347,16 @@ const SOUNDS: Record<SoundKind, (r: Rig, t: number) => void> = {
     noise(r, t, { dur: 1.2, gain: 0.07, filter: 'bandpass', freq: 600, to: 1200, q: 0.8, attack: 0.4, space: 0.2 });
     [0.1, 0.24, 0.5].forEach((d, i) => tone(r, t + d, { freq: 2300 + i * 200, to: 3600, dur: 0.1, gain: 0.07, space: 0.3 }));
   },
+  army: (r, t) => {
+    // An army on the march: snare rolls, a bass drum, a fife tune.
+    for (let i = 0; i < 8; i++) {
+      const accent = i % 4 === 0;
+      noise(r, t + i * 0.12, { dur: 0.07, gain: accent ? 0.32 : 0.18, freq: 2600, q: 0.9, space: 0.3 });
+      if (accent) drum(r, t + i * 0.12, 60, 0.55, 0.3);
+    }
+    const fife: [number, number][] = [[0, 7], [0.24, 9], [0.36, 11], [0.48, 14], [0.72, 11], [0.84, 9]];
+    for (const [d, st] of fife) tone(r, t + d, { type: 'triangle', freq: semis(784, st - 7), dur: 0.2, gain: 0.07, attack: 0.01, space: 0.45 });
+  },
   place: (r, t) => {
     // A marker set on the map.
     drum(r, t, 110, 0.3, 0.2);
@@ -324,9 +364,25 @@ const SOUNDS: Record<SoundKind, (r: Rig, t: number) => void> = {
   },
 };
 
-export function playSound(kind: SoundKind, { force = false } = {}): void {
+export function playSound(kind: SoundKind, { force = false, synth = false } = {}): void {
   if (!enabled && !force) return;
   const r = audio();
   if (!r) return;
+  const version = custom[kind];
+  if (version && !synth) {
+    void importedBuffer(r, kind, version).then((buf) => {
+      if (!buf) {
+        SOUNDS[kind](r, r.ac.currentTime + 0.02);
+        return;
+      }
+      const src = r.ac.createBufferSource();
+      src.buffer = buf;
+      const g = r.ac.createGain();
+      g.gain.value = 1.2;
+      src.connect(g).connect(r.dry); // imported sounds carry their own room
+      src.start();
+    });
+    return;
+  }
   SOUNDS[kind](r, r.ac.currentTime + 0.02);
 }

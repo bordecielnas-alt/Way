@@ -5,7 +5,7 @@ import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { ClientMessage, type ServerMessage } from '@way/shared';
 import {
-  createBorders, createPolities, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, type JobBus,
+  createBorders, createPeople, createPolities, createSoundFiles, SOUND_MAX_BYTES, SOUND_TYPES, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, type JobBus,
 } from '@way/core';
 import { Auth, COOKIE, readCookie } from './auth.ts';
 import { ViewService, type View } from './views.ts';
@@ -20,6 +20,8 @@ const views = new ViewService(store, bus, cfg);
 const doors = new DoorService(store, () => normalizeUi(settings.get().ui).meanwhileMaxSpan);
 const { clio, borders } = createBorders(cfg);
 const polities = createPolities(cfg, clio);
+const people = createPeople(cfg);
+const soundFiles = createSoundFiles(cfg);
 const mode = {
   store: cfg.databaseUrl ? 'postgres' : cfg.dataDir ? 'embedded-postgres' : 'memory',
   queue: cfg.redisUrl ? 'redis' : 'inline',
@@ -217,6 +219,76 @@ app.get<{ Querystring: { year?: string } }>('/api/polity/labels', async (req, re
   const year = Number(req.query.year);
   if (!Number.isFinite(year)) return reply.code(400).send({ error: 'année manquante' });
   return polities.labels(year);
+});
+
+// ---------- people followed on the map, armies ----------
+
+app.get('/api/people/search', async (req, reply) => {
+  const q = z.object({ q: z.string().trim().min(2).max(100) }).safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: 'requête invalide' });
+  try {
+    return await people.search(q.data.q);
+  } catch (e) {
+    req.log.warn(`people search failed: ${(e as Error).message}`);
+    return reply.code(503).send({ error: 'Wikidata ne répond pas pour le moment.' });
+  }
+});
+
+app.get<{ Params: { qid: string } }>('/api/people/:qid', async (req, reply) => {
+  if (!Qid.safeParse(req.params.qid).success) return reply.code(400).send({ error: 'requête invalide' });
+  try {
+    const j = await people.journey(req.params.qid);
+    if (!j) return reply.code(404).send({ error: 'personne inconnue' });
+    return j;
+  } catch (e) {
+    req.log.warn(`journey of ${req.params.qid} failed: ${(e as Error).message}`);
+    return reply.code(503).send({ error: 'Wikidata ne répond pas pour le moment.' });
+  }
+});
+
+// Armies of the wars fought during a decade (first year, a multiple of 10).
+app.get('/api/armies', async (req, reply) => {
+  const q = z.object({ decade: z.coerce.number().int().min(-3000).max(2030).refine((d) => d % 10 === 0) }).safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: 'requête invalide' });
+  try {
+    return await people.armies(q.data.decade);
+  } catch (e) {
+    req.log.warn(`armies of ${q.data.decade}s failed: ${(e as Error).message}`);
+    return reply.code(503).send({ error: 'Wikidata ne répond pas pour le moment.' });
+  }
+});
+
+// ---------- sounds imported by the owner (they replace the synthesized ones) ----------
+
+app.addContentTypeParser(/^audio\//, { parseAs: 'buffer', bodyLimit: SOUND_MAX_BYTES + 1024 }, (_req, body, done) => done(null, body));
+const SoundKind = z.string().regex(/^[a-z]{3,20}$/);
+
+app.get('/api/sounds', async (_req, reply) => reply.header('Cache-Control', 'no-cache').send(soundFiles.list()));
+
+app.get<{ Params: { kind: string } }>('/api/sounds/:kind', async (req, reply) => {
+  const f = SoundKind.safeParse(req.params.kind).success ? soundFiles.read(req.params.kind) : null;
+  if (!f) return reply.code(404).send({ error: 'aucun son importé' });
+  // The URL carries the version: a new import gets a new URL.
+  return reply.header('Content-Type', f.type).header('Cache-Control', 'public, max-age=31536000, immutable').send(f.data);
+});
+
+app.put<{ Params: { kind: string } }>('/api/admin/sounds/:kind', async (req, reply) => {
+  const type = (req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
+  if (!SoundKind.safeParse(req.params.kind).success || !SOUND_TYPES[type] || !Buffer.isBuffer(req.body)) {
+    return reply.code(400).send({ error: 'Format non pris en charge : mp3, ogg, wav, m4a, aac, flac ou webm.' });
+  }
+  try {
+    soundFiles.save(req.params.kind, type, req.body);
+  } catch (e) {
+    return reply.code(400).send({ error: (e as Error).message });
+  }
+  return soundFiles.list();
+});
+
+app.delete<{ Params: { kind: string } }>('/api/admin/sounds/:kind', async (req, reply) => {
+  if (!SoundKind.safeParse(req.params.kind).success) return reply.code(400).send({ error: 'requête invalide' });
+  soundFiles.remove(req.params.kind);
+  return soundFiles.list();
 });
 
 // Interface preferences shared by every viewer (set in the Réglages page).

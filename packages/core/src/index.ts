@@ -12,6 +12,8 @@ import { SettingsFile } from './settings.ts';
 import { PolityService } from './polity.ts';
 import { Cliopatria } from './cliopatria.ts';
 import { BordersService } from './borders.ts';
+import { PeopleService } from './people.ts';
+import { SoundFiles } from './sounds.ts';
 import type { Store } from './store/types.ts';
 
 /** Local files in dev (no DATA_DIR): settings, account. */
@@ -29,6 +31,8 @@ export * from './settings.ts';
 export * from './polity.ts';
 export * from './borders.ts';
 export * from './cliopatria.ts';
+export * from './people.ts';
+export * from './sounds.ts';
 export * from './store/types.ts';
 export { MemoryStore } from './store/memory.ts';
 export { PostgresStore, type Queryable } from './store/postgres.ts';
@@ -69,4 +73,14 @@ export function createPolities(cfg: Config, clio: Cliopatria | null = null): Pol
 export function createBorders(cfg: Config): { clio: Cliopatria; borders: BordersService } {
   const clio = new Cliopatria(cfg.cliopatriaFile);
   return { clio, borders: new BordersService(clio, cfg.bordersDir) };
+}
+
+/** People followed on the map and armies, cached next to the data. */
+export function createPeople(cfg: Config): PeopleService {
+  return new PeopleService(join(cfg.dataDir ?? devDir, 'people.json'));
+}
+
+/** Sounds imported in the Réglages page, next to the data. */
+export function createSoundFiles(cfg: Config): SoundFiles {
+  return new SoundFiles(join(cfg.dataDir ?? devDir, 'sounds'));
 }
