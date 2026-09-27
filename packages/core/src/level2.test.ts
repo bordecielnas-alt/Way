@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { latLngToCell } from 'h3-js';
 import { runDeepJob, titleSimilarity } from './level2.ts';
 import { ProviderRouter, type RouterConfig } from './router.ts';
+import type { SettingsData } from './settings.ts';
 import { MemoryStore } from './store/memory.ts';
 
 const json = (body: unknown, status = 200) =>
@@ -52,6 +53,48 @@ describe('provider router', () => {
   it('is degraded without any key', () => {
     const r = new ProviderRouter(config(), {});
     expect(r.hasProvider('extract')).toBe(false);
+  });
+
+  it('applies settings saved from the web app on top of the environment', async () => {
+    const hosts: string[] = [];
+    const models: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      hosts.push(new URL(url).host);
+      models.push((JSON.parse(init.body as string) as { model: string }).model);
+      return completion('{"ok": true}');
+    }));
+    const settings: SettingsData = { env: {}, disabled: [] };
+    const r = new ProviderRouter(config(), { A_KEY: 'env' }, null, () => settings);
+    expect(r.source('A_KEY')).toBe('env');
+
+    // A key typed in the page enables "nokey", first in the route, with a model override.
+    settings.env = { C_KEY: 'typed', NOKEY_MODEL: 'custom' };
+    await r.completeJson('extract', 's', 'u', (v) => v);
+    expect(hosts).toEqual(['c.test']);
+    expect(models).toEqual(['custom']);
+    expect(r.variables()).toEqual(expect.arrayContaining(['A_KEY', 'C_KEY', 'NOKEY_MODEL']));
+
+    // Turned off by hand: skipped.
+    settings.disabled = ['nokey'];
+    await r.completeJson('extract', 's', 'u', (v) => v);
+    expect(hosts.at(-1)).toBe('a.test');
+    expect(r.status().find((p) => p.id === 'nokey')).toMatchObject({ configured: true, disabled: true });
+
+    // Level 2 switched off: nothing runs.
+    settings.level2 = false;
+    expect(r.enabled).toBe(false);
+    expect(r.canRun('extract')).toBe(false);
+    expect(r.hasProvider('extract')).toBe(false);
+  });
+
+  it('tests a key without pausing the provider when it fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'bad key' }, 401)));
+    const r = new ProviderRouter(config(), { A_KEY: 'x' });
+    const res = await r.test('a');
+    expect(res.ok).toBe(false);
+    expect(res.detail).toContain('401');
+    expect(r.status().find((p) => p.id === 'a')?.breakerOpenUntil).toBeNull();
+    expect(await r.test('nokey')).toMatchObject({ ok: false, detail: 'clé ou adresse manquante' });
   });
 });
 

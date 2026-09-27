@@ -204,7 +204,7 @@ async function isPoor(
   job: Extract<SearchJob, { kind: 'area' }>, t0: number, t1: number, store: Store, cfg: Config, router: ProviderRouter,
 ): Promise<boolean> {
   const res = getResolution(job.cells[0]!);
-  if (!cfg.level2.enabled || res < cfg.level2.minRes || !router.hasProvider('extract')) return false;
+  if (res < cfg.level2.minRes || !router.hasProvider('extract')) return false;
   const known = await store.queryView({ res, cells: job.cells, tStart: t0, tEnd: t1, perCell: cfg.level2.minPois });
   return known.length < cfg.level2.minPois;
 }

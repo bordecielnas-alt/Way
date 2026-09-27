@@ -130,6 +130,22 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
   dépassement est facturé) : présent mais inactif sans clé. Gemini avec ancrage Google Search n'est pas
   utilisé : il n'est pas exposé par l'API compatible OpenAI.
 
+## Réglages et compte
+
+- Page **Réglages** (`/admin.html`, roue dentée sur le globe) : interrupteur du niveau 2, clés et adresses
+  des fournisseurs, modèle de chaque IA, activation par fournisseur, bouton **Tester** (un vrai appel,
+  compté dans les quotas), état des quotas, mot de passe.
+- Enregistrés dans `/data/settings.json` (droits 600). Ils passent **devant** les variables
+  d'environnement ; effacer une valeur rend la main à la variable. Pris en compte sans redémarrage
+  (relu toutes les 3 s, y compris par un worker séparé). Les clés ne sont jamais renvoyées en entier
+  au navigateur (4 derniers caractères).
+- **Un compte** (`admin`, mot de passe par défaut `way`, bandeau tant qu'il n'est pas changé). Hash
+  scrypt dans `/data/auth.json`. Session = cookie signé HMAC, HttpOnly, SameSite=Strict, 30 jours ;
+  changer le mot de passe renouvelle la clé de signature (déconnecte les autres appareils). 5 échecs →
+  5 min de blocage pour cette adresse. Écritures refusées si l'en-tête Origin est d'un autre site.
+- Protégé : réglages et état (`/api/settings`, `/api/admin`). Le globe reste ouvert sans compte.
+- Mot de passe oublié : supprimer `/data/auth.json` et redémarrer.
+
 ## Hors V1 (prévu)
 
 Histogramme de densité, bouton Play, carnet de voyage, brouillard de connaissance, fils rouges,

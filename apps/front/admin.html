@@ -3,21 +3,80 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Way — Fournisseurs</title>
+    <title>Way — Réglages</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%23d9a441' stroke-width='2.5'/><path d='M3 16h26M16 3c-5 4-5 22 0 26M16 3c5 4 5 22 0 26' fill='none' stroke='%23d9a441' stroke-width='1.6'/></svg>" />
   </head>
   <body>
     <main class="admin">
       <header>
-        <a class="brand-mark" href="/">Way</a>
-        <h1>Fournisseurs et cache</h1>
-        <span class="updated" id="updated"></span>
+        <a class="brand-mark" href="/" title="Retour au globe">Way</a>
+        <h1>Réglages</h1>
+        <span class="updated" id="who"></span>
+        <button class="link" id="logout" type="button" hidden>Se déconnecter</button>
       </header>
-      <section class="cards" id="summary"></section>
-      <section>
-        <h2>Niveau 2 : recherche web et IA</h2>
-        <p class="hint" id="level2-hint"></p>
-        <div class="table-wrap"><table id="providers"></table></div>
-      </section>
+
+      <form id="login" class="login card" hidden>
+        <h2>Connexion</h2>
+        <label>Identifiant<input name="username" autocomplete="username" required value="admin" /></label>
+        <label>Mot de passe<input name="password" type="password" autocomplete="current-password" required /></label>
+        <p class="form-error" id="login-error" role="alert"></p>
+        <button class="primary" type="submit">Se connecter</button>
+      </form>
+
+      <div id="app" hidden>
+        <div class="banner" id="default-password" hidden>
+          Le mot de passe est encore celui par défaut (<code>way</code>). Changez-le dans la section Compte.
+        </div>
+
+        <nav class="tabs" role="tablist">
+          <button type="button" role="tab" data-tab="ai" aria-selected="true">Recherche IA</button>
+          <button type="button" role="tab" data-tab="status">État</button>
+          <button type="button" role="tab" data-tab="account">Compte</button>
+        </nav>
+
+        <section data-panel="ai">
+          <div class="switch-row card">
+            <div>
+              <div class="switch-title">Recherche approfondie par IA</div>
+              <div class="sub">Quand une zone reste presque vide après Wikipédia et Wikidata, Way cherche sur le web
+                et une IA en extrait des faits sourcés. Traduit aussi les résumés disponibles seulement en anglais.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="level2" /><span></span></label>
+          </div>
+          <p class="hint">Une clé gratuite suffit : Gemini ou Groq. Les suivantes servent de secours quand un quota est atteint.
+            Les clés sont enregistrées sur le serveur (dossier <code>/data</code>) et ne sont jamais réaffichées en entier.</p>
+          <h2>Intelligence artificielle</h2>
+          <div class="services" id="llm"></div>
+          <h2>Recherche web</h2>
+          <div class="services" id="search"></div>
+          <div class="savebar" id="savebar" hidden>
+            <span id="save-msg">Modifications non enregistrées</span>
+            <button type="button" class="link" id="cancel">Annuler</button>
+            <button type="button" class="primary" id="save">Enregistrer</button>
+          </div>
+        </section>
+
+        <section data-panel="status" hidden>
+          <div class="cards" id="summary"></div>
+          <h2>Niveau 2 : recherche web et IA</h2>
+          <p class="hint" id="level2-hint"></p>
+          <div class="table-wrap"><table id="providers"></table></div>
+        </section>
+
+        <section data-panel="account" hidden>
+          <form id="password" class="card narrow">
+            <h2>Changer le mot de passe</h2>
+            <p class="sub">Compte <strong>admin</strong>. Les autres appareils connectés seront déconnectés.</p>
+            <label>Mot de passe actuel<input name="current" type="password" autocomplete="current-password" required /></label>
+            <label>Nouveau mot de passe<input name="next" type="password" autocomplete="new-password" minlength="6" required /></label>
+            <label>Confirmer<input name="confirm" type="password" autocomplete="new-password" minlength="6" required /></label>
+            <p class="form-error" id="password-error" role="alert"></p>
+            <button class="primary" type="submit">Changer</button>
+          </form>
+          <p class="hint">Mot de passe oublié : supprimez le fichier <code>auth.json</code> du dossier <code>/data</code> et
+            redémarrez le conteneur, le compte redevient <code>admin</code> / <code>way</code>.</p>
+        </section>
+      </div>
     </main>
     <script type="module" src="/src/admin.ts"></script>
   </body>

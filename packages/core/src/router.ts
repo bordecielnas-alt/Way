@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HttpError, llm, search, type SearchHit } from '@way/providers';
+import type { SettingsData } from './settings.ts';
 
 // Provider router (brief §8.4): one entry point per layer, quota counters,
 // circuit breaker, routing by task, degraded mode when everything is spent.
@@ -32,7 +33,15 @@ export interface ProviderStatus {
   id: string;
   type: 'search' | 'llm';
   model: string | null;
+  /** Model from the providers file, before any override. */
+  defaultModel: string | null;
+  /** Variables this provider reads (API key, URL, model override). */
+  keyEnv: string | null;
+  urlEnv: string | null;
+  modelEnv: string | null;
   configured: boolean;
+  /** Turned off from the settings page. */
+  disabled: boolean;
   available: boolean;
   minute: { used: number; limit: number };
   day: { used: number; limit: number };
@@ -69,9 +78,13 @@ export class ProviderRouter {
 
   constructor(
     private cfg: RouterConfig,
-    private env: NodeJS.ProcessEnv = process.env,
+    private baseEnv: NodeJS.ProcessEnv = process.env,
     /** Daily counters survive restarts here (free quotas are daily). */
     private usageFile: string | null = null,
+    /** Values saved from the settings page, read on every use. */
+    private settings: (() => SettingsData) | null = null,
+    /** Level-2 switch when the settings page left it alone (LEVEL2). */
+    private level2Default = true,
   ) {
     for (const id of Object.keys(cfg.providers)) this.state.set(id, blank());
     if (usageFile && existsSync(usageFile)) {
@@ -84,14 +97,73 @@ export class ProviderRouter {
     }
   }
 
+  /** Level 2 (and AI translation) switched on. */
+  get enabled(): boolean {
+    return this.settings?.().level2 ?? this.level2Default;
+  }
+
   /** Is at least one LLM usable for `task` right now? */
   canRun(task: Task): boolean {
-    return this.cfg.routes[task].some((id) => this.available(id));
+    return this.enabled && this.cfg.routes[task].some((id) => this.available(id));
   }
 
   /** Configured at all (keys present), regardless of quotas. */
   hasProvider(task: Task): boolean {
-    return this.cfg.routes[task].some((id) => this.configured(id));
+    return this.enabled && this.cfg.routes[task].some((id) => this.usable(id));
+  }
+
+  /** Variables the settings page may set: keys, URLs and model overrides. */
+  variables(): string[] {
+    const out = new Set<string>();
+    for (const [id, def] of Object.entries(this.cfg.providers)) {
+      if (def.keyEnv) out.add(def.keyEnv);
+      if (def.urlEnv) out.add(def.urlEnv);
+      if (def.type === 'llm') out.add(modelEnv(id));
+    }
+    return [...out];
+  }
+
+  /** Where a variable's value comes from, for the settings page. */
+  source(name: string): 'settings' | 'env' | null {
+    if (this.settings?.().env[name]) return 'settings';
+    return this.baseEnv[name] ? 'env' : null;
+  }
+
+  /**
+   * One real call to check a key from the settings page. Counts against the
+   * quotas like any call, ignores the breaker (the key may just have changed).
+   */
+  async test(id: string): Promise<{ ok: boolean; ms: number; detail: string }> {
+    const def = this.cfg.providers[id];
+    if (!def) return { ok: false, ms: 0, detail: 'fournisseur inconnu' };
+    if (!this.configured(id)) return { ok: false, ms: 0, detail: 'clé ou adresse manquante' };
+    const started = Date.now();
+    const s = this.state.get(id)!;
+    s.openUntil = 0;
+    s.failuresInRow = 0;
+    const value = await this.call(id, 'test', async () => {
+      if (def.type === 'search') {
+        const hits = await this.searchWith(id, 'bataille des Thermopyles');
+        if (!hits.length) throw new Error('aucun résultat');
+        return `${hits.length} résultat(s), dont « ${hits[0]!.title} »`;
+      }
+      const text = await llm.chat({
+        baseUrl: this.url(id)!,
+        apiKey: this.key(id) ?? undefined,
+        model: this.model(id)!,
+        system: 'Réponds uniquement par un objet JSON.',
+        user: 'En quelle année a eu lieu la bataille de Marignan ? Réponds {"annee": nombre}.',
+        json: true,
+        timeoutMs: Math.min(def.timeoutMs ?? 60_000, 60_000),
+      });
+      const v = llm.parseJsonObject(text) as { annee?: unknown };
+      return `le modèle répond ${JSON.stringify(v).slice(0, 80)}`;
+    });
+    // A failed test must not pause the provider: the user is fixing it.
+    if (value === undefined) s.openUntil = 0;
+    const error = s.lastError ?? 'échec';
+    const detail = value ?? (/fetch failed|ECONNREFUSED|ENOTFOUND/.test(error) ? 'serveur injoignable à cette adresse' : error);
+    return { ok: value !== undefined, ms: Date.now() - started, detail };
   }
 
   /**
@@ -103,19 +175,21 @@ export class ProviderRouter {
     for (const id of this.cfg.routes.search) {
       if (out.size >= want) break;
       if (!this.available(id)) continue;
-      const def = this.cfg.providers[id]!;
-      const hits = await this.call(id, 'search', () => {
-        switch (def.adapter) {
-          case 'wikipedia': return search.wikipediaSearch('fr', query, 4);
-          case 'tavily': return search.tavilySearch(this.key(id)!, query);
-          case 'brave': return search.braveSearch(this.key(id)!, query);
-          case 'searxng': return search.searxngSearch(this.url(id)!, query);
-          default: throw new Error(`unknown search adapter ${def.adapter}`);
-        }
-      });
+      const hits = await this.call(id, 'search', () => this.searchWith(id, query));
       for (const h of hits ?? []) if (!out.has(h.url)) out.set(h.url, h);
     }
     return [...out.values()].slice(0, want);
+  }
+
+  private searchWith(id: string, query: string): Promise<SearchHit[]> {
+    const def = this.cfg.providers[id]!;
+    switch (def.adapter) {
+      case 'wikipedia': return search.wikipediaSearch('fr', query, 4);
+      case 'tavily': return search.tavilySearch(this.key(id)!, query);
+      case 'brave': return search.braveSearch(this.key(id)!, query);
+      case 'searxng': return search.searxngSearch(this.url(id)!, query);
+      default: throw new Error(`unknown search adapter ${def.adapter}`);
+    }
   }
 
   /**
@@ -154,7 +228,12 @@ export class ProviderRouter {
         id,
         type: def.type,
         model: def.type === 'llm' ? this.model(id) : null,
+        defaultModel: def.model ?? null,
+        keyEnv: def.keyEnv ?? null,
+        urlEnv: def.urlEnv ?? null,
+        modelEnv: def.type === 'llm' ? modelEnv(id) : null,
         configured: this.configured(id),
+        disabled: this.disabled(id),
         available: this.available(id),
         minute: { used: s.minute.filter((t) => now - t < 60_000).length, limit: def.perMinute },
         day: { used: s.day, limit: def.perDay },
@@ -200,13 +279,26 @@ export class ProviderRouter {
   private configured(id: string): boolean {
     const def = this.cfg.providers[id];
     if (!def) return false;
-    if (def.keyEnv && !this.env[def.keyEnv]) return false;
-    if (def.urlEnv && !this.env[def.urlEnv]) return false;
+    if (def.keyEnv && !this.env(def.keyEnv)) return false;
+    if (def.urlEnv && !this.env(def.urlEnv)) return false;
     return true;
   }
 
+  private disabled(id: string): boolean {
+    return this.settings?.().disabled.includes(id) ?? false;
+  }
+
+  private usable(id: string): boolean {
+    return this.configured(id) && !this.disabled(id);
+  }
+
+  /** A variable saved from the settings page wins over the environment. */
+  private env(name: string): string | undefined {
+    return this.settings?.().env[name] || this.baseEnv[name] || undefined;
+  }
+
   private available(id: string): boolean {
-    if (!this.configured(id)) return false;
+    if (!this.usable(id)) return false;
     this.rollDay();
     const def = this.cfg.providers[id]!;
     const s = this.state.get(id)!;
@@ -220,21 +312,20 @@ export class ProviderRouter {
 
   private key(id: string): string | null {
     const env = this.cfg.providers[id]?.keyEnv;
-    return env ? (this.env[env] ?? null) : null;
+    return env ? (this.env(env) ?? null) : null;
   }
 
   private url(id: string): string | null {
     const def = this.cfg.providers[id]!;
     if (def.urlEnv) {
-      const base = this.env[def.urlEnv];
+      const base = this.env(def.urlEnv);
       return base ? base.replace(/\/$/, '') + (def.urlSuffix ?? '') : null;
     }
     return def.baseUrl ?? null;
   }
 
   private model(id: string): string | null {
-    const envName = `${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_MODEL`;
-    return this.env[envName] || this.cfg.providers[id]?.model || null;
+    return this.env(modelEnv(id)) || this.cfg.providers[id]?.model || null;
   }
 
   private rollDay(): void {
@@ -259,6 +350,9 @@ export class ProviderRouter {
     this.saveTimer.unref();
   }
 }
+
+/** GROQ_MODEL, GEMINI_FLASH_LITE_MODEL… */
+const modelEnv = (id: string) => `${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_MODEL`;
 
 function blank(): State {
   return { minute: [], day: 0, failuresInRow: 0, openUntil: 0, calls: 0, failures: 0, latencyTotal: 0, lastError: null };

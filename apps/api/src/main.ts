@@ -1,17 +1,21 @@
 import { createReadStream } from 'node:fs';
+import { join } from 'node:path';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { ClientMessage, type ServerMessage } from '@way/shared';
 import {
-  createRouter, createStore, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
+  createRouter, createSettings, createStore, devDir, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
 } from '@way/core';
+import { Auth, COOKIE, readCookie } from './auth.ts';
 import { ViewService, type View } from './views.ts';
 
 const cfg = loadConfig();
 const store = await createStore(cfg);
-const router = createRouter(cfg);
+const settings = createSettings(cfg);
+const router = createRouter(cfg, settings);
+const auth = new Auth(join(cfg.dataDir ?? devDir, 'auth.json'));
 const bus: JobBus = cfg.redisUrl ? new RedisBus(cfg.redisUrl) : new InlineBus(store, cfg, router);
 const views = new ViewService(store, bus, cfg);
 const doors = new DoorService(store);
@@ -35,6 +39,111 @@ if (cfg.staticDir) {
 }
 
 app.get('/api/health', async () => ({ ok: true, ...mode }));
+
+// ---------- account and settings (Réglages page) ----------
+
+const PROTECTED = ['/api/admin', '/api/settings', '/api/auth/password'];
+app.addHook('onRequest', async (req, reply) => {
+  const path = req.url.split('?')[0]!;
+  if (!path.startsWith('/api/')) return;
+  // Writes must come from this site (the cookie is SameSite=Strict too).
+  const origin = req.headers.origin;
+  if (req.method !== 'GET' && origin && URL.parse(origin)?.host !== req.headers.host) {
+    return reply.code(403).send({ error: 'origine refusée' });
+  }
+  if (PROTECTED.some((p) => path.startsWith(p)) && !auth.verify(readCookie(req, COOKIE))) {
+    return reply.code(401).send({ error: 'connexion requise' });
+  }
+});
+
+app.get('/api/auth/me', async (req, reply) => {
+  const user = auth.verify(readCookie(req, COOKIE));
+  if (!user) return reply.code(401).send({ error: 'connexion requise' });
+  return { user, defaultPassword: auth.usesDefaultPassword };
+});
+
+const Login = z.object({ username: z.string().max(100), password: z.string().max(200) });
+app.post('/api/auth/login', async (req, reply) => {
+  const body = Login.safeParse(req.body);
+  if (!body.success) return reply.code(400).send({ error: 'requête invalide' });
+  const wait = auth.locked(req.ip);
+  if (wait) return reply.code(429).send({ error: `Trop d'essais : réessayez dans ${Math.ceil(wait / 60000)} min.` });
+  const token = auth.login(req.ip, body.data.username, body.data.password);
+  if (!token) {
+    await new Promise((r) => setTimeout(r, 800)); // slows down guessing
+    return reply.code(401).send({ error: 'Identifiant ou mot de passe incorrect.' });
+  }
+  auth.setCookie(reply, req, token);
+  return { user: body.data.username.trim().toLowerCase(), defaultPassword: auth.usesDefaultPassword };
+});
+
+app.post('/api/auth/logout', async (req, reply) => {
+  auth.setCookie(reply, req, null);
+  return { ok: true };
+});
+
+const Password = z.object({ current: z.string().max(200), next: z.string().min(6).max(200) });
+app.post('/api/auth/password', async (req, reply) => {
+  const body = Password.safeParse(req.body);
+  if (!body.success) return reply.code(400).send({ error: 'Le nouveau mot de passe doit faire au moins 6 caractères.' });
+  const token = auth.changePassword(body.data.current, body.data.next);
+  if (!token) return reply.code(403).send({ error: 'Mot de passe actuel incorrect.' });
+  auth.setCookie(reply, req, token);
+  return { ok: true };
+});
+
+/** Keys are never sent back whole: only their last characters. */
+const isSecret = (name: string) => /(_KEY|_TOKEN)$/.test(name);
+const mask = (v: string) => (v.length > 8 ? `…${v.slice(-4)}` : '…');
+
+function settingsView() {
+  const saved = settings.get();
+  const variables = Object.fromEntries(
+    router.variables().map((name) => {
+      const source = router.source(name);
+      const value = source === 'settings' ? saved.env[name]! : source === 'env' ? process.env[name]! : null;
+      return [name, { source, value: value === null ? null : isSecret(name) ? mask(value) : value, secret: isSecret(name) }];
+    }),
+  );
+  return {
+    level2: { enabled: router.enabled, source: saved.level2 === undefined ? 'env' : 'settings' },
+    variables,
+    providers: router.status(),
+  };
+}
+
+app.get('/api/settings', async () => settingsView());
+
+const SettingsBody = z.object({
+  level2: z.boolean().nullable().optional(),
+  env: z.record(z.string(), z.string().max(500).nullable()).optional(),
+  disabled: z.array(z.string()).optional(),
+});
+app.put('/api/settings', async (req, reply) => {
+  const body = SettingsBody.safeParse(req.body);
+  if (!body.success) return reply.code(400).send({ error: 'requête invalide' });
+  const allowed = new Set(router.variables());
+  const ids = new Set(router.status().map((p) => p.id));
+  const cur = settings.get();
+  const next = { level2: cur.level2, env: { ...cur.env }, disabled: [...cur.disabled] };
+  if (body.data.level2 !== undefined) next.level2 = body.data.level2 ?? undefined;
+  for (const [name, value] of Object.entries(body.data.env ?? {})) {
+    if (!allowed.has(name)) return reply.code(400).send({ error: `variable inconnue : ${name}` });
+    const v = value?.trim();
+    if (v) next.env[name] = v;
+    else delete next.env[name];
+  }
+  if (body.data.disabled) next.disabled = body.data.disabled.filter((id) => ids.has(id));
+  settings.save(next);
+  req.log.info({ level2: next.level2, vars: Object.keys(next.env), disabled: next.disabled }, 'settings saved');
+  return settingsView();
+});
+
+app.post('/api/settings/test', async (req, reply) => {
+  const body = z.object({ id: z.string() }).safeParse(req.body);
+  if (!body.success) return reply.code(400).send({ error: 'requête invalide' });
+  return router.test(body.data.id);
+});
 
 const PoisQuery = z.object({
   res: z.coerce.number().int().min(0).max(8),
@@ -91,9 +200,9 @@ app.get('/api/admin/providers', async () => ({
     { name: 'wikipedia', status: 'active' },
   ],
   level2: {
-    enabled: cfg.level2.enabled,
+    enabled: router.enabled,
     // Degraded mode (§8.4): no LLM configured or every quota spent.
-    mode: !cfg.level2.enabled ? 'off' : router.canRun('extract') ? 'active' : router.hasProvider('extract') ? 'degraded' : 'no-llm',
+    mode: !router.enabled ? 'off' : router.canRun('extract') ? 'active' : router.hasProvider('extract') ? 'degraded' : 'no-llm',
     providers: router.status(),
   },
 }));

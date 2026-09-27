@@ -18,10 +18,12 @@ Puis ouvrir http://localhost:8080. Tout est dans l'image (site, API, recherche, 
 tout ce qui persiste est dans `/data`. Au premier démarrage, les frontières historiques (~66 Mo) se
 téléchargent en arrière-plan. Variable optionnelle : `WAY_CONTACT` (ton email, demandé par Wikimedia).
 
-Recherche approfondie par IA (facultatif) : ajouter au moins une clé gratuite, par exemple
-`-e GEMINI_API_KEY=… -e GROQ_API_KEY=…` (liste complète dans
-[packages/core/providers.default.json](packages/core/providers.default.json)). État des quotas :
-http://localhost:8080/admin.html.
+Recherche approfondie par IA (facultatif) : dans l'application, roue dentée ⚙ en haut à gauche →
+**Réglages** (compte `admin`, mot de passe `way` à changer dans l'onglet Compte). Coller au moins une
+clé gratuite (Gemini ou Groq), **Tester**, c'est actif tout de suite. Les variables d'environnement
+(`GEMINI_API_KEY`, `GROQ_API_KEY`…, liste dans
+[packages/core/providers.default.json](packages/core/providers.default.json)) marchent aussi ; une valeur
+saisie dans les réglages les remplace.
 
 Unraid : voir [infra/unraid/README.md](infra/unraid/README.md). Avec Compose : `docker compose up -d`.
 

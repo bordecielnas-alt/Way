@@ -49,6 +49,8 @@ button { font: inherit; color: inherit; }
 .brand { top: 16px; left: 16px; padding: 10px 16px 11px; display: flex; align-items: baseline; gap: 12px; }
 .brand-mark { font-family: var(--serif); font-size: 26px; font-weight: 600; letter-spacing: 0.02em; color: var(--gold); line-height: 1; }
 .brand-sub { font-family: var(--serif); font-style: italic; font-size: 15px; color: var(--ink-soft); }
+.brand-settings { align-self: center; display: flex; margin-left: 2px; padding: 3px; border-radius: 6px; color: var(--muted); transition: color 0.15s; }
+.brand-settings:hover, .brand-settings:focus-visible { color: var(--gold); }
 
 /* ---------- filters ---------- */
 .filters { top: 76px; left: 16px; width: 232px; padding: 10px; max-height: calc(100vh - 76px - 170px); overflow: auto; }

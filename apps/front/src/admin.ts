@@ -2,13 +2,19 @@ import '@fontsource/eb-garamond/500.css';
 import '@fontsource-variable/inter';
 import './admin.css';
 
-// Admin page (brief §8.4, observability): quotas, breakers, queue and cache.
+// Settings page: login, level-2 providers (keys, models, on/off, test),
+// live status (brief §8.4) and the account password.
 
 interface ProviderStatus {
   id: string;
   type: 'search' | 'llm';
   model: string | null;
+  defaultModel: string | null;
+  keyEnv: string | null;
+  urlEnv: string | null;
+  modelEnv: string | null;
   configured: boolean;
+  disabled: boolean;
   available: boolean;
   minute: { used: number; limit: number };
   day: { used: number; limit: number };
@@ -17,6 +23,14 @@ interface ProviderStatus {
   failures: number;
   avgLatencyMs: number | null;
   lastError: string | null;
+}
+
+interface Variable { source: 'settings' | 'env' | null; value: string | null; secret: boolean }
+
+interface SettingsResponse {
+  level2: { enabled: boolean; source: 'settings' | 'env' };
+  variables: Record<string, Variable>;
+  providers: ProviderStatus[];
 }
 
 interface AdminResponse {
@@ -28,16 +42,353 @@ interface AdminResponse {
   level2: { enabled: boolean; mode: 'active' | 'degraded' | 'no-llm' | 'off'; providers: ProviderStatus[] };
 }
 
+/** How each service is presented; grouped by the variable that configures it. */
+interface Service { name: string; note: string; link?: string; field: string; placeholder?: string }
+const SERVICES: Record<string, Service> = {
+  GEMINI_API_KEY: {
+    name: 'Google Gemini', note: 'Gratuit, sans carte : jusqu’à 1 000 requêtes par jour.',
+    link: 'https://aistudio.google.com/apikey', field: 'Clé API',
+  },
+  GROQ_API_KEY: {
+    name: 'Groq', note: 'Gratuit, sans carte : environ 1 000 requêtes par jour.',
+    link: 'https://console.groq.com/keys', field: 'Clé API',
+  },
+  MISTRAL_API_KEY: {
+    name: 'Mistral', note: 'Offre gratuite « Experiment ».', link: 'https://console.mistral.ai/api-keys', field: 'Clé API',
+  },
+  GITHUB_MODELS_TOKEN: {
+    name: 'GitHub Models', note: 'Jeton GitHub avec la permission « Models ».',
+    link: 'https://github.com/settings/personal-access-tokens', field: 'Jeton',
+  },
+  OPENROUTER_API_KEY: {
+    name: 'OpenRouter', note: 'Modèles gratuits (suffixe « :free »), quotas bas.',
+    link: 'https://openrouter.ai/settings/keys', field: 'Clé API',
+  },
+  OLLAMA_URL: {
+    name: 'Ollama (local)', note: 'Un modèle sur votre propre machine : lent sans carte graphique, mais illimité.',
+    field: 'Adresse', placeholder: 'http://192.168.1.10:11434',
+  },
+  TAVILY_API_KEY: {
+    name: 'Tavily', note: 'Gratuit : 1 000 recherches par mois.', link: 'https://app.tavily.com', field: 'Clé API',
+  },
+  BRAVE_API_KEY: {
+    name: 'Brave Search', note: 'Payant : carte bancaire requise, le dépassement est facturé.',
+    link: 'https://api-dashboard.search.brave.com', field: 'Clé API',
+  },
+  SEARXNG_URL: {
+    name: 'SearXNG', note: 'Votre instance, avec le format JSON activé.', field: 'Adresse', placeholder: 'http://192.168.1.10:8888',
+  },
+  '': { name: 'Wikipédia', note: 'Toujours disponible, sans clé.', field: '' },
+};
+
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const nf = new Intl.NumberFormat('fr-FR');
 const mb = (b: number) => `${nf.format(Math.round(b / 1048576))} Mo`;
 
+class Unauthorized extends Error {}
+
+async function api<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
+  const r = await fetch(path, {
+    method: init?.method ?? 'GET',
+    headers: init?.body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+  });
+  if (r.status === 401 && !path.startsWith('/api/auth/login')) {
+    showLogin();
+    throw new Unauthorized();
+  }
+  const data = (await r.json().catch(() => ({}))) as T & { error?: string };
+  if (!r.ok) throw new Error(data.error ?? `erreur ${r.status}`);
+  return data;
+}
+
+// ---------- login ----------
+
+function showLogin(): void {
+  $('app').hidden = true;
+  $('logout').hidden = true;
+  $('who').textContent = '';
+  $('login').hidden = false;
+  stopStatus();
+  $<HTMLInputElement>('login').querySelector<HTMLInputElement>('[name=password]')!.focus();
+}
+
+function showApp(me: { user: string; defaultPassword: boolean }): void {
+  $('login').hidden = true;
+  $('app').hidden = false;
+  $('logout').hidden = false;
+  $('who').textContent = `connecté : ${me.user}`;
+  $('default-password').hidden = !me.defaultPassword;
+  void loadSettings();
+  selectTab((location.hash.slice(1) as Tab) || 'ai');
+}
+
+$('login').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target as HTMLFormElement;
+  const data = Object.fromEntries(new FormData(form)) as Record<string, string>;
+  const btn = form.querySelector('button')!;
+  btn.disabled = true;
+  $('login-error').textContent = '';
+  try {
+    const me = await api<{ user: string; defaultPassword: boolean }>('/api/auth/login', { method: 'POST', body: data });
+    form.reset();
+    showApp(me);
+  } catch (err) {
+    $('login-error').textContent = (err as Error).message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('logout').addEventListener('click', async () => {
+  await api('/api/auth/logout', { method: 'POST', body: {} }).catch(() => {});
+  showLogin();
+});
+
+// ---------- tabs ----------
+
+type Tab = 'ai' | 'status' | 'account';
+
+function selectTab(tab: Tab): void {
+  if (!['ai', 'status', 'account'].includes(tab)) tab = 'ai';
+  document.querySelectorAll<HTMLElement>('[role=tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+  document.querySelectorAll<HTMLElement>('[data-panel]').forEach((p) => (p.hidden = p.dataset.panel !== tab));
+  history.replaceState(null, '', `#${tab}`);
+  if (tab === 'status') startStatus();
+  else stopStatus();
+}
+
+document.querySelectorAll<HTMLElement>('[role=tab]').forEach((b) =>
+  b.addEventListener('click', () => selectTab(b.dataset.tab as Tab)),
+);
+
+// ---------- AI settings ----------
+
+let current: SettingsResponse | null = null;
+/** Unsaved edits: variables (null = remove the saved value), switches. */
+const draft: { env: Record<string, string | null>; disabled: Set<string> | null; level2: boolean | null } = {
+  env: {}, disabled: null, level2: null,
+};
+
+const dirty = () => Object.keys(draft.env).length > 0 || draft.disabled !== null || draft.level2 !== null;
+
+function resetDraft(): void {
+  draft.env = {};
+  draft.disabled = null;
+  draft.level2 = null;
+}
+
+async function loadSettings(): Promise<void> {
+  try {
+    current = await api<SettingsResponse>('/api/settings');
+    resetDraft();
+    renderSettings();
+  } catch (e) {
+    if (!(e instanceof Unauthorized)) $('llm').innerHTML = `<p class="form-error">${esc((e as Error).message)}</p>`;
+  }
+}
+
+function disabledSet(): Set<string> {
+  return draft.disabled ?? new Set(current!.providers.filter((p) => p.disabled).map((p) => p.id));
+}
+
+function stateOf(p: ProviderStatus): [string, string] {
+  if (!p.configured) return ['off', 'Non configuré'];
+  if (disabledSet().has(p.id)) return ['off', 'Désactivé'];
+  if (p.breakerOpenUntil) return ['warn', `En pause ${Math.ceil((p.breakerOpenUntil - Date.now()) / 60000)} min`];
+  return p.available ? ['ok', 'Prêt'] : ['warn', 'Quota du jour atteint'];
+}
+
+function renderSettings(): void {
+  const s = current!;
+  $<HTMLInputElement>('level2').checked = draft.level2 ?? s.level2.enabled;
+  const groups = new Map<string, ProviderStatus[]>();
+  for (const p of s.providers) {
+    const key = p.keyEnv ?? p.urlEnv ?? '';
+    groups.set(key, [...(groups.get(key) ?? []), p]);
+  }
+  const html = { llm: [] as string[], search: [] as string[] };
+  for (const [envName, providers] of groups) html[providers[0]!.type].push(serviceHtml(envName, providers));
+  $('llm').innerHTML = html.llm.join('');
+  $('search').innerHTML = html.search.join('');
+  $('savebar').hidden = !dirty();
+}
+
+function serviceHtml(envName: string, providers: ProviderStatus[]): string {
+  const svc = SERVICES[envName] ?? { name: providers[0]!.id, note: '', field: envName.endsWith('_URL') ? 'Adresse' : 'Clé API' };
+  const v = envName ? current!.variables[envName] : undefined;
+  let field = '';
+  if (envName && v) {
+    const edited = envName in draft.env;
+    const cleared = edited && draft.env[envName] === null;
+    const status = cleared
+      ? 'sera effacée à l’enregistrement'
+      : v.source === 'settings' ? 'enregistrée ici'
+        : v.source === 'env' ? 'définie par la variable du conteneur ; une valeur saisie ici la remplace' : '';
+    const value = v.secret ? (edited && !cleared ? draft.env[envName]! : '') : edited ? (draft.env[envName] ?? '') : (v.value ?? '');
+    const placeholder = v.secret
+      ? cleared || !v.value ? 'Collez la clé ici' : `${v.value} · saisissez une nouvelle clé pour la remplacer`
+      : (svc.placeholder ?? '');
+    field = `
+      <label class="field"><span>${esc(svc.field)}</span>
+        <span class="field-row">
+          <input data-var="${envName}" type="${v.secret ? 'password' : 'url'}" value="${esc(value)}"
+            placeholder="${esc(placeholder)}" autocomplete="off" spellcheck="false" />
+          ${v.source === 'settings' && !cleared ? `<button type="button" class="link" data-clear="${envName}">Effacer</button>` : ''}
+        </span>
+        ${status ? `<span class="sub">${esc(status)}</span>` : ''}
+      </label>`;
+  }
+  const rows = providers.map((p) => {
+    const [cls, label] = stateOf(p);
+    const on = !disabledSet().has(p.id);
+    const mv = p.modelEnv ? current!.variables[p.modelEnv] : undefined;
+    const model = p.modelEnv
+      ? `<input class="model" data-var="${p.modelEnv}" value="${esc(p.modelEnv in draft.env ? (draft.env[p.modelEnv] ?? '') : mv?.value ?? '')}"
+           placeholder="${esc(p.defaultModel ?? 'modèle')}" title="Modèle (laisser vide pour ${esc(p.defaultModel ?? 'le défaut')})" spellcheck="false" />`
+      : '';
+    return `
+      <div class="provider-row">
+        <label class="check" title="Utiliser ce fournisseur"><input type="checkbox" data-provider="${p.id}" ${on ? 'checked' : ''} />
+          <span>${esc(p.type === 'llm' ? (p.defaultModel ?? p.id) : p.id)}</span></label>
+        ${model}
+        <span class="quota">${nf.format(p.minute.limit)}/min · ${nf.format(p.day.limit)}/jour</span>
+        <span class="state"><span class="dot ${cls}"></span>${esc(label)}</span>
+        <button type="button" class="ghost" data-test="${p.id}">Tester</button>
+        <span class="test-result" data-result="${p.id}"></span>
+      </div>`;
+  });
+  return `
+    <div class="service card">
+      <div class="service-head">
+        <strong>${esc(svc.name)}</strong>
+        <span class="sub">${esc(svc.note)}${svc.link ? ` <a href="${svc.link}" target="_blank" rel="noopener">Obtenir une clé ↗</a>` : ''}</span>
+      </div>
+      ${field}
+      <div class="provider-list">${rows.join('')}</div>
+    </div>`;
+}
+
+const aiPanel = document.querySelector<HTMLElement>('[data-panel=ai]')!;
+
+aiPanel.addEventListener('input', (e) => {
+  const input = e.target as HTMLInputElement;
+  const name = input.dataset.var;
+  if (!name || !current) return;
+  const v = current.variables[name]!;
+  const val = input.value.trim();
+  // Secrets: an empty box means "keep". Plain values: empty means "back to default".
+  if (v.secret && !val) delete draft.env[name];
+  else if (!v.secret && val === (v.value ?? '')) delete draft.env[name];
+  else draft.env[name] = val || null;
+  $('savebar').hidden = !dirty();
+});
+
+aiPanel.addEventListener('change', (e) => {
+  const input = e.target as HTMLInputElement;
+  if (!current) return;
+  if (input.id === 'level2') {
+    draft.level2 = input.checked === current.level2.enabled ? null : input.checked;
+  } else if (input.dataset.provider) {
+    const set = new Set(disabledSet());
+    if (input.checked) set.delete(input.dataset.provider);
+    else set.add(input.dataset.provider);
+    const saved = new Set(current.providers.filter((p) => p.disabled).map((p) => p.id));
+    draft.disabled = set.size === saved.size && [...set].every((id) => saved.has(id)) ? null : set;
+    renderKeepingFocus();
+    return;
+  }
+  $('savebar').hidden = !dirty();
+});
+
+aiPanel.addEventListener('click', async (e) => {
+  const btn = (e.target as HTMLElement).closest('button');
+  if (!btn) return;
+  if (btn.dataset.clear) {
+    draft.env[btn.dataset.clear] = null;
+    renderKeepingFocus();
+  } else if (btn.dataset.test) {
+    const id = btn.dataset.test;
+    if (dirty() && !(await save())) return;
+    const out = aiPanel.querySelector<HTMLElement>(`[data-result="${id}"]`)!;
+    const button = aiPanel.querySelector<HTMLButtonElement>(`[data-test="${id}"]`)!;
+    button.disabled = true;
+    out.className = 'test-result';
+    out.textContent = 'Test en cours…';
+    try {
+      const r = await api<{ ok: boolean; ms: number; detail: string }>('/api/settings/test', { method: 'POST', body: { id } });
+      out.className = `test-result ${r.ok ? 'ok' : 'bad'}`;
+      out.textContent = `${r.ok ? '✓' : '✗'} ${r.detail} (${nf.format(r.ms)} ms)`;
+    } catch (err) {
+      out.className = 'test-result bad';
+      out.textContent = `✗ ${(err as Error).message}`;
+    } finally {
+      button.disabled = false;
+    }
+  }
+});
+
+/** Re-render without losing what is being typed elsewhere. */
+function renderKeepingFocus(): void {
+  const active = document.activeElement as HTMLInputElement | null;
+  const name = active?.dataset.var;
+  renderSettings();
+  if (name) aiPanel.querySelector<HTMLInputElement>(`[data-var="${name}"]`)?.focus();
+}
+
+async function save(): Promise<boolean> {
+  const btn = $<HTMLButtonElement>('save');
+  btn.disabled = true;
+  $('save-msg').textContent = 'Enregistrement…';
+  try {
+    current = await api<SettingsResponse>('/api/settings', {
+      method: 'PUT',
+      body: {
+        env: draft.env,
+        ...(draft.disabled ? { disabled: [...draft.disabled] } : {}),
+        ...(draft.level2 !== null ? { level2: draft.level2 } : {}),
+      },
+    });
+    resetDraft();
+    renderSettings();
+    flash('Enregistré. Les nouveaux réglages s’appliquent tout de suite.');
+    return true;
+  } catch (err) {
+    $('save-msg').textContent = `Échec : ${(err as Error).message}`;
+    return false;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function flash(text: string): void {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = text;
+  document.body.append(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+$('save').addEventListener('click', () => void save());
+$('cancel').addEventListener('click', () => {
+  resetDraft();
+  renderSettings();
+  $('save-msg').textContent = 'Modifications non enregistrées';
+});
+addEventListener('beforeunload', (e) => {
+  if (dirty()) e.preventDefault();
+});
+
+// ---------- status ----------
+
 const MODE: Record<AdminResponse['level2']['mode'], [string, string]> = {
   active: ['ok', 'Actif'],
   degraded: ['warn', 'Dégradé : quotas épuisés ou fournisseurs en pause, seuls Wikipédia, Wikidata et le cache servent'],
-  'no-llm': ['off', 'Aucune IA configurée : ajoutez une clé (GEMINI_API_KEY, GROQ_API_KEY…)'],
-  off: ['off', 'Désactivé (LEVEL2=off)'],
+  'no-llm': ['off', 'Aucune IA configurée : ajoutez une clé dans l’onglet Recherche IA'],
+  off: ['off', 'Désactivé dans l’onglet Recherche IA'],
 };
 
 function card(label: string, value: string, sub = ''): string {
@@ -51,6 +402,7 @@ function meter(used: number, limit: number): string {
 
 function state(p: ProviderStatus): string {
   if (!p.configured) return '<span class="dot off"></span>Non configuré';
+  if (p.disabled) return '<span class="dot off"></span>Désactivé';
   if (p.breakerOpenUntil) {
     const min = Math.ceil((p.breakerOpenUntil - Date.now()) / 60000);
     return `<span class="dot warn"></span>En pause (${min} min)`;
@@ -58,9 +410,9 @@ function state(p: ProviderStatus): string {
   return p.available ? '<span class="dot ok"></span>Disponible' : '<span class="dot warn"></span>Quota atteint';
 }
 
-function render(d: AdminResponse): void {
+function renderStatus(d: AdminResponse): void {
   const q2 = d.queue.level2;
-  document.getElementById('summary')!.innerHTML = [
+  $('summary').innerHTML = [
     card('Points en cache', nf.format(d.pois), `${mb(d.cache.bytes)} sur ${mb(d.cache.maxBytes)}`),
     card('Zones explorées', nf.format(d.keys.done), `${d.keys.pending + d.keys.partial} en cours · ${d.keys.failed} en échec`),
     card('File de recherche', nf.format(d.queue.waiting), `${d.queue.active} en cours${q2 ? ` · niveau 2 : ${q2.waiting + q2.active}` : ''}`),
@@ -68,10 +420,10 @@ function render(d: AdminResponse): void {
   ].join('');
 
   const [cls, text] = MODE[d.level2.mode];
-  document.getElementById('level2-hint')!.innerHTML = `<span class="dot ${cls}"></span>${esc(text)}`;
+  $('level2-hint').innerHTML = `<span class="dot ${cls}"></span>${esc(text)}`;
 
   const rows = d.level2.providers.map(
-    (p) => `<tr class="${p.configured ? '' : 'muted'}">
+    (p) => `<tr class="${p.configured && !p.disabled ? '' : 'muted'}">
       <td><strong>${esc(p.id)}</strong><div class="sub">${p.type === 'llm' ? `IA · ${esc(p.model ?? '')}` : 'Recherche'}</div></td>
       <td>${state(p)}</td>
       <td>${meter(p.minute.used, p.minute.limit)}</td>
@@ -81,20 +433,54 @@ function render(d: AdminResponse): void {
       <td class="err">${p.lastError ? esc(p.lastError) : ''}</td>
     </tr>`,
   );
-  document.getElementById('providers')!.innerHTML = `
+  $('providers').innerHTML = `
     <thead><tr><th>Fournisseur</th><th>État</th><th>Minute</th><th>Jour</th><th>Appels</th><th>Latence</th><th>Dernière erreur</th></tr></thead>
     <tbody>${rows.join('')}</tbody>`;
-  document.getElementById('updated')!.textContent = `mis à jour à ${new Date().toLocaleTimeString('fr-FR')}`;
 }
 
-async function refresh(): Promise<void> {
+let statusTimer: ReturnType<typeof setInterval> | null = null;
+
+async function refreshStatus(): Promise<void> {
   try {
-    const r = await fetch('/api/admin/providers');
-    render((await r.json()) as AdminResponse);
-  } catch {
-    document.getElementById('updated')!.textContent = 'serveur injoignable';
+    renderStatus(await api<AdminResponse>('/api/admin/providers'));
+  } catch (e) {
+    if (!(e instanceof Unauthorized)) $('level2-hint').textContent = 'Serveur injoignable.';
   }
 }
 
-void refresh();
-setInterval(refresh, 5000);
+function startStatus(): void {
+  if (statusTimer) return;
+  void refreshStatus();
+  statusTimer = setInterval(refreshStatus, 5000);
+}
+
+function stopStatus(): void {
+  if (statusTimer) clearInterval(statusTimer);
+  statusTimer = null;
+}
+
+// ---------- account ----------
+
+$('password').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target as HTMLFormElement;
+  const data = Object.fromEntries(new FormData(form)) as Record<string, string>;
+  const error = $('password-error');
+  error.textContent = '';
+  if (data.next !== data.confirm) {
+    error.textContent = 'Les deux mots de passe ne correspondent pas.';
+    return;
+  }
+  try {
+    await api('/api/auth/password', { method: 'POST', body: { current: data.current, next: data.next } });
+    form.reset();
+    $('default-password').hidden = true;
+    flash('Mot de passe changé.');
+  } catch (err) {
+    if (!(err instanceof Unauthorized)) error.textContent = (err as Error).message;
+  }
+});
+
+// ---------- start ----------
+
+api<{ user: string; defaultPassword: boolean }>('/api/auth/me').then(showApp, () => {});
