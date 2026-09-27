@@ -4,7 +4,8 @@ import {
   background, coolingUntil, interactive, polity, wikipedia, type PolityCandidate, type PolityDetails, type SubdivisionRow,
 } from '@way/providers';
 import type { PolityInfo, PolityLabels, PolityRulerInfo, SubdivisionItem, SubdivisionsResponse } from '@way/shared';
-import { listSnapshots, snapshotFor } from './borders.ts';
+import { listSnapshots, snapshotFor, SNAPSHOTS_BEFORE } from './borders.ts';
+import type { Cliopatria } from './cliopatria.ts';
 
 // Kingdoms and empires clicked on the map (and their names on it). The
 // border snapshots only give an English name: it is matched to a Wikidata
@@ -28,9 +29,11 @@ const FAILED_RETRY_MS = 3_600_000;
  * Cached cards and region lists are served at once; past this age they are
  * fetched again in the background, and replaced if Wikidata changed.
  */
-const REFRESH_MS = 14 * 86_400_000;
+const REFRESH_MS = 90 * 86_400_000;
 /** Names that matched nothing are tried again after this (Wikidata grows). */
-const MISS_RETRY_MS = 7 * 86_400_000;
+const MISS_RETRY_MS = 30 * 86_400_000;
+/** Realms whose card is prepared in the background when a period is shown (the largest ones). */
+const WARM_CARDS = 10;
 /** Pause between background lookups: map names are a nicety, Wikimedia's patience is not. */
 const BACKGROUND_GAP_MS = 1500;
 const HOSTS = ['www.wikidata.org', 'query.wikidata.org', 'en.wikipedia.org', 'fr.wikipedia.org'];
@@ -44,10 +47,19 @@ interface CachedDetails extends PolityDetails {
   at?: number;
 }
 interface CachedSubdivisions { at: number; rows: SubdivisionRow[] }
+interface CachedLabel { fr: string | null; en: string | null; start?: number | null; end?: number | null; at: number }
+/** Slack on an item's dates: borders and Wikidata rarely agree to the year. */
+const ERA_SLACK = 50;
+/** Whether an item's lifetime covers a year (undated items are trusted). */
+export function fitsEra(start: number | null | undefined, end: number | null | undefined, year: number): boolean {
+  return (start == null || start <= year + ERA_SLACK) && (end == null || end >= year - ERA_SLACK);
+}
 interface CacheFile {
   resolutions: Record<string, Resolution>;
   details: Record<string, CachedDetails>;
   subdivisions: Record<string, CachedSubdivisions>;
+  /** Labels of the yearly borders' items (their Wikidata ids are known). */
+  labels: Record<string, CachedLabel>;
 }
 
 const range = (xs: number[], pick: (...v: number[]) => number) => (xs.length ? pick(...xs) : null);
@@ -168,7 +180,8 @@ export function rulersAt(rulers: PolityDetails['rulers'], year: number): PolityR
 const KIND_WORD = /empire|royaume|république|sultanat|califat|khanat|émirat|cité|principauté|duché|confédération|dynastie|état/i;
 
 export class PolityService {
-  private cache: CacheFile = { resolutions: {}, details: {}, subdivisions: {} };
+  private cache: CacheFile = { resolutions: {}, details: {}, subdivisions: {}, labels: {} };
+  private labelQueue = new Set<string>();
   /** Background refreshes of stale entries, run after the map names. */
   private chores = new Map<string, () => Promise<unknown>>();
   private inflight = new Map<string, Promise<Resolution | null>>();
@@ -181,11 +194,13 @@ export class PolityService {
   /** Territory cards being prepared: background lookups wait for them. */
   private interactive = 0;
 
-  constructor(private file: string | null, private bordersDir: string) {
+  constructor(private file: string | null, private bordersDir: string, private clio: Cliopatria | null = null) {
     if (file && existsSync(file)) {
       try {
         const raw = JSON.parse(readFileSync(file, 'utf8')) as Partial<CacheFile>;
-        this.cache = { resolutions: raw.resolutions ?? {}, details: raw.details ?? {}, subdivisions: raw.subdivisions ?? {} };
+        this.cache = {
+          resolutions: raw.resolutions ?? {}, details: raw.details ?? {}, subdivisions: raw.subdivisions ?? {}, labels: raw.labels ?? {},
+        };
       } catch {
         /* corrupt cache: rebuilt on demand */
       }
@@ -202,12 +217,18 @@ export class PolityService {
     }
   }
 
-  /** Card for a region picked from a territory's subdivisions (its item is known). */
-  async infoById(qid: string, year: number): Promise<PolityInfo> {
+  /**
+   * Card for a realm or region whose item is known. With its name, an item
+   * of another era (a dataset slip) gives way to a lookup by name.
+   */
+  async infoById(qid: string, year: number, name?: string): Promise<PolityInfo> {
     this.interactive++;
     try {
       const d = await interactive(() => this.details(qid));
-      return this.card(d?.labelFr ?? d?.labelEn ?? qid, d, year);
+      const ends = d?.ends.length ? Math.max(...d.ends) : null;
+      const starts = d?.starts.length ? Math.min(...d.starts) : null;
+      if (name && (!d || !fitsEra(starts, ends, year))) return await interactive(() => this.build(name, year));
+      return this.card(name ?? d?.labelFr ?? d?.labelEn ?? qid, d, year);
     } finally {
       this.interactive--;
     }
@@ -274,8 +295,10 @@ export class PolityService {
     };
   }
 
-  /** French names for a snapshot's territories; unknown ones are looked up in the background. */
+  /** French names for the territories shown at a year; unknown ones are looked up in the background. */
   labels(year: number): PolityLabels {
+    const period = year >= SNAPSHOTS_BEFORE ? this.clio?.period(year) : null;
+    if (period) return this.periodLabels(period.features, period.from);
     const snap = snapshotFor(listSnapshots(this.bordersDir), year);
     if (!snap) return { labels: {}, pending: 0 };
     const labels: Record<string, string> = {};
@@ -291,6 +314,44 @@ export class PolityService {
       } else this.enqueue(name, snap.year);
     }
     return { labels, pending: this.queue.length + (this.working ? 1 : 0) };
+  }
+
+  /**
+   * Yearly borders carry their Wikidata item: labels come in batches of 50
+   * (no guessing). The era's own name wins when the item's label is another
+   * era's (Northern Song under "Song"); it is then put in French by pattern.
+   */
+  private periodLabels(features: { name: string; qid: string | null; area: number }[], year: number): PolityLabels {
+    const labels: Record<string, string> = {};
+    for (const f of features) {
+      const hit = f.qid ? this.cache.labels[f.qid] : undefined;
+      // Labels cached before dates were kept are fetched again.
+      if (f.qid && (!hit || hit.start === undefined || Date.now() - hit.at > REFRESH_MS)) this.labelQueue.add(f.qid);
+      // The dataset sometimes links another era's item (the Restoration for the medieval kingdom).
+      const fr = hit && fitsEra(hit.start, hit.end, year) ? hit.fr : null;
+      const fits = fr && (!this.clio?.ambiguous(f.qid!) || nameSimilarity(f.name, hit?.en ?? '') >= 0.75);
+      const name = fits ? fr : frenchTitle(f.name);
+      if (name && name !== f.name) labels[f.name] = name;
+    }
+    // The biggest realms get their card ready: the first click on them is instant.
+    for (const f of [...features].sort((a, b) => b.area - a.area).slice(0, WARM_CARDS)) {
+      const l = f.qid ? this.cache.labels[f.qid] : undefined;
+      if (f.qid && l && fitsEra(l.start, l.end, year) && !this.cache.details[f.qid]) this.chore(`d:${f.qid}`, () => this.fetchDetails(f.qid!));
+    }
+    if (this.labelQueue.size) this.chore('labels', () => this.fetchLabels());
+    return { labels, pending: this.labelQueue.size };
+  }
+
+  private async fetchLabels(): Promise<void> {
+    const ids = [...this.labelQueue].slice(0, 200);
+    const got = await polity.itemLabels(ids);
+    const at = Date.now();
+    for (const id of ids) {
+      this.cache.labels[id] = { ...(got.get(id) ?? { fr: null, en: null }), at };
+      this.labelQueue.delete(id);
+    }
+    this.scheduleSave();
+    if (this.labelQueue.size) this.chore('labels', () => this.fetchLabels());
   }
 
   private snapshotNames(file: string): string[] {
@@ -450,3 +511,28 @@ export class PolityService {
 
 /** Matches depend on the era: "Egypt" is not the same state in −1000 and 1500. */
 const key = (name: string, year: number) => `${name}|${Math.floor(year / 100)}`;
+
+/** Titles put in French, the place name kept ("Duchy of Athens" → "duché d'Athens"): exported for tests. */
+export function frenchTitle(name: string): string {
+  const of: [RegExp, string][] = [
+    [/^Grand Duchy of /i, 'grand-duché'], [/^Grand Principality of /i, 'grande-principauté'], [/^Kingdom of /i, 'royaume'],
+    [/^Duchy of /i, 'duché'], [/^County of /i, 'comté'], [/^Principality of /i, 'principauté'], [/^Margraviate of /i, 'margraviat'],
+    [/^Landgraviate of /i, 'landgraviat'], [/^Republic of /i, 'république'], [/^Empire of /i, 'empire'], [/^Sultanate of /i, 'sultanat'],
+    [/^Emirate of /i, 'émirat'], [/^Khanate of /i, 'khanat'], [/^Caliphate of /i, 'califat'], [/^Lordship of /i, 'seigneurie'],
+    [/^Archbishopric of /i, 'archevêché'], [/^Prince-Bishopric of /i, 'principauté épiscopale'], [/^Bishopric of /i, 'évêché'],
+    [/^Despotate of /i, 'despotat'], [/^Electorate of /i, 'électorat'], [/^Viceroyalty of /i, 'vice-royauté'], [/^House of /i, 'maison'],
+    [/^Banate of /i, 'banat'], [/^Tsardom of /i, 'tsarat'], [/^Duchies of /i, 'duchés'], [/^Principalities of /i, 'principautés'],
+  ];
+  for (const [re, fr] of of) {
+    if (!re.test(name)) continue;
+    const rest = name.replace(re, '').replace(/^the /i, '');
+    return `${fr} ${/^[aeiouyàâéèêîïôûh]/i.test(rest) ? `d'${rest}` : `de ${rest}`}`;
+  }
+  const suffix: [RegExp, string][] = [
+    [/ Dynasty$/i, 'dynastie'], [/ Kingdom$/i, 'royaume'], [/ Sultanate$/i, 'sultanat'], [/ Caliphate$/i, 'califat'],
+    [/ Khanate$/i, 'khanat'], [/ Emirate$/i, 'émirat'], [/ City-States$/i, 'cités-États'], [/ Empire$/i, 'empire'],
+    [/ Shogunate$/i, 'shogunat'], [/ Republic$/i, 'république'], [/ Confederation$/i, 'confédération'],
+  ];
+  for (const [re, fr] of suffix) if (re.test(name)) return `${fr} ${name.replace(re, '')}`;
+  return name;
+}

@@ -1,76 +1,52 @@
 import {
-  Cartesian3, Color, DistanceDisplayCondition, Event as CesiumEvent, GeographicTilingScheme, HorizontalOrigin,
-  ImageryLayer, LabelCollection, LabelStyle, Math as CesiumMath, NearFarScalar, Rectangle, VerticalOrigin,
+  Event as CesiumEvent, GeographicTilingScheme, ImageryLayer, Math as CesiumMath, Rectangle,
   type ImageryProvider, type Viewer,
 } from 'cesium';
-import { formatYear, type PolityLabels } from '@way/shared';
-import type { Area, Region } from './divisions.ts';
+import { formatYear, type BordersIndex, type BordersPeriod, type PolityLabels } from '@way/shared';
+import { bounds, type Area, type Region, type Ring } from './divisions.ts';
+import { letter, shortName, type Lettering } from './lettering.ts';
 
-type Ring = [number, number][];
-interface Feature {
-  properties: { NAME?: string | null; SUBJECTO?: string | null; PARTOF?: string | null };
-  geometry: { type: 'Polygon'; coordinates: Ring[] } | { type: 'MultiPolygon'; coordinates: Ring[][] } | null;
+/** A realm, or a member drawn inside a composite realm, for the period shown. */
+export interface BorderShape extends Area {
+  id: number;
+  /** English name for that era. */
+  name: string;
+  qid: string | null;
+  parent: number | null;
+  /** Topmost realm it belongs to (itself for a realm). */
+  root: number;
+  km2: number;
+  /** Largest outer ring: where the name is written. */
+  main: Ring | null;
 }
 
-/** One territory, ready to draw: its rings, bounding box (degrees) and colors. */
-interface Shape {
-  name: string | null;
-  /** Overlord (SUBJECTO / PARTOF): an empire is outlined with its vassals. */
-  owner: string | null;
-  rings: Ring[];
-  west: number; south: number; east: number; north: number;
+interface Drawn extends Area {
   fill: string;
   stroke: string;
+  /** Members: inner lines only, no fill. */
+  inner?: boolean;
+  dashed?: boolean;
 }
 
+interface Named { text: Lettering; style: 'realm' | 'region' }
+
 const TILE = 256;
-const HAIR_SPACE = String.fromCharCode(0x200a);
 type Style = 'normal' | 'highlight' | 'regions';
 const FADE_MS = 700;
 /** Main-thread time spent drawing border tiles per frame, so panning stays smooth. */
 const FRAME_BUDGET_MS = 6;
+const PERIOD_CACHE = 24;
+const REALM_FONT = '600 100px "EB Garamond", Georgia, serif';
+const REGION_FONT = 'italic 500 100px "EB Garamond", Georgia, serif';
 
-function hue(name: string): number {
+function hue(key: string): number {
   let h = 2166136261;
-  for (let i = 0; i < name.length; i++) h = Math.imul(h ^ name.charCodeAt(i), 16777619);
+  for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619);
   return (h >>> 0) % 360;
 }
 
-function polygons(f: Feature): Ring[][] {
-  if (!f.geometry) return [];
-  return f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
-}
-
-function ringBoxArea(ring: Ring): number {
-  let w = Infinity, e = -Infinity, s = Infinity, n = -Infinity;
-  for (const [x, y] of ring) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
-  return (e - w) * (n - s);
-}
-
-function toShape(f: Feature): Shape | null {
-  const rings = polygons(f).flat();
-  if (rings.length === 0) return null;
-  let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
-  for (const ring of rings) {
-    for (const [x, y] of ring) {
-      if (x < west) west = x;
-      if (x > east) east = x;
-      if (y < south) south = y;
-      if (y > north) north = y;
-    }
-  }
-  const owner = (f.properties.SUBJECTO || f.properties.PARTOF)?.trim() || null;
-  const name = f.properties.NAME?.trim() || null;
-  const h = hue(owner || name || '?');
-  // The dataset leaves some land unnamed: neutral, so it is not mistaken for a realm.
-  const named = !!(name || owner);
-  return {
-    name, owner,
-    rings, west, south, east, north,
-    fill: named ? `hsla(${h}, 48%, 58%, 0.30)` : 'rgba(150, 150, 150, 0.08)',
-    stroke: named ? `hsla(${h}, 55%, 78%, 0.8)` : 'rgba(200, 200, 200, 0.25)',
-  };
-}
+/** Realms are recognized across periods by their Wikidata item, else by name. */
+export const realmKey = (s: { qid: string | null; name: string }) => s.qid ?? `n:${s.name}`;
 
 // ---------- frame-budgeted drawing queue shared by all border layers ----------
 const queue: (() => void)[] = [];
@@ -89,9 +65,34 @@ function enqueue(task: () => void): void {
   });
 }
 
+// ---------- letter widths, measured once per font ----------
+const measurer = document.createElement('canvas').getContext('2d')!;
+const widthCache = new Map<string, number>();
+function measure(font: string, tracking: number) {
+  return (ch: string) => {
+    const k = `${font}|${ch}`;
+    let w = widthCache.get(k);
+    if (w === undefined) {
+      measurer.font = font;
+      w = measurer.measureText(ch).width / 100;
+      widthCache.set(k, w);
+    }
+    return w + tracking;
+  };
+}
+
+/** Name fades in once its letters are readable, and out when they grow bigger than the screen needs. */
+function nameAlpha(px: number, style: Named['style']): number {
+  const lo = style === 'realm' ? 6 : 7;
+  const hi = style === 'realm' ? 90 : 60;
+  if (px < lo || px > hi * 1.8) return 0;
+  return Math.min(1, (px - lo) / 5) * Math.min(1, (hi * 1.8 - px) / (hi * 0.8));
+}
+
 /**
- * Imagery provider that rasterizes the border polygons tile by tile, at the
- * tile's own resolution: lines stay one pixel wide and sharp at every zoom.
+ * Imagery provider that rasterizes borders tile by tile, at the tile's own
+ * resolution: lines stay sharp at every zoom, and names are painted on the
+ * map itself, bending with the realm and growing as the camera comes closer.
  */
 class BordersTiles {
   readonly tilingScheme = new GeographicTilingScheme();
@@ -106,7 +107,7 @@ class BordersTiles {
   readonly proxy = undefined;
   readonly hasAlphaChannel = true;
 
-  constructor(private shapes: Shape[], private style: Style = 'normal') {
+  constructor(private shapes: Drawn[], private style: Style = 'normal', private names: Named[] = []) {
     // A highlight or a territory's regions only cover that territory: Cesium then requests no other tile.
     if (style !== 'normal' && shapes.length) {
       const w = Math.min(...shapes.map((s) => s.west));
@@ -145,7 +146,6 @@ class BordersTiles {
     canvas.height = TILE;
     const g = canvas.getContext('2d')!;
     g.lineJoin = 'round';
-    g.lineWidth = 1.2;
     for (const s of this.shapes) {
       if (s.east < west - pad || s.west > east + pad || s.north < south - pad || s.south > north + pad) continue;
       g.beginPath();
@@ -175,60 +175,136 @@ class BordersTiles {
         g.stroke();
         continue;
       }
-      g.fillStyle = s.fill;
-      g.fill('evenodd');
-      g.strokeStyle = s.stroke;
-      if (this.style === 'regions') {
-        // Dashed: these inner borders are an approximation.
-        g.setLineDash([5, 4]);
-        g.lineWidth = 1.4;
+      if (!s.inner) {
+        g.fillStyle = s.fill;
+        g.fill('evenodd');
       }
+      g.strokeStyle = s.stroke;
+      g.setLineDash(s.dashed ? [5, 4] : []);
+      g.lineWidth = s.inner ? 0.8 : s.dashed ? 1.4 : 1.2;
       g.stroke();
     }
+    g.setLineDash([]);
+    this.drawNames(g, west, south, east, north, sx, sy);
     return canvas;
+  }
+
+  private drawNames(g: CanvasRenderingContext2D, west: number, south: number, east: number, north: number, sx: number, sy: number): void {
+    for (const { text, style } of this.names) {
+      if (text.east < west || text.west > east || text.north < south || text.south > north) continue;
+      const px = text.size * sy;
+      const alpha = nameAlpha(px, style);
+      if (alpha <= 0.02) continue;
+      g.font = style === 'realm' ? REALM_FONT : REGION_FONT;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.lineJoin = 'round';
+      g.fillStyle = style === 'realm' ? `rgba(246, 236, 214, ${0.78 * alpha})` : `rgba(250, 242, 222, ${0.9 * alpha})`;
+      g.strokeStyle = `rgba(20, 16, 12, ${0.5 * alpha})`;
+      g.lineWidth = 9;
+      const k = text.size / 100;
+      for (const gl of text.glyphs) {
+        const cos = Math.max(0.2, Math.cos((gl.lat * Math.PI) / 180));
+        // Degrees of latitude as the unit both ways: a letter keeps its shape on the globe.
+        g.setTransform(sx / cos, 0, 0, -sy, (gl.lon - west) * sx, (north - gl.lat) * sy);
+        g.rotate(gl.angle);
+        g.scale(k, -k);
+        g.strokeText(gl.ch, 0, 0);
+        g.fillText(gl.ch, 0, 0);
+      }
+      g.setTransform(1, 0, 0, 1, 0, 0);
+    }
   }
 }
 
+interface Period extends BordersPeriod { shapes: BorderShape[] }
+
+function decode(p: BordersPeriod, quantum: number): Period {
+  const byId = new Map(p.features.map((f) => [f.id, f]));
+  const rootOf = (id: number) => {
+    let cur = byId.get(id)!;
+    for (let i = 0; i < 8 && cur.parent !== null && byId.has(cur.parent); i++) cur = byId.get(cur.parent)!;
+    return cur.id;
+  };
+  const shapes = p.features.map((f): BorderShape => {
+    let main: Ring | null = null;
+    let mainArea = 0;
+    const rings: Ring[] = [];
+    for (const poly of f.g) {
+      poly.forEach((enc, i) => {
+        const ring: Ring = [];
+        let x = 0, y = 0;
+        for (let j = 0; j + 1 < enc.length; j += 2) {
+          x += enc[j]!;
+          y += enc[j + 1]!;
+          ring.push([x * quantum, y * quantum]);
+        }
+        rings.push(ring);
+        if (i === 0) {
+          const b = bounds([ring]);
+          const a = (b.east - b.west) * (b.north - b.south);
+          if (a > mainArea) { mainArea = a; main = ring; }
+        }
+      });
+    }
+    return {
+      ...bounds(rings), id: f.id, name: f.name, qid: f.qid, parent: byId.has(f.parent ?? -1) ? f.parent : null,
+      root: rootOf(f.id), km2: f.area, main,
+    };
+  });
+  return { ...p, shapes };
+}
+
+function inside(s: Area, lon: number, lat: number): boolean {
+  if (lon < s.west || lon > s.east || lat < s.south || lat > s.north) return false;
+  let hit = false;
+  for (const ring of s.rings) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i]!;
+      const [xj, yj] = ring[j]!;
+      if (yi > lat !== yj > lat && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) hit = !hit;
+    }
+  }
+  return hit;
+}
+
 /**
- * Historical borders draped on the globe as an imagery layer: tiles are drawn
- * on demand, and snapshots cross-fade when the timeline moves.
+ * Historical borders draped on the globe as an imagery layer: yearly
+ * periods (Cliopatria), tiles drawn on demand, cross-fading when time moves.
  */
 export class BordersLayer {
-  private years: number[] = [];
-  private current: number | null = null;
+  private index: BordersIndex | null = null;
+  private current: Period | null = null;
   private layer: ImageryLayer | null = null;
-  private labels: LabelCollection;
-  private cache = new Map<number, Feature[]>();
-  private loading: number | null = null;
+  private cache = new Map<number, Promise<Period>>();
   private alpha = 0.85;
   private fading = false;
   private wanted: number | null = null;
   private visible = true;
-  private shapes: Shape[] = [];
-  private features: Feature[] = [];
   private highlightLayer: ImageryLayer | null = null;
   private highlighted: string | null = null;
   private frNames: Record<string, string> = {};
   private regionsLayer: ImageryLayer | null = null;
-  private regionLabels: LabelCollection;
+  /** Realm split into regions: its own name gives way to theirs. */
+  private quietRealm: string | null = null;
   private namesTimer: number | undefined;
+  private letterings = new Map<string, Lettering | null>();
 
   constructor(private viewer: Viewer, private onNote: (text: string) => void) {
-    this.labels = viewer.scene.primitives.add(new LabelCollection());
-    this.regionLabels = viewer.scene.primitives.add(new LabelCollection());
     onDrained = () => viewer.scene.requestRender();
   }
 
   async init(): Promise<void> {
     try {
-      const r = await fetch('/api/borders');
-      this.years = ((await r.json()) as { years: number[] }).years;
+      const r = await fetch('/api/borders/index');
+      this.index = r.ok ? ((await r.json()) as BordersIndex) : null;
     } catch {
-      this.years = [];
+      this.index = null;
     }
-    if (this.years.length === 0) {
-      // First start of the server: snapshots are still downloading. Retry.
-      this.onNote('Frontières historiques en cours de téléchargement…');
+    // Names are painted into tiles: the font must be there first.
+    await Promise.all([document.fonts.load(REALM_FONT), document.fonts.load(REGION_FONT)]).catch(() => undefined);
+    if (!this.index) {
+      this.onNote('Frontières historiques indisponibles pour le moment…');
       setTimeout(async () => {
         await this.init();
         if (this.wanted != null) await this.setYear(this.wanted);
@@ -236,88 +312,96 @@ export class BordersLayer {
     }
   }
 
-  snapshotFor(year: number): number | null {
-    let pick: number | null = this.years[0] ?? null;
-    for (const y of this.years) if (y <= year) pick = y;
+  /** First year of the period containing `year` (borders constant until the next one). */
+  private periodStart(year: number): number | null {
+    const ev = this.index?.events;
+    if (!ev?.length) return null;
+    let pick = ev[0]!;
+    for (const y of ev) {
+      if (y > year) break;
+      pick = y;
+    }
     return pick;
+  }
+
+  private load(from: number): Promise<Period> {
+    let p = this.cache.get(from);
+    if (!p) {
+      const { version, quantum } = this.index!;
+      p = fetch(`/api/borders?${new URLSearchParams({ year: String(from), v: version })}`)
+        .then((r) => {
+          if (!r.ok) throw new Error(String(r.status));
+          return r.json() as Promise<BordersPeriod>;
+        })
+        .then((raw) => decode(raw, quantum));
+      p.catch(() => this.cache.delete(from));
+      this.cache.set(from, p);
+      if (this.cache.size > PERIOD_CACHE) this.cache.delete(this.cache.keys().next().value!);
+    }
+    return p;
   }
 
   async setYear(year: number): Promise<void> {
     this.wanted = year;
-    const snap = this.snapshotFor(year);
-    if (snap === null || snap === this.current || snap === this.loading) return;
-    this.loading = snap;
+    const from = this.periodStart(year);
+    if (from === null || from === this.current?.from) return;
     try {
-      let features = this.cache.get(snap);
-      if (!features) {
-        const r = await fetch(`/api/borders?year=${snap}`);
-        features = ((await r.json()) as { features: Feature[] }).features;
-        this.cache.set(snap, features);
-      }
-      if (this.loading !== snap) return; // superseded
-      this.current = snap;
-      this.frNames = {};
-      this.show(features);
-      void this.loadNames(snap);
-      this.onNote(`Frontières approximatives · état de ${formatYear(snap)}`);
+      const period = await this.load(from);
+      if (this.periodStart(this.wanted) !== from) return; // superseded
+      this.current = period;
+      this.show();
+      void this.loadNames(from);
+      this.onNote(`Frontières de ${formatYear(period.from)}${period.to > period.from ? ` à ${formatYear(period.to)}` : ''}`);
+      // Playing forward: the next period is fetched ahead.
+      const next = this.index!.events.find((y) => y > period.to);
+      if (next !== undefined) void this.load(next).catch(() => undefined);
     } catch (e) {
       console.warn('borders failed', e);
-    } finally {
-      if (this.loading === snap) this.loading = null;
     }
   }
 
-  /**
-   * Territory under a point (the innermost one when territories nest),
-   * or null over the sea and unclaimed land.
-   */
-  territoryAt(lon: number, lat: number): string | null {
-    let best: Shape | null = null;
-    let bestArea = Infinity;
+  get shapes(): BorderShape[] {
+    return this.current?.shapes ?? [];
+  }
+
+  /** The realm (top level) under a point, the smallest when realms overlap. */
+  realmAt(lon: number, lat: number): BorderShape | null {
+    let best: BorderShape | null = null;
     for (const s of this.shapes) {
-      if (!(s.name ?? s.owner) || lon < s.west || lon > s.east || lat < s.south || lat > s.north) continue;
-      let inside = false;
-      for (const ring of s.rings) {
-        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-          const [xi, yi] = ring[i]!;
-          const [xj, yj] = ring[j]!;
-          if (yi > lat !== yj > lat && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
-        }
-      }
-      const area = (s.east - s.west) * (s.north - s.south);
-      if (inside && area < bestArea) {
-        best = s;
-        bestArea = area;
-      }
+      if (s.parent !== null || !s.name || (best && s.km2 >= best.km2)) continue;
+      if (inside(s, lon, lat)) best = s;
     }
-    return best ? (best.name ?? best.owner) : null;
+    return best;
   }
 
-  /** French name shown on the map for a snapshot name, when known. */
+  realmByKey(key: string): BorderShape | null {
+    return this.shapes.filter((s) => s.parent === null && realmKey(s) === key).sort((a, b) => b.km2 - a.km2)[0] ?? null;
+  }
+
+  /** Members drawn inside a composite realm (duchies, counties, the royal domain). */
+  members(id: number): BorderShape[] {
+    return this.shapes.filter((s) => s.parent === id);
+  }
+
+  /** French name for an era's name, when known. */
   displayName(name: string): string {
     return this.frNames[name] ?? name;
   }
 
-  /** A territory with its vassals, as one area (null if the snapshot has no such name). */
-  territoryArea(name: string): Area | null {
-    const parts = this.shapes.filter((s) => s.name === name || s.owner === name);
+  /** A realm as one area (all its pieces), by key, in the period shown. */
+  territoryArea(key: string): Area | null {
+    const parts = this.shapes.filter((s) => s.parent === null && realmKey(s) === key);
     if (!parts.length) return null;
-    return {
-      rings: parts.flatMap((p) => p.rings),
-      west: Math.min(...parts.map((p) => p.west)),
-      south: Math.min(...parts.map((p) => p.south)),
-      east: Math.max(...parts.map((p) => p.east)),
-      north: Math.max(...parts.map((p) => p.north)),
-    };
+    return bounds(parts.flatMap((p) => p.rings));
   }
 
-  /** Outlines a territory by name (null clears). Kept across snapshots while the name exists. */
-  highlight(name: string | null): void {
-    this.outline(name ? this.territoryArea(name) : null);
-    this.highlighted = name;
+  /** Outlines a realm by key (null clears). Kept across periods while the realm exists. */
+  highlight(key: string | null): void {
+    this.outline(key ? this.territoryArea(key) : null);
+    this.highlighted = key;
   }
 
-  /** Outlines any area (a region inside a territory); not kept across snapshots. */
+  /** Outlines any area (a region inside a territory); not kept across periods. */
   outline(area: Area | null): void {
     this.highlighted = null;
     if (this.highlightLayer) {
@@ -325,7 +409,7 @@ export class BordersLayer {
       this.highlightLayer = null;
     }
     if (area) {
-      const merged: Shape = { name: null, owner: null, fill: '', stroke: '', ...area };
+      const merged: Drawn = { fill: '', stroke: '', ...area };
       const layer = new ImageryLayer(new BordersTiles([merged], 'highlight') as unknown as ImageryProvider, { alpha: 0 });
       layer.show = this.visible;
       this.viewer.imageryLayers.add(layer);
@@ -342,114 +426,103 @@ export class BordersLayer {
     this.viewer.scene.requestRender();
   }
 
-  /** Draws a territory's regions with dashed borders and their names (null clears). */
-  showRegions(regions: Region[] | null): void {
+  /** Draws a territory's regions and their names (null clears); estimated limits are dashed. */
+  showRegions(regions: Region[] | null, realm: string | null = null): void {
     if (this.regionsLayer) {
       this.viewer.imageryLayers.remove(this.regionsLayer, true);
       this.regionsLayer = null;
     }
-    this.regionLabels.removeAll();
+    const was = this.quietRealm;
+    this.quietRealm = regions?.length ? realm : null;
     if (regions?.length) {
-      const shapes: Shape[] = regions.map((r) => ({
-        ...r, name: r.label, owner: null,
-        fill: `hsla(${hue(r.label)}, 45%, 60%, 0.22)`,
-        stroke: 'rgba(255, 240, 214, 0.8)',
+      const drawn: Drawn[] = regions.map((r) => ({
+        ...r,
+        fill: `hsla(${hue(r.qid)}, 45%, 60%, 0.24)`,
+        stroke: r.estimated ? 'rgba(255, 240, 214, 0.8)' : 'rgba(255, 240, 214, 0.95)',
+        dashed: r.estimated,
       }));
-      const layer = new ImageryLayer(new BordersTiles(shapes, 'regions') as unknown as ImageryProvider);
+      const names: Named[] = [];
+      for (const r of regions) {
+        const ring = r.rings.reduce<Ring | null>((best, ring) => (!best || ring.length > best.length ? ring : best), null);
+        const text = ring ? this.lettering(`r:${r.qid}:${r.label}`, ring, r.label, 'region') : null;
+        if (text) names.push({ text, style: 'region' });
+      }
+      const layer = new ImageryLayer(new BordersTiles(drawn, 'regions', names) as unknown as ImageryProvider);
       layer.show = this.visible;
       this.viewer.imageryLayers.add(layer);
       this.regionsLayer = layer;
       // The outline stays above the regions.
       if (this.highlightLayer) this.viewer.imageryLayers.raiseToTop(this.highlightLayer);
-      for (const r of regions) {
-        this.regionLabels.add({
-          position: Cartesian3.fromDegrees(r.lon, r.lat, 1500),
-          text: r.label,
-          font: 'italic 500 14px "EB Garamond", Georgia, serif',
-          fillColor: Color.fromCssColorString('#f4ead6'),
-          outlineColor: Color.fromCssColorString('#07090d').withAlpha(0.8),
-          outlineWidth: 3,
-          style: LabelStyle.FILL_AND_OUTLINE,
-          horizontalOrigin: HorizontalOrigin.CENTER,
-          verticalOrigin: VerticalOrigin.CENTER,
-          // Small regions are only named up close.
-          distanceDisplayCondition: new DistanceDisplayCondition(0, Math.max(8e5, Math.sqrt((r.east - r.west) * (r.north - r.south)) * 2.2e6)),
-        });
-      }
     }
-    this.cullLabels();
+    // The realm's name under its regions would only get in the way: redrawn without it.
+    if (was !== this.quietRealm) this.show();
     this.viewer.scene.requestRender();
   }
 
-  private show(features: Feature[]): void {
-    const shapes = features.map(toShape).filter((s): s is Shape => s !== null);
-    this.shapes = shapes;
-    const layer = new ImageryLayer(new BordersTiles(shapes) as unknown as ImageryProvider, { alpha: 0 });
+  private lettering(key: string, ring: Ring, text: string, style: Named['style']): Lettering | null {
+    if (!this.letterings.has(key)) {
+      const t = style === 'realm'
+        ? letter(ring, shortName(text).toUpperCase(), measure(REALM_FONT, 0.2), { fill: 0.85 })
+        : letter(ring, shortName(text), measure(REGION_FONT, 0.05), { fill: 0.8 });
+      this.letterings.set(key, t);
+      if (this.letterings.size > 4000) this.letterings.delete(this.letterings.keys().next().value!);
+    }
+    return this.letterings.get(key)!;
+  }
+
+  private show(): void {
+    const period = this.current;
+    if (!period) return;
+    const drawn: Drawn[] = [];
+    const names: Named[] = [];
+    // Big realms first: small ones inside or across them stay visible.
+    const byId = new Map(period.shapes.map((s) => [s.id, s]));
+    const ordered = [...period.shapes].sort((a, b) => (a.parent === null ? 0 : 1) - (b.parent === null ? 0 : 1) || b.km2 - a.km2);
+    for (const s of ordered) {
+      const root = byId.get(s.root) ?? s;
+      const h = hue(realmKey(root));
+      const named = !!s.name;
+      if (s.parent === null) {
+        drawn.push({
+          ...s,
+          fill: named ? `hsla(${h}, 48%, 58%, 0.30)` : 'rgba(150, 150, 150, 0.08)',
+          stroke: named ? `hsla(${h}, 55%, 80%, 0.85)` : 'rgba(200, 200, 200, 0.25)',
+        });
+        if (named && s.main && realmKey(s) !== this.quietRealm) {
+          const label = this.displayName(s.name);
+          const text = this.lettering(`${s.id}:${label}`, s.main, label, 'realm');
+          if (text) names.push({ text, style: 'realm' });
+        }
+      } else {
+        // A vassal inside its realm: a faint line, as on a strategy map.
+        drawn.push({ ...s, fill: '', stroke: `hsla(${h}, 40%, 88%, 0.35)`, inner: true });
+      }
+    }
+    const layer = new ImageryLayer(new BordersTiles(drawn, 'normal', names) as unknown as ImageryProvider, { alpha: 0 });
     layer.show = this.visible;
-    this.viewer.imageryLayers.add(layer); // above the basemap
+    // Just above the basemap: points, regions and outlines stay on top.
+    this.viewer.imageryLayers.add(layer, this.layer ? this.viewer.imageryLayers.indexOf(this.layer) + 1 : undefined);
     this.crossFade(this.layer, layer);
     this.layer = layer;
-    this.features = features;
-    this.setLabels();
     if (this.highlighted) this.highlight(this.highlighted);
   }
 
   /** French names come from the server progressively (looked up once, then cached). */
-  private async loadNames(snap: number, attempt = 0): Promise<void> {
+  private async loadNames(from: number, attempt = 0): Promise<void> {
     clearTimeout(this.namesTimer);
     try {
-      const r = await fetch(`/api/polity/labels?year=${snap}`);
+      const r = await fetch(`/api/polity/labels?year=${from}`);
       const res = (await r.json()) as PolityLabels;
-      if (this.current !== snap) return;
-      const changed = Object.keys(res.labels).length !== Object.keys(this.frNames).length;
+      if (this.current?.from !== from) return;
+      const changed = JSON.stringify(res.labels) !== JSON.stringify(this.frNames);
       this.frNames = res.labels;
-      if (changed) this.setLabels();
+      if (changed) this.show();
       if (res.pending > 0 && attempt < 12) {
-        this.namesTimer = window.setTimeout(() => void this.loadNames(snap, attempt + 1), 10_000);
+        this.namesTimer = window.setTimeout(() => void this.loadNames(from, attempt + 1), 5_000);
       }
     } catch {
       /* English names stay */
     }
-  }
-
-  private setLabels(): void {
-    const features = this.features;
-    this.labels.removeAll();
-    for (const f of features) {
-      const name = f.properties.NAME;
-      if (!name) continue;
-      // Label at the center of the largest outer ring's bounding box.
-      let best: Ring | null = null;
-      let bestArea = 0;
-      for (const poly of polygons(f)) {
-        const a = poly[0] ? ringBoxArea(poly[0]) : 0;
-        if (a > bestArea) { bestArea = a; best = poly[0]!; }
-      }
-      if (!best || bestArea < 0.5) continue;
-      let sx = 0, sy = 0;
-      for (const [x, y] of best) { sx += x; sy += y; }
-      const h = hue(f.properties.SUBJECTO || f.properties.PARTOF || name);
-      // Map lettering: size grows with the territory, big realms get spaced capitals.
-      const size = Math.round(Math.min(22, Math.max(11, 9 + Math.sqrt(bestArea) * 0.5)));
-      const text = this.displayName(name.trim()).toUpperCase();
-      this.labels.add({
-        position: Cartesian3.fromDegrees(sx / best.length, sy / best.length, 2000),
-        text: size >= 16 ? [...text].join(HAIR_SPACE) : text,
-        font: `600 ${size}px "EB Garamond", Georgia, serif`,
-        fillColor: Color.fromCssColorString(`hsl(${h}, 40%, 92%)`).withAlpha(0.6),
-        outlineColor: Color.fromCssColorString('#07090d').withAlpha(0.45),
-        outlineWidth: 3,
-        style: LabelStyle.FILL_AND_OUTLINE,
-        horizontalOrigin: HorizontalOrigin.CENTER,
-        verticalOrigin: VerticalOrigin.CENTER,
-        // A watermark: fainter up close, so it never hides the points.
-        translucencyByDistance: new NearFarScalar(5e5, 0.45, 4e6, 1),
-        // Large territories are labeled from far away, small ones only up close.
-        distanceDisplayCondition: new DistanceDisplayCondition(1.5e5, Math.min(2.5e7, Math.sqrt(bestArea) * 9e5)),
-      });
-    }
-    this.cullLabels();
-    this.viewer.scene.requestRender();
   }
 
   private crossFade(from: ImageryLayer | null, to: ImageryLayer): void {
@@ -467,26 +540,6 @@ export class BordersLayer {
   }
 
   /** Borders matter at empire scale; fade them out as the camera gets close to the ground. */
-  /**
-   * Labels are drawn a little above the ground, so near the horizon their text
-   * spills into space: hide those on the far side of the globe.
-   */
-  cullLabels(): void {
-    const cam = this.viewer.camera.positionWC;
-    const n = new Cartesian3();
-    const d = new Cartesian3();
-    for (const labels of [this.labels, this.regionLabels]) {
-      for (let i = 0; i < labels.length; i++) {
-        const l = labels.get(i);
-        Cartesian3.normalize(l.position, n);
-        Cartesian3.normalize(Cartesian3.subtract(cam, l.position, d), d);
-        l.show = Cartesian3.dot(n, d) > 0.2;
-      }
-    }
-    // While regions are shown, the realm names under them would only get in the way.
-    this.labels.show = this.visible && this.regionLabels.length === 0;
-  }
-
   setCameraHeight(h: number): void {
     const t = Math.min(1, Math.max(0, (Math.log10(h) - 4.7) / (6.5 - 4.7))); // 50 km .. 3000 km
     this.alpha = 0.12 + t * (0.85 - 0.12);
@@ -498,8 +551,6 @@ export class BordersLayer {
     if (this.layer) this.layer.show = v;
     if (this.highlightLayer) this.highlightLayer.show = v;
     if (this.regionsLayer) this.regionsLayer.show = v;
-    this.labels.show = v && this.regionLabels.length === 0;
-    this.regionLabels.show = v;
     this.viewer.scene.requestRender();
   }
 }

@@ -4,7 +4,7 @@
 
 const PREFIX = 'way:c:';
 const INDEX = 'way:c-index';
-const MAX_ENTRIES = 250;
+const MAX_ENTRIES = 600;
 
 function index(): string[] {
   try {

@@ -306,3 +306,36 @@ SELECT ?sub ?sl ?cl ?coord ?cap ?s ?e ?ls ?le ?up ?lf ?len WHERE {
     s.lat === null && capLat !== null ? { ...s, lat: capLat, lon: capLon } : s,
   );
 }
+
+export interface ItemLabel { fr: string | null; en: string | null; start: number | null; end: number | null }
+
+/**
+ * French and English labels of items, with their start and end years (to
+ * catch an item that belongs to another era), 50 per query.
+ */
+export async function itemLabels(qids: string[]): Promise<Map<string, ItemLabel>> {
+  const out = new Map<string, ItemLabel>();
+  for (let i = 0; i < qids.length; i += 50) {
+    const q = `
+SELECT ?item ?lf ?le ?s ?e WHERE {
+  VALUES ?item { ${qids.slice(i, i + 50).map((x) => `wd:${x}`).join(' ')} }
+  OPTIONAL { ?item rdfs:label ?lf . FILTER(LANG(?lf) = "fr") }
+  OPTIONAL { ?item rdfs:label ?le . FILTER(LANG(?le) = "en") }
+  OPTIONAL { ?item wdt:P571|wdt:P580 ?s }
+  OPTIONAL { ?item wdt:P576|wdt:P582 ?e }
+}`;
+    for (const b of await sparql(q, 30_000)) {
+      const id = qidOf(b.item!.value);
+      const cur = out.get(id) ?? { fr: null, en: null, start: null, end: null };
+      const st = b.s?.value ? parseYear(b.s.value) : null;
+      const en = b.e?.value ? parseYear(b.e.value) : null;
+      out.set(id, {
+        fr: b.lf?.value ?? cur.fr,
+        en: b.le?.value ?? cur.en,
+        start: st !== null && (cur.start === null || st < cur.start) ? st : cur.start,
+        end: en !== null && (cur.end === null || en > cur.end) ? en : cur.end,
+      });
+    }
+  }
+  return out;
+}

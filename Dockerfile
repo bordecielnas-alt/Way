@@ -16,6 +16,9 @@ COPY apps/front apps/front
 ARG VITE_SATELLITE_URL
 ARG VITE_SATELLITE_CREDIT
 RUN npm run build -w @way/front
+# Yearly borders (Cliopatria, CC BY 4.0), simplified into data/cliopatria/borders.json.
+COPY scripts/build-cliopatria.ts scripts/
+RUN node --import tsx scripts/build-cliopatria.ts
 
 FROM node:22-alpine
 WORKDIR /app
@@ -31,6 +34,7 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY packages packages
 COPY apps/api apps/api
 COPY --from=build /app/apps/front/dist public
+COPY --from=build /app/data/cliopatria data/cliopatria
 
 # Everything persistent (database, border snapshots) lives in /data.
 ENV DATA_DIR=/data \

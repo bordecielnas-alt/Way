@@ -1,4 +1,3 @@
-import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
@@ -6,7 +5,7 @@ import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { ClientMessage, type ServerMessage } from '@way/shared';
 import {
-  createPolities, createRouter, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
+  createBorders, createPolities, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, type JobBus,
 } from '@way/core';
 import { Auth, COOKIE, readCookie } from './auth.ts';
 import { ViewService, type View } from './views.ts';
@@ -19,7 +18,8 @@ const auth = new Auth(join(cfg.dataDir ?? devDir, 'auth.json'));
 const bus: JobBus = cfg.redisUrl ? new RedisBus(cfg.redisUrl) : new InlineBus(store, cfg, router);
 const views = new ViewService(store, bus, cfg);
 const doors = new DoorService(store, () => normalizeUi(settings.get().ui).meanwhileMaxSpan);
-const polities = createPolities(cfg);
+const { clio, borders } = createBorders(cfg);
+const polities = createPolities(cfg, clio);
 const mode = {
   store: cfg.databaseUrl ? 'postgres' : cfg.dataDir ? 'embedded-postgres' : 'memory',
   queue: cfg.redisUrl ? 'redis' : 'inline',
@@ -191,13 +191,13 @@ app.get<{ Params: { id: string } }>('/api/poi/:id/doors', async (req, reply) => 
 const Year = z.coerce.number().int().min(-10000).max(2100);
 const Qid = z.string().regex(/^Q\d{1,12}$/);
 const PolityQuery = z.union([
-  z.object({ qid: Qid, year: Year }),
+  z.object({ qid: Qid, year: Year, name: z.string().min(1).max(200).optional() }),
   z.object({ name: z.string().min(1).max(200), year: Year }),
 ]);
 app.get('/api/polity', async (req, reply) => {
   const q = PolityQuery.safeParse(req.query);
   if (!q.success) return reply.code(400).send({ error: 'requête invalide' });
-  return 'qid' in q.data ? polities.infoById(q.data.qid, q.data.year) : polities.info(q.data.name, q.data.year);
+  return 'qid' in q.data ? polities.infoById(q.data.qid, q.data.year, q.data.name) : polities.info(q.data.name!, q.data.year);
 });
 
 // Regions of a territory (duchies, provinces, counties) at a year, placed at their seats.
@@ -222,16 +222,22 @@ app.get<{ Querystring: { year?: string } }>('/api/polity/labels', async (req, re
 // Interface preferences shared by every viewer (set in the Réglages page).
 app.get('/api/ui', async () => normalizeUi(settings.get().ui));
 
-app.get<{ Querystring: { year?: string } }>('/api/borders', async (req, reply) => {
-  const snapshots = listSnapshots(cfg.bordersDir);
-  if (req.query.year === undefined) return { years: snapshots.map((s) => s.year) };
-  const snap = snapshotFor(snapshots, Number(req.query.year));
-  if (!snap) return reply.code(404).send({ error: 'no border snapshots installed (npm run borders:fetch)' });
-  return reply
-    .header('Content-Type', 'application/geo+json')
-    .header('Cache-Control', 'public, max-age=86400')
-    .header('X-Snapshot-Year', String(snap.year))
-    .send(createReadStream(snap.file));
+// Years where borders change; the front asks for a period by its first year.
+app.get('/api/borders/index', async (_req, reply) => {
+  const index = borders.index();
+  if (!index) return reply.code(404).send({ error: 'no borders installed (npm run borders:fetch)' });
+  return reply.header('Cache-Control', 'no-cache').send(index);
+});
+
+// Borders of the period containing `year`. With the dataset version in `v`,
+// the answer never changes: the browser keeps it.
+app.get<{ Querystring: { year?: string; v?: string } }>('/api/borders', async (req, reply) => {
+  const year = Number(req.query.year);
+  if (!Number.isFinite(year)) return reply.code(400).send({ error: 'année manquante' });
+  const period = borders.period(year);
+  if (!period) return reply.code(404).send({ error: 'no borders for that year' });
+  const pinned = req.query.v && req.query.v === borders.index()?.version;
+  return reply.header('Cache-Control', pinned ? 'public, max-age=31536000, immutable' : 'public, max-age=3600').send(period);
 });
 
 app.get('/api/admin/providers', async () => ({
@@ -285,8 +291,8 @@ process.on('SIGTERM', shutdown);
 
 await app.listen({ port: cfg.port, host: cfg.host });
 
-// Border snapshots are fetched once, in the background, on first start.
-if (cfg.dataDir && listSnapshots(cfg.bordersDir).length < 40) {
+// Border snapshots (before 3400 BCE only: Cliopatria covers the rest) are fetched once, in the background.
+if (cfg.dataDir && !listSnapshots(cfg.bordersDir).some((s) => s.year < SNAPSHOTS_BEFORE)) {
   ensureBorders(cfg.bordersDir, cfg.userAgent)
     .then((n) => app.log.info(`borders: ${n} snapshot(s) downloaded`))
     .catch((e) => app.log.warn(`borders download failed: ${(e as Error).message}`));
@@ -301,4 +307,5 @@ const checkCache = () =>
 setTimeout(checkCache, 60_000).unref();
 setInterval(checkCache, 3_600_000).unref();
 
+if (!clio.available) app.log.warn('yearly borders missing: run npm run borders:fetch');
 app.log.info(`Way API ready (store=${mode.store}, queue=${mode.queue})`);

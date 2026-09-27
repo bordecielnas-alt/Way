@@ -11,10 +11,10 @@ import {
   cellsForRect, formatPoiDate, rectAreaKm2, resolutionForArea, CATEGORY_LABELS,
   type Category, type Door, type SubdivisionsResponse, type ViewMessage,
 } from '@way/shared';
-import { BordersLayer } from './borders.ts';
+import { BordersLayer, realmKey, type BorderShape } from './borders.ts';
 import { Card } from './card.ts';
 import { Connection } from './connection.ts';
-import { contains, divide, type Area, type Region } from './divisions.ts';
+import { bounds, contains, divide, type Area, type Region } from './divisions.ts';
 import { Filters, importanceFloor, type Scale } from './filters.ts';
 import { cameraState, createGlobe, restoreCamera, setBasemap, viewRect, type Basemap, type CameraState } from './globe.ts';
 import { PoiLayer } from './markers.ts';
@@ -174,7 +174,6 @@ function sendView(): void {
 }
 viewer.camera.changed.addEventListener(() => {
   borders.setCameraHeight(viewer.camera.positionCartographic.height);
-  borders.cullLabels();
   applyZoom();
 });
 viewer.camera.percentageChanged = 0.05;
@@ -270,18 +269,30 @@ function flashHint(at: Cartesian2, text: string): void {
   window.setTimeout(() => (tooltip.hidden = true), 2000);
 }
 
-// ---------- territories: kingdom, then its regions, then theirs ----------
+// ---------- territories: realm, then its vassals and provinces, then theirs ----------
 
-interface Place { key: string; label: string; area: Area; qid: Promise<string | null> | string | null }
-/** Selected chain: a territory of the map, then regions picked inside it. */
+interface Place {
+  key: string;
+  label: string;
+  /** English name for the era (card lookup when there is no item). */
+  name: string;
+  area: Area;
+  qid: Promise<string | null> | string | null;
+  /** Border feature: its members are its regions, with their real borders. */
+  featureId: number | null;
+}
+/** Selected chain: a realm of the map, then regions picked inside it. */
 let path: Place[] = [];
 /** divisions[i]: the regions of path[i] (only the deepest level is drawn). */
 let divisions: Region[][] = [];
 let dividing = 0;
+/** Estimated regions already computed (a split is not redone at each click). */
+const divided = new Map<string, Region[]>();
 
 const HINT_TERRITORY = 'Cliquez à nouveau dans le territoire pour le découper en provinces.';
 const HINT_REGION = 'Cliquez à nouveau dans la région pour la découper à son tour.';
 const midYear = () => Math.round((timeline.window.tStart + timeline.window.tEnd) / 2);
+const isQid = (q: string | null | undefined): q is string => !!q && /^Q\d+$/.test(q);
 
 function clearTerritory(): void {
   dividing++;
@@ -302,8 +313,8 @@ function backToTerritory(): void {
 }
 
 /**
- * A click on land: a territory is outlined and its card opens; a second
- * click inside it splits it into regions, and so on one level down.
+ * A click on land: a realm is outlined and its card opens; a second click
+ * inside it splits it into its vassals and provinces, and so on one level down.
  */
 function clickTerritory(position: Cartesian2): void {
   // No terrain: the ellipsoid is the ground, and it needs no rendered tile.
@@ -319,34 +330,41 @@ function clickTerritory(position: Cartesian2): void {
     else selectRegion(i, region);
     return;
   }
-  const name = c ? borders.territoryAt(lon, lat) : null;
-  if (!name) {
+  const realm = c ? borders.realmAt(lon, lat) : null;
+  if (!realm) {
     // Sea or unclaimed land: a territory card closes, a point's card stays.
     if (card.currentPoi === null) card.close();
     if (hit) flashHint(position, 'Zone sans nom dans la carte historique');
     return;
   }
-  if (path[0]?.key === name) {
+  const key = realmKey(realm);
+  if (path[0]?.key === key) {
     if (divisions.length === 0 && path.length === 1) void splitPlace(0, position);
     else {
-      // In the territory but outside its regions (no seat known there): back to the whole.
+      // In the territory but outside its regions: back to the whole.
       backToTerritory();
-      void card.openPolity({ name }, path[0].label, midYear(), HINT_TERRITORY);
+      const p = path[0];
+      void card.openPolity(realm.qid ? { qid: realm.qid, name: realm.name } : { name: realm.name }, p.label, midYear(), HINT_TERRITORY, 'territory');
     }
     return;
   }
-  selectTerritory(name);
+  selectTerritory(realm);
 }
 
-function selectTerritory(name: string): void {
+function selectTerritory(realm: BorderShape): void {
   dividing++;
   playSound('territory');
   pois.select(null);
   borders.showRegions(null);
-  borders.highlight(name);
-  const label = borders.displayName(name);
-  const info = card.openPolity({ name }, label, midYear(), HINT_TERRITORY);
-  path = [{ key: name, label, area: borders.territoryArea(name)!, qid: info.then((i) => i?.qid ?? null) }];
+  const key = realmKey(realm);
+  borders.highlight(key);
+  const label = borders.displayName(realm.name);
+  const info = card.openPolity(realm.qid ? { qid: realm.qid, name: realm.name } : { name: realm.name }, label, midYear(), HINT_TERRITORY, 'territory');
+  path = [{
+    key, label, name: realm.name, area: borders.territoryArea(key)!, featureId: realm.id,
+    // The card checks the item against the era: its answer is the one to split.
+    qid: info.then((i) => i?.qid ?? realm.qid),
+  }];
   divisions = [];
 }
 
@@ -355,17 +373,61 @@ function selectRegion(level: number, region: Region): void {
   playSound('territory');
   pois.select(null);
   const deeper = divisions.length > level + 1;
-  path = [...path.slice(0, level + 1), { key: region.qid, label: region.label, area: region, qid: region.qid }];
+  path = [...path.slice(0, level + 1), {
+    key: region.qid, label: region.label, name: region.name ?? region.label, area: region,
+    qid: isQid(region.qid) ? region.qid : null, featureId: region.featureId ?? null,
+  }];
   divisions = divisions.slice(0, level + 1);
   if (deeper) borders.showRegions(divisions[level]!); // back up from a deeper level
   borders.outline(region);
-  void card.openPolity({ qid: region.qid }, region.label, midYear(), HINT_REGION);
+  const target = isQid(region.qid)
+    ? { qid: region.qid, ...(region.estimated ? {} : { name: region.name ?? region.label }) }
+    : { name: region.name ?? region.label };
+  void card.openPolity(target, region.label, midYear(), HINT_REGION, region.estimated ? 'estimated' : 'member');
 }
 
-/** Splits the selected place into its regions (Wikidata seats sharing its area). */
+/** Members of a composite realm, as regions with their real borders. */
+function memberRegions(featureId: number): Region[] {
+  const parent = borders.shapes.find((s) => s.id === featureId);
+  return borders.members(featureId)
+    .filter((m) => m.name && m.rings.length)
+    .map((m) => {
+      let label = borders.displayName(m.name);
+      // The realm's own lands, next to its vassals.
+      if (parent && ((m.qid && m.qid === parent.qid) || m.name === parent.name)) label = `${label} (domaine propre)`;
+      return {
+        ...bounds(m.rings), qid: m.qid ?? `f:${m.id}`, label, kind: null, name: m.name,
+        lat: (m.south + m.north) / 2, lon: (m.west + m.east) / 2, estimated: false, featureId: m.id,
+      };
+    });
+}
+
+function showDivision(level: number, regions: Region[], hint: string): void {
+  const fresh = divisions.length !== level + 1;
+  divisions = [...divisions.slice(0, level), regions];
+  path = path.slice(0, level + 1);
+  borders.showRegions(regions, path[0]?.key ?? null);
+  if (fresh) playSound('polity');
+  card.setHint(hint);
+}
+
+/**
+ * Splits the selected place: into its members when the borders dataset has
+ * them (real borders, already loaded), else between the seats of its
+ * Wikidata regions (estimated limits).
+ */
 async function splitPlace(level: number, at: Cartesian2): Promise<void> {
   const place = path[level]!;
   const token = ++dividing;
+  // The realm's feature follows the period shown.
+  const featureId = level === 0 ? (borders.realmByKey(place.key)?.id ?? null) : place.featureId;
+  if (featureId !== null) {
+    const members = memberRegions(featureId);
+    if (members.length >= 2) {
+      showDivision(level, members, `${members.length} vassaux et provinces, frontières historiques de l’époque. Cliquez sur l’un d’eux pour sa fiche.`);
+      return;
+    }
+  }
   card.setHint('Recherche des provinces dans Wikidata…');
   const qid = await place.qid;
   if (token !== dividing) return;
@@ -377,19 +439,19 @@ async function splitPlace(level: number, at: Cartesian2): Promise<void> {
   const year = midYear();
   const apply = (res: SubdivisionsResponse) => {
     if (token !== dividing) return;
-    // The territory's shape follows the border snapshot of the moment.
     const area = level === 0 ? (borders.territoryArea(place.key) ?? place.area) : place.area;
-    const regions = divide(area, res.items);
+    const memo = `${qid}|${year}|${res.items.map((i) => i.qid).join(',')}|${area.west},${area.south},${area.east},${area.north}`;
+    let regions = divided.get(memo);
+    if (!regions) {
+      regions = divide(area, res.items);
+      divided.set(memo, regions);
+      if (divided.size > 200) divided.delete(divided.keys().next().value!);
+    }
     if (regions.length < 2) {
       card.setHint('Aucune subdivision connue dans Wikidata à cette date.');
       return;
     }
-    const fresh = divisions.length !== level + 1;
-    divisions = [...divisions.slice(0, level), regions];
-    path = path.slice(0, level + 1);
-    borders.showRegions(regions);
-    if (fresh) playSound('polity');
-    card.setHint(`${regions.length} régions aux limites estimées d’après leurs chefs-lieux. Cliquez sur l’une d’elles pour sa fiche.`);
+    showDivision(level, regions, `${regions.length} régions aux limites estimées d’après leurs chefs-lieux. Cliquez sur l’une d’elles pour sa fiche.`);
   };
   try {
     await fetchCached<SubdivisionsResponse>(`/api/polity/subdivisions?${new URLSearchParams({ qid, year: String(year) })}`, apply);

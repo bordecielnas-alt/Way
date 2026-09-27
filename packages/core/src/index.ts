@@ -10,6 +10,8 @@ import { loadRouterConfig, ProviderRouter } from './router.ts';
 import { PostgresStore } from './store/postgres.ts';
 import { SettingsFile } from './settings.ts';
 import { PolityService } from './polity.ts';
+import { Cliopatria } from './cliopatria.ts';
+import { BordersService } from './borders.ts';
 import type { Store } from './store/types.ts';
 
 /** Local files in dev (no DATA_DIR): settings, account. */
@@ -26,6 +28,7 @@ export * from './doors.ts';
 export * from './settings.ts';
 export * from './polity.ts';
 export * from './borders.ts';
+export * from './cliopatria.ts';
 export * from './store/types.ts';
 export { MemoryStore } from './store/memory.ts';
 export { PostgresStore, type Queryable } from './store/postgres.ts';
@@ -58,6 +61,12 @@ export function createRouter(cfg: Config, settings = createSettings(cfg)): Provi
 }
 
 /** Kingdom cards and French names on the map, cached next to the data. */
-export function createPolities(cfg: Config): PolityService {
-  return new PolityService(join(cfg.dataDir ?? devDir, 'polities.json'), cfg.bordersDir);
+export function createPolities(cfg: Config, clio: Cliopatria | null = null): PolityService {
+  return new PolityService(join(cfg.dataDir ?? devDir, 'polities.json'), cfg.bordersDir, clio);
+}
+
+/** Yearly borders (Cliopatria), with the old snapshots before 3400 BCE. */
+export function createBorders(cfg: Config): { clio: Cliopatria; borders: BordersService } {
+  const clio = new Cliopatria(cfg.cliopatriaFile);
+  return { clio, borders: new BordersService(clio, cfg.bordersDir) };
 }

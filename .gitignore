@@ -6,3 +6,4 @@ data/borders/*.geojson
 .vite/
 .dev/
 data-way/
+data/cliopatria/

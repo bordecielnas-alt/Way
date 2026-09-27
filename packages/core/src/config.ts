@@ -14,6 +14,8 @@ export interface Config {
   redisUrl: string | null;
   memoryStoreFile: string | null;
   bordersDir: string;
+  /** Yearly borders (Cliopatria), built by scripts/build-cliopatria.ts. */
+  cliopatriaFile: string;
   userAgent: string;
   workerConcurrency: number;
   level2: {
@@ -56,6 +58,7 @@ export function loadConfig(env = process.env): Config {
     memoryStoreFile: env.MEMORY_STORE_FILE ?? fileURLToPath(new URL('../../../.dev/store.json', import.meta.url)),
     bordersDir:
       env.BORDERS_DIR ?? (dataDir ? join(dataDir, 'borders') : fileURLToPath(new URL('../../../data/borders/', import.meta.url))),
+    cliopatriaFile: env.CLIOPATRIA_FILE ?? fileURLToPath(new URL('../../../data/cliopatria/borders.json', import.meta.url)),
     // Wikimedia asks for a contact in the User-Agent: set WAY_CONTACT.
     userAgent: `Way/0.1 (personal history globe${contact ? `; ${contact}` : ''})`,
     workerConcurrency: num(env.WORKER_CONCURRENCY, 2),
@@ -74,7 +77,7 @@ export function loadConfig(env = process.env): Config {
       globalMaxSpan: num(env.GLOBAL_MAX_SPAN, 10),
       cellLimit: num(env.CELL_LIMIT, 600),
       pendingTimeoutMs: num(env.PENDING_TIMEOUT_MS, 10 * 60_000),
-      failedRetryMs: num(env.FAILED_RETRY_MS, 10 * 60_000),
+      failedRetryMs: num(env.FAILED_RETRY_MS, 3_600_000),
     },
   };
 }

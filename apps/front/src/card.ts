@@ -45,6 +45,9 @@ const DOOR_POLL_MS = 1500;
 const DOOR_WAIT_MS = 60_000;
 
 /** Right-hand side panel with the selected point's card. */
+/** A realm of the map, a member drawn inside it (real borders), or a region whose limits are estimated. */
+export type PolityKind = 'territory' | 'member' | 'estimated';
+
 export class Card {
   private token = 0;
   /** Door destinations fetched while the current card is read (brief §4.5). */
@@ -105,10 +108,11 @@ export class Card {
    * once when possible, then refreshed. Resolves with the card's facts.
    */
   async openPolity(
-    target: { name: string } | { qid: string }, shownName: string, year: number, hint: string | null = null,
+    target: { name: string } | { qid: string; name?: string }, shownName: string, year: number, hint: string | null = null,
+    kind: PolityKind = 'qid' in target ? 'estimated' : 'territory',
   ): Promise<PolityInfo | null> {
     const token = ++this.token;
-    const region = 'qid' in target;
+    const region = kind !== 'territory';
     this.hint = hint;
     this.shown = null;
     this.root.hidden = false;
@@ -133,7 +137,7 @@ export class Card {
         if (token !== this.token) return;
         clearTimeout(slow);
         const scroll = this.root.querySelector('.card-scroll')?.scrollTop ?? 0;
-        this.renderPolity(info, shownName, region);
+        this.renderPolity(info, shownName, kind);
         this.root.querySelector('.card-scroll')!.scrollTop = scroll; // a background refresh does not jump
       });
     } catch {
@@ -156,8 +160,10 @@ export class Card {
     el.textContent = text ?? '';
   }
 
-  private renderPolity(p: PolityInfo, shownName: string, region: boolean): void {
+  private renderPolity(p: PolityInfo, shownName: string, kind: PolityKind): void {
+    const region = kind !== 'territory';
     const hint = this.hint;
+    const yearly = p.year >= -3400;
     const span = p.start !== null || p.end !== null
       ? `${p.start !== null ? formatYear(p.start) : '?'} – ${p.end !== null ? formatYear(p.end) : 'aujourd’hui'}`
       : '';
@@ -204,10 +210,14 @@ export class Card {
             <ul class="card-sources">${p.sources
               .map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a></li>`)
               .join('')}
-              <li><a href="https://github.com/aourednik/historical-basemaps" target="_blank" rel="noopener">Frontières : historical-basemaps</a></li></ul>
-            <div class="card-summary-note">${region
+              ${yearly
+                ? '<li><a href="https://github.com/Seshat-Global-History-Databank/cliopatria" target="_blank" rel="noopener">Frontières : Cliopatria (Seshat, CC BY 4.0)</a></li>'
+                : '<li><a href="https://github.com/aourednik/historical-basemaps" target="_blank" rel="noopener">Frontières : historical-basemaps</a></li>'}</ul>
+            <div class="card-summary-note">${kind === 'estimated'
               ? 'Limites de la région estimées : le territoire est partagé entre les chefs-lieux connus de Wikidata, chaque lieu revenant au plus proche.'
-              : `Frontières approximatives.${p.qid ? ` Le territoire « ${esc(p.name)} » de la carte est relié à Wikidata automatiquement : vérifiez les sources.` : ''}`}</div>
+              : yearly
+                ? 'Frontières historiques datées à l’année près, simplifiées au kilomètre.'
+                : `Frontières approximatives.${p.qid ? ` Le territoire « ${esc(p.name)} » de la carte est relié à Wikidata automatiquement : vérifiez les sources.` : ''}`}</div>
           </div>
         </div>
       </div>`;

@@ -12,7 +12,8 @@ export interface Area {
 
 export interface Seat { qid: string; label: string; kind: string | null; lat: number; lon: number }
 
-export interface Region extends Area, Seat {}
+/** `estimated`: limits drawn from seats; otherwise a real border (a member of a composite realm, `featureId`). */
+export interface Region extends Area, Seat { estimated: boolean; featureId?: number; name?: string }
 
 export function bounds(rings: Ring[]): Area {
   let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
@@ -115,7 +116,7 @@ export function divide(parent: Area, seats: Seat[]): Region[] {
   kept.forEach((s, i) => {
     const cell = cells[i]!.map(([x, y]) => [x / k, y] as [number, number]);
     const rings = parent.rings.map((r) => clipRing(r, cell)).filter((r) => r.length >= 3);
-    if (rings.length) regions.push({ ...s, ...bounds(rings) });
+    if (rings.length) regions.push({ ...s, ...bounds(rings), estimated: true });
   });
   return regions;
 }
