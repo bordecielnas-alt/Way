@@ -192,3 +192,28 @@ body.card-open .cesium-viewer-bottom { right: 452px; }
 }
 /* No Cesium ion is used: hide its logo, keep the data credits. */
 .cesium-credit-logoContainer { display: none !important; }
+
+/* ---------- territory card ---------- */
+.polity-head { display: flex; align-items: flex-start; gap: 14px; justify-content: space-between; }
+.polity-emblem { width: 58px; max-height: 72px; object-fit: contain; flex: none; margin-top: 4px; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.5)); }
+.ruler { display: flex; align-items: center; gap: 12px; padding: 8px 10px; margin: 0 -10px; border-radius: 10px; text-decoration: none; color: var(--ink); }
+.ruler:hover { background: rgba(255, 255, 255, 0.04); }
+.ruler + .ruler { margin-top: 2px; }
+.ruler-portrait {
+  width: 46px; height: 46px; flex: none; border-radius: 50%; overflow: hidden; display: grid; place-items: center;
+  background: #1b1f28; border: 2px solid rgba(217, 164, 65, 0.7); font-family: var(--serif); font-size: 20px; color: var(--gold);
+}
+.ruler-portrait img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.ruler-text { display: grid; gap: 2px; min-width: 0; }
+.ruler-name { font-family: var(--serif); font-size: 18px; line-height: 1.2; }
+.ruler-meta { font-size: 12px; color: var(--muted); }
+.ruler.before, .ruler.after { opacity: 0.75; }
+.ruler.before .ruler-portrait, .ruler.after .ruler-portrait { width: 36px; height: 36px; border-width: 1px; font-size: 15px; }
+.ruler.before .ruler-name, .ruler.after .ruler-name { font-size: 15px; }
+.polity-facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 18px 0 0; font-size: 13.5px; }
+.polity-facts dt { color: var(--muted); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding-top: 2px; }
+.polity-facts dd { margin: 0; color: var(--ink); }
+@media (max-width: 520px) {
+  .card { left: 8px; right: 8px; width: auto; top: 8px; }
+  .polity-emblem { width: 44px; }
+}

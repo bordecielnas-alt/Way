@@ -66,6 +66,10 @@ export function createGlobe(container: HTMLElement, name: Basemap): Viewer {
     requestRenderMode: true,
     maximumRenderTimeChange: Infinity,
   });
+  // Sharp markers and text on high-density screens (Windows at 125 or 150 %,
+  // laptops): render at the screen's pixels, capped at 1.5x for the GPU.
+  viewer.useBrowserRecommendedResolution = false;
+  viewer.resolutionScale = Math.min(1, 1.5 / (window.devicePixelRatio || 1));
   const scene = viewer.scene;
   scene.globe.baseColor = Color.fromCssColorString('#0b1624');
   scene.backgroundColor = Color.fromCssColorString('#05070b');

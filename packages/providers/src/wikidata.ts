@@ -33,14 +33,20 @@ interface SparqlResponse {
 }
 
 export async function sparql(query: string, timeoutMs = 65_000): Promise<SparqlResponse['results']['bindings']> {
-  const res = await fetchJson<SparqlResponse>(SPARQL_URL, {
-    method: 'POST',
-    body: new URLSearchParams({ query }).toString(),
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/sparql-results+json' },
-    timeoutMs,
-    retries: 1,
-  });
-  return res.results.bindings;
+  const started = Date.now();
+  try {
+    const res = await fetchJson<SparqlResponse>(SPARQL_URL, {
+      method: 'POST',
+      body: new URLSearchParams({ query }).toString(),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/sparql-results+json' },
+      timeoutMs,
+      retries: 1,
+    });
+    return res.results.bindings;
+  } finally {
+    const ms = Date.now() - started;
+    if (ms > 8000) console.warn(`[wdqs] slow query (${ms} ms): ${query.replace(/\s+/g, ' ').trim().slice(0, 160)}`);
+  }
 }
 
 // ---------- helpers ----------

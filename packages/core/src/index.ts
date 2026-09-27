@@ -9,6 +9,7 @@ import { MemoryStore } from './store/memory.ts';
 import { loadRouterConfig, ProviderRouter } from './router.ts';
 import { PostgresStore } from './store/postgres.ts';
 import { SettingsFile } from './settings.ts';
+import { PolityService } from './polity.ts';
 import type { Store } from './store/types.ts';
 
 /** Local files in dev (no DATA_DIR): settings, account. */
@@ -23,6 +24,7 @@ export * from './router.ts';
 export * from './level2.ts';
 export * from './doors.ts';
 export * from './settings.ts';
+export * from './polity.ts';
 export * from './borders.ts';
 export * from './store/types.ts';
 export { MemoryStore } from './store/memory.ts';
@@ -53,4 +55,9 @@ export function createSettings(cfg: Config): SettingsFile {
 export function createRouter(cfg: Config, settings = createSettings(cfg)): ProviderRouter {
   const usage = cfg.dataDir ? join(cfg.dataDir, 'provider-usage.json') : null;
   return new ProviderRouter(loadRouterConfig(), process.env, usage, () => settings.get(), cfg.level2.enabled);
+}
+
+/** Kingdom cards and French names on the map, cached next to the data. */
+export function createPolities(cfg: Config): PolityService {
+  return new PolityService(join(cfg.dataDir ?? devDir, 'polities.json'), cfg.bordersDir);
 }

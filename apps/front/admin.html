@@ -30,6 +30,7 @@
 
         <nav class="tabs" role="tablist">
           <button type="button" role="tab" data-tab="ai" aria-selected="true">Recherche IA</button>
+          <button type="button" role="tab" data-tab="ui">Interface</button>
           <button type="button" role="tab" data-tab="status">État</button>
           <button type="button" role="tab" data-tab="account">Compte</button>
         </nav>
@@ -54,6 +55,25 @@
             <button type="button" class="link" id="cancel">Annuler</button>
             <button type="button" class="primary" id="save">Enregistrer</button>
           </div>
+        </section>
+
+        <section data-panel="ui" hidden>
+          <div class="switch-row card">
+            <div>
+              <div class="switch-title">Sons au clic</div>
+              <div class="sub">Un son différent selon le type d’événement : fracas d’épées pour une bataille, cloche pour un
+                lieu sacré, fanfare pour un empire, grondement pour une catastrophe… et une carte qu’on déroule sur un territoire.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="sounds" /><span></span></label>
+          </div>
+          <div class="card volume">
+            <label for="volume">Volume</label>
+            <input type="range" id="volume" min="0" max="1" step="0.05" />
+            <span class="num" id="volume-value"></span>
+          </div>
+          <h2>Écouter</h2>
+          <div class="sound-list" id="sound-list"></div>
+          <p class="hint">Réglage commun à tous les appareils, appliqué au prochain chargement du globe.</p>
         </section>
 
         <section data-panel="status" hidden>

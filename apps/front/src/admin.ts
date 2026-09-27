@@ -1,6 +1,9 @@
 import '@fontsource/eb-garamond/500.css';
 import '@fontsource-variable/inter';
 import './admin.css';
+import { CATEGORY_LABELS, type Category } from '@way/shared';
+import { CATEGORY_COLORS } from './icons.ts';
+import { configureSounds, playSound, type SoundKind } from './sounds.ts';
 
 // Settings page: login, level-2 providers (keys, models, on/off, test),
 // live status (brief §8.4) and the account password.
@@ -31,6 +34,7 @@ interface SettingsResponse {
   level2: { enabled: boolean; source: 'settings' | 'env' };
   variables: Record<string, Variable>;
   providers: ProviderStatus[];
+  ui: { sounds: boolean; volume: number };
 }
 
 interface AdminResponse {
@@ -150,10 +154,10 @@ $('logout').addEventListener('click', async () => {
 
 // ---------- tabs ----------
 
-type Tab = 'ai' | 'status' | 'account';
+type Tab = 'ai' | 'ui' | 'status' | 'account';
 
 function selectTab(tab: Tab): void {
-  if (!['ai', 'status', 'account'].includes(tab)) tab = 'ai';
+  if (!['ai', 'ui', 'status', 'account'].includes(tab)) tab = 'ai';
   document.querySelectorAll<HTMLElement>('[role=tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
   document.querySelectorAll<HTMLElement>('[data-panel]').forEach((p) => (p.hidden = p.dataset.panel !== tab));
   history.replaceState(null, '', `#${tab}`);
@@ -186,6 +190,7 @@ async function loadSettings(): Promise<void> {
     current = await api<SettingsResponse>('/api/settings');
     resetDraft();
     renderSettings();
+    renderUi();
   } catch (e) {
     if (!(e instanceof Unauthorized)) $('llm').innerHTML = `<p class="form-error">${esc((e as Error).message)}</p>`;
   }
@@ -380,6 +385,51 @@ $('cancel').addEventListener('click', () => {
 });
 addEventListener('beforeunload', (e) => {
   if (dirty()) e.preventDefault();
+});
+
+// ---------- interface ----------
+
+const SOUND_KINDS: [SoundKind, string, string][] = [
+  ...(Object.keys(CATEGORY_LABELS) as Category[]).map((c): [SoundKind, string, string] => [c, CATEGORY_LABELS[c], CATEGORY_COLORS[c]]),
+  ['territory', 'Territoire', '#d9a441'],
+];
+
+const percent = (v: number) => `${Math.round(v * 100)} %`;
+
+function renderUi(): void {
+  const ui = current!.ui;
+  configureSounds(ui);
+  $<HTMLInputElement>('sounds').checked = ui.sounds;
+  $<HTMLInputElement>('volume').value = String(ui.volume);
+  $('volume-value').textContent = percent(ui.volume);
+  $('sound-list').innerHTML = SOUND_KINDS.map(
+    ([k, label, color]) => `<button type="button" class="ghost" data-sound="${k}"><i style="background:${color}"></i>${esc(label)}</button>`,
+  ).join('');
+}
+
+let uiTimer: number | undefined;
+/** Interface preferences save on their own, a moment after the last change. */
+function saveUi(): void {
+  const ui = { sounds: $<HTMLInputElement>('sounds').checked, volume: Number($<HTMLInputElement>('volume').value) };
+  configureSounds(ui);
+  $('volume-value').textContent = percent(ui.volume);
+  clearTimeout(uiTimer);
+  uiTimer = window.setTimeout(async () => {
+    try {
+      const res = await api<SettingsResponse>('/api/settings', { method: 'PUT', body: { ui } });
+      current = { ...current!, ui: res.ui };
+      flash('Enregistré.');
+    } catch (err) {
+      if (!(err instanceof Unauthorized)) flash(`Échec : ${(err as Error).message}`);
+    }
+  }, 400);
+}
+
+$('sounds').addEventListener('change', saveUi);
+$('volume').addEventListener('input', saveUi);
+$('sound-list').addEventListener('click', (e) => {
+  const kind = (e.target as HTMLElement).closest<HTMLElement>('[data-sound]')?.dataset.sound as SoundKind | undefined;
+  if (kind) playSound(kind, { force: true });
 });
 
 // ---------- status ----------

@@ -1,10 +1,10 @@
 import {
   BoundingSphere, CallbackProperty, Cartesian2, Cartesian3, Color, ConstantProperty, CustomDataSource,
   DistanceDisplayCondition, Entity, HeadingPitchRange, HorizontalOrigin, LabelStyle, Math as CesiumMath,
-  NearFarScalar, VerticalOrigin, type Viewer,
+  VerticalOrigin, type Viewer,
 } from 'cesium';
 import { poiInWindow, type Category, type PoiLite } from '@way/shared';
-import { clusterIcon, markerIcon, sizeFor } from './icons.ts';
+import { clusterIcon, markerGeometry, markerIcon, sizeFor } from './icons.ts';
 
 const POP_MS = 650;
 
@@ -38,6 +38,10 @@ export class PoiLayer {
       cluster.billboard.id = cluster.label.id; // lets picks return the cluster entities
     });
     viewer.dataSources.add(this.source);
+  }
+
+  get selectedId(): string | null {
+    return this.selected;
   }
 
   get(id: string): PoiLite | undefined {
@@ -156,15 +160,15 @@ export class PoiLayer {
 
   private addEntity(p: PoiLite, pop: boolean): void {
     const size = sizeFor(p.importance);
-    const box = size + 12;
+    const { width, height, tokenY } = markerGeometry(size);
     const born = performance.now();
     const e = this.source.entities.add({
       id: p.id,
       position: Cartesian3.fromDegrees(p.lon, p.lat),
       billboard: {
-        image: markerIcon(p.category, size),
-        width: box,
-        height: box,
+        image: markerIcon(p.category, size, p.importance),
+        width,
+        height,
         scale: pop
           ? new CallbackProperty(() => {
               const t = Math.min(1, (performance.now() - born) / POP_MS);
@@ -172,8 +176,9 @@ export class PoiLayer {
               return Math.max(0, 1 + 2.2 * (t - 1) ** 3 + 1.2 * (t - 1) ** 2);
             }, false)
           : 1,
-        verticalOrigin: VerticalOrigin.CENTER,
-        scaleByDistance: new NearFarScalar(2e5, 1.15, 2e7, 0.75),
+        // The pole's foot stands on the location. No distance scaling: an
+        // image drawn at its exact pixel size stays sharp.
+        verticalOrigin: VerticalOrigin.BOTTOM,
         disableDepthTestDistance: 5e4,
       },
       label: {
@@ -185,7 +190,7 @@ export class PoiLayer {
         style: LabelStyle.FILL_AND_OUTLINE,
         horizontalOrigin: HorizontalOrigin.LEFT,
         verticalOrigin: VerticalOrigin.CENTER,
-        pixelOffset: new Cartesian2(size / 2 + 6, 0),
+        pixelOffset: new Cartesian2(size / 2 + 7, -(height - tokenY)),
         // Important places are labeled from farther away.
         distanceDisplayCondition: new DistanceDisplayCondition(0, 1.5e5 + p.importance ** 2.5 * 1.3e7),
         disableDepthTestDistance: 5e4,

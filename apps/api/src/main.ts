@@ -6,7 +6,7 @@ import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { ClientMessage, type ServerMessage } from '@way/shared';
 import {
-  createRouter, createSettings, createStore, devDir, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
+  createPolities, createRouter, createSettings, createStore, DEFAULT_UI, devDir, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
 } from '@way/core';
 import { Auth, COOKIE, readCookie } from './auth.ts';
 import { ViewService, type View } from './views.ts';
@@ -19,6 +19,7 @@ const auth = new Auth(join(cfg.dataDir ?? devDir, 'auth.json'));
 const bus: JobBus = cfg.redisUrl ? new RedisBus(cfg.redisUrl) : new InlineBus(store, cfg, router);
 const views = new ViewService(store, bus, cfg);
 const doors = new DoorService(store);
+const polities = createPolities(cfg);
 const mode = {
   store: cfg.databaseUrl ? 'postgres' : cfg.dataDir ? 'embedded-postgres' : 'memory',
   queue: cfg.redisUrl ? 'redis' : 'inline',
@@ -109,6 +110,7 @@ function settingsView() {
     level2: { enabled: router.enabled, source: saved.level2 === undefined ? 'env' : 'settings' },
     variables,
     providers: router.status(),
+    ui: saved.ui ?? DEFAULT_UI,
   };
 }
 
@@ -118,6 +120,7 @@ const SettingsBody = z.object({
   level2: z.boolean().nullable().optional(),
   env: z.record(z.string(), z.string().max(500).nullable()).optional(),
   disabled: z.array(z.string()).optional(),
+  ui: z.object({ sounds: z.boolean(), volume: z.number().min(0).max(1) }).optional(),
 });
 app.put('/api/settings', async (req, reply) => {
   const body = SettingsBody.safeParse(req.body);
@@ -125,7 +128,7 @@ app.put('/api/settings', async (req, reply) => {
   const allowed = new Set(router.variables());
   const ids = new Set(router.status().map((p) => p.id));
   const cur = settings.get();
-  const next = { level2: cur.level2, env: { ...cur.env }, disabled: [...cur.disabled] };
+  const next = { level2: cur.level2, env: { ...cur.env }, disabled: [...cur.disabled], ui: body.data.ui ?? cur.ui };
   if (body.data.level2 !== undefined) next.level2 = body.data.level2 ?? undefined;
   for (const [name, value] of Object.entries(body.data.env ?? {})) {
     if (!allowed.has(name)) return reply.code(400).send({ error: `variable inconnue : ${name}` });
@@ -176,6 +179,24 @@ app.get<{ Params: { id: string } }>('/api/poi/:id/doors', async (req, reply) => 
   if (!res) return reply.code(404).send({ error: 'not found' });
   return res;
 });
+
+// Kingdom card: the territory's name in the snapshot and the timeline year.
+const PolityQuery = z.object({ name: z.string().min(1).max(200), year: z.coerce.number().int().min(-10000).max(2100) });
+app.get('/api/polity', async (req, reply) => {
+  const q = PolityQuery.safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: 'requête invalide' });
+  return polities.info(q.data.name, q.data.year);
+});
+
+// French names for the territories of the snapshot shown at `year`.
+app.get<{ Querystring: { year?: string } }>('/api/polity/labels', async (req, reply) => {
+  const year = Number(req.query.year);
+  if (!Number.isFinite(year)) return reply.code(400).send({ error: 'année manquante' });
+  return polities.labels(year);
+});
+
+// Interface preferences shared by every viewer (set in the Réglages page).
+app.get('/api/ui', async () => settings.get().ui ?? DEFAULT_UI);
 
 app.get<{ Querystring: { year?: string } }>('/api/borders', async (req, reply) => {
   const snapshots = listSnapshots(cfg.bordersDir);

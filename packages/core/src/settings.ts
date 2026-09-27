@@ -12,7 +12,13 @@ export interface SettingsData {
   env: Record<string, string>;
   /** Provider ids turned off by hand. */
   disabled: string[];
+  /** Interface: click sounds. */
+  ui?: UiSettings;
 }
+
+export interface UiSettings { sounds: boolean; volume: number }
+
+export const DEFAULT_UI: UiSettings = { sounds: true, volume: 0.6 };
 
 const RELOAD_MS = 3000;
 
@@ -55,6 +61,12 @@ export class SettingsFile {
         level2: typeof raw.level2 === 'boolean' ? raw.level2 : undefined,
         env: Object.fromEntries(Object.entries(raw.env ?? {}).filter(([, v]) => typeof v === 'string' && v)),
         disabled: Array.isArray(raw.disabled) ? raw.disabled.filter((x) => typeof x === 'string') : [],
+        ui: raw.ui && typeof raw.ui === 'object'
+          ? {
+              sounds: typeof raw.ui.sounds === 'boolean' ? raw.ui.sounds : DEFAULT_UI.sounds,
+              volume: typeof raw.ui.volume === 'number' ? Math.min(1, Math.max(0, raw.ui.volume)) : DEFAULT_UI.volume,
+            }
+          : undefined,
       };
       this.mtime = mtime;
     } catch (e) {

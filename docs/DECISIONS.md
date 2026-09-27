@@ -146,6 +146,33 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
 - Protégé : réglages et état (`/api/settings`, `/api/admin`). Le globe reste ouvert sans compte.
 - Mot de passe oublié : supprimer `/data/auth.json` et redémarrer.
 
+## Marqueurs, sons et territoires
+
+- **Marqueurs façon jeu de stratégie** : pion dessiné (jeton biseauté sur un mât, ombre au sol), forme et
+  pictogramme par catégorie (bouclier et épées croisées pour une bataille, hexagone et couronne pour un
+  État…), cerclage or / argent / bronze selon l'importance. Pseudo-3D sur canvas : de vrais modèles 3D
+  coûteraient bien plus cher pour des centaines de points. Plus d'agrandissement selon la distance (il
+  floutait l'image) ; le globe est rendu à la densité de l'écran, plafonnée à 1,5×.
+- **Survol** : rester 350 ms sur un point ouvre sa fiche (sans déplacer la caméra) ; le clic vole jusqu'au point.
+- **Sons** synthétisés par Web Audio (aucun fichier à héberger ni licence), un par catégorie et un pour les
+  territoires. Réglages → Interface (activé par défaut, volume), commun à tous les appareils.
+- **Clic sur un territoire** : détourage lumineux (couche d'imagerie limitée au territoire, l'empire avec
+  ses vassaux) et fiche : nom français, type, dates, emblème, capitale, régime, religion, langues,
+  dirigeant(s) à l'année de la timeline, résumé Wikipédia.
+  - Les frontières (historical-basemaps) ne donnent qu'un nom anglais approximatif (« Rome », « Castille »,
+    « Mamluke Sultanate ») : candidats Wikidata par recherche de libellé et recherche plein texte
+    Wikipédia, notés sur le type (État, État historique), les dates (couvrent l'année ; un État encore
+    existant est pénalisé avant 1800), la ressemblance du nom et la notoriété. Sans candidat suffisant,
+    la fiche le dit.
+  - Dirigeants : P35, titulaires de la fonction P1906, titulaires d'un office de monarque de ce
+    territoire (P1001). Un règne sans date de fin s'arrête au suivant. Hors règne connu, seuls les
+    voisins à moins de 30 ans sont montrés.
+  - Cache disque `/data/polities.json`.
+- **Noms en filigrane** : capitales espacées, taille selon l'étendue, plus transparents de près,
+  masqués au-delà de l'horizon. Traduits en français quand la correspondance est sûre (même nom),
+  cherchés en tâche de fond, une à la fois, en pause dès que Wikimedia demande de ralentir (429) ou
+  qu'une fiche est demandée. Les zones sans nom dans les données sont en gris neutre.
+
 ## Hors V1 (prévu)
 
 Histogramme de densité, bouton Play, carnet de voyage, brouillard de connaissance, fils rouges,
@@ -153,7 +180,8 @@ campagnes animées, préchargement nocturne.
 
 ## Limites connues
 
-- Libellés des frontières en anglais (données sources).
+- Noms des territoires : en anglais tant que la traduction n'est pas trouvée ou pas sûre. Rapprochement avec Wikidata automatique, donc parfois faux sur les noms vagues (« Hunter-gatherers »).
+- Wikimedia limite le débit : premier clic sur un territoire parfois lent (jusqu'à une minute) si le serveur vient de beaucoup interroger Wikidata ; ensuite en cache.
 - Le mode multi-services (Redis/BullMQ) n'a pas été exécuté ; le mode conteneur unique est testé.
 - Niveau 2 : testé avec des fournisseurs simulés (tests) et les adaptateurs sans clé en réel ; pas encore
   avec une vraie clé d'IA.

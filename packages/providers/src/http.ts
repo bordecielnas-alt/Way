@@ -11,7 +11,8 @@ const DEFAULT_POLICY: HostPolicy = { concurrency: 2, minIntervalMs: 100 };
 const POLICIES: Record<string, HostPolicy> = {
   // WDQS allows 5 parallel queries per IP; stay well below.
   'query.wikidata.org': { concurrency: 2, minIntervalMs: 250 },
-  'www.wikidata.org': { concurrency: 2, minIntervalMs: 100 },
+  // The search API answers bursts with a 40 s Retry-After: one request at a time.
+  'www.wikidata.org': { concurrency: 1, minIntervalMs: 150 },
   'nominatim.openstreetmap.org': { concurrency: 1, minIntervalMs: 1100 },
 };
 
@@ -81,10 +82,20 @@ export interface FetchOptions {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Hosts that answered 429: background work waits until this time. */
+const cooling = new Map<string, number>();
+
+/** When a host that asked us to slow down accepts requests again (0 if it did not). */
+export function coolingUntil(host: string): number {
+  return cooling.get(host) ?? 0;
+}
+
 export async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
   const { timeoutMs = 20_000, retries = 2 } = opts;
   const host = new URL(url).host;
+  const started = Date.now();
   for (let attempt = 0; ; attempt++) {
+    if (attempt > 0) console.warn(`[http] ${host}: retry ${attempt} after ${Date.now() - started} ms`);
     const res = await limiterFor(host).run(() =>
       fetch(url, {
         method: opts.method ?? 'GET',
@@ -100,6 +111,8 @@ export async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promis
       throw new HttpError(res.status, `${res.status} ${host}: ${text.slice(0, 200)}`);
     }
     const retryAfter = Number(res.headers.get('retry-after'));
-    await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2000 * (attempt + 1));
+    const wait = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2000 * (attempt + 1);
+    if (res.status === 429) cooling.set(host, Math.max(coolingUntil(host), Date.now() + wait));
+    await sleep(wait);
   }
 }

@@ -1,5 +1,6 @@
 import {
-  CATEGORY_LABELS, DOOR_KINDS, formatPoiDate, type Door, type DoorKind, type DoorsResponse, type Poi,
+  CATEGORY_LABELS, DOOR_KINDS, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
+  type PolityInfo, type PolityRulerInfo,
 } from '@way/shared';
 import { CATEGORY_COLORS } from './icons.ts';
 
@@ -17,6 +18,27 @@ function coords(lat: number, lon: number): string {
   return `${f(lat, 'N', 'S')}, ${f(lon, 'E', 'O')}`;
 }
 
+function reign(r: PolityRulerInfo): string {
+  if (r.start !== null && r.end !== null) return `${formatYear(r.start)} – ${formatYear(r.end)}`;
+  if (r.start !== null) return `depuis ${formatYear(r.start)}`;
+  return r.end !== null ? `jusqu’en ${formatYear(r.end)}` : '';
+}
+
+function rulerEl(r: PolityRulerInfo): string {
+  const when = r.when === 'before' ? 'Juste avant : ' : r.when === 'after' ? 'Juste après : ' : '';
+  const portrait = r.image
+    ? `<img alt="" src="${esc(r.image)}" referrerpolicy="no-referrer">`
+    : `<span aria-hidden="true">${esc(r.name.slice(0, 1))}</span>`;
+  return `
+    <a class="ruler ${r.when}" href="https://www.wikidata.org/wiki/${esc(r.qid)}" target="_blank" rel="noopener">
+      <span class="ruler-portrait">${portrait}</span>
+      <span class="ruler-text">
+        <span class="ruler-name">${when}${esc(r.name)}</span>
+        <span class="ruler-meta">${esc([r.office, reign(r)].filter(Boolean).join(' · '))}</span>
+      </span>
+    </a>`;
+}
+
 const DOOR_ICONS: Record<DoorKind, string> = { time: '🕰️', meanwhile: '🌍', next: '🔗', surprise: '❓' };
 const DOOR_POLL_MS = 1500;
 const DOOR_WAIT_MS = 60_000;
@@ -26,6 +48,12 @@ export class Card {
   private token = 0;
   /** Door destinations fetched while the current card is read (brief §4.5). */
   private prefetched = new Map<string, Poi>();
+  /** POI shown, or null for a territory or a closed panel. */
+  private shown: string | null = null;
+
+  get currentPoi(): string | null {
+    return this.root.hidden ? null : this.shown;
+  }
 
   constructor(private root: HTMLElement, private onClose: () => void, private onDoor: (door: Door) => void) {
     document.addEventListener('keydown', (e) => {
@@ -35,6 +63,7 @@ export class Card {
 
   async open(id: string): Promise<void> {
     const token = ++this.token;
+    this.shown = id;
     this.root.hidden = false;
     document.body.classList.add('card-open');
     const ready = this.prefetched.get(id);
@@ -64,6 +93,99 @@ export class Card {
       this.root.querySelector('.card-body')!.innerHTML =
         '<p class="card-summary-note">Impossible de charger cette fiche pour le moment.</p>';
     }
+  }
+
+  /** Card of a territory clicked on the map, at the timeline's year. */
+  async openPolity(name: string, shownName: string, year: number): Promise<void> {
+    const token = ++this.token;
+    this.shown = null;
+    this.root.hidden = false;
+    document.body.classList.add('card-open');
+    this.root.innerHTML = `
+      <button class="card-close" type="button" aria-label="Fermer">×</button>
+      <div class="card-scroll"><div class="card-body">
+        <div class="card-kicker"><span class="card-cat">Territoire en ${esc(formatYear(year))}</span></div>
+        <h2 class="card-title">${esc(shownName)}</h2>
+        <div class="card-summary-note">Recherche du royaume et de son dirigeant dans Wikidata…</div>
+        <div class="skeleton" style="height:56px;margin-top:18px"></div>
+        ${'<div class="skeleton" style="height:14px;margin-top:10px"></div>'.repeat(5)}
+      </div></div>`;
+    this.bindClose();
+    const slow = window.setTimeout(() => {
+      const note = token === this.token ? this.root.querySelector('.card-summary-note') : null;
+      if (note) note.textContent = 'Wikidata est très sollicité et demande de patienter un peu…';
+    }, 12_000);
+    try {
+      const r = await fetch(`/api/polity?${new URLSearchParams({ name, year: String(year) })}`);
+      if (!r.ok) throw new Error(String(r.status));
+      const info = (await r.json()) as PolityInfo;
+      if (token === this.token) this.renderPolity(info, shownName);
+    } catch {
+      if (token !== this.token) return;
+      this.root.querySelector('.card-summary-note')!.textContent = 'Impossible de charger cette fiche pour le moment.';
+      this.root.querySelectorAll('.skeleton').forEach((el) => el.remove());
+    } finally {
+      clearTimeout(slow);
+    }
+  }
+
+  private renderPolity(p: PolityInfo, shownName: string): void {
+    const span = p.start !== null || p.end !== null
+      ? `${p.start !== null ? formatYear(p.start) : '?'} – ${p.end !== null ? formatYear(p.end) : 'aujourd’hui'}`
+      : '';
+    const facts = [
+      ['Capitale', p.capital ? [p.capital] : []],
+      ['Régime', p.government],
+      ['Religion', p.religion],
+      ['Langues', p.languages],
+    ].filter(([, v]) => (v as string[]).length > 0) as [string, string[]][];
+    const now = p.rulers.filter((r) => r.when === 'now');
+    const near = p.rulers.filter((r) => r.when !== 'now');
+    const rulers = p.qid
+      ? `<div class="card-section">
+          <div class="card-section-title">${now.length > 1 ? 'Dirigeants' : 'Dirigeant'} en ${esc(formatYear(p.year))}</div>
+          ${now.length ? now.map((r) => rulerEl(r)).join('') : `<p class="card-summary-note">Aucun dirigeant renseigné dans Wikidata pour cette date.</p>`}
+          ${near.map((r) => rulerEl(r)).join('')}
+        </div>`
+      : '';
+    const note = p.summaryLang && p.summaryLang !== 'fr' ? '<div class="card-summary-note">Résumé disponible uniquement en anglais.</div>' : '';
+    const image = p.image
+      ? `<div class="card-image"><img alt="" src="${esc(p.image)}" referrerpolicy="no-referrer"></div>`
+      : '';
+    this.root.innerHTML = `
+      <button class="card-close" type="button" aria-label="Fermer">×</button>
+      <div class="card-scroll">
+        ${image}
+        <div class="card-body">
+          <div class="card-kicker">
+            <span class="card-cat"><i style="background:#b18be0"></i>${esc(p.kind ?? 'Territoire')}</span>
+          </div>
+          <div class="polity-head">
+            <h2 class="card-title">${esc(p.qid ? p.title : shownName)}</h2>
+            ${p.emblem ? `<img class="polity-emblem" alt="" src="${esc(p.emblem)}" referrerpolicy="no-referrer">` : ''}
+          </div>
+          ${span ? `<div class="card-date">${esc(span)}</div>` : ''}
+          ${p.description ? `<div class="card-desc">${esc(p.description)}</div>` : ''}
+          ${p.qid ? '' : `<p class="card-summary-note">Pas de fiche trouvée dans Wikidata pour « ${esc(p.name)} ».</p>`}
+          ${rulers}
+          ${facts.length ? `<dl class="polity-facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v.join(', '))}</dd>`).join('')}</dl>` : ''}
+          ${p.summary ? `<p class="card-summary">${esc(p.summary)}</p>${note}` : ''}
+          <div class="card-section">
+            <div class="card-section-title">Sources</div>
+            <ul class="card-sources">${p.sources
+              .map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a></li>`)
+              .join('')}
+              <li><a href="https://github.com/aourednik/historical-basemaps" target="_blank" rel="noopener">Frontières : historical-basemaps</a></li></ul>
+            <div class="card-summary-note">Frontières approximatives.${p.qid ? ` Le territoire « ${esc(p.name)} » de la carte est relié à Wikidata automatiquement : vérifiez les sources.` : ''}</div>
+          </div>
+        </div>
+      </div>`;
+    this.bindClose();
+    this.root.querySelectorAll<HTMLImageElement>('img').forEach((img) => {
+      img.addEventListener('load', () => img.classList.add('loaded'));
+      img.addEventListener('error', () => (img.closest('.card-image') ?? img).remove());
+    });
+    this.root.querySelector('.card-scroll')!.scrollTop = 0;
   }
 
   close(): void {
