@@ -1,4 +1,4 @@
-import { formatYear, posToYear, TIMELINE_TICKS, yearToPos, MAX_YEAR, MIN_YEAR } from '@way/shared';
+import { bucketStep, formatYear, posToYear, TIMELINE_TICKS, yearToPos, MAX_YEAR, MIN_YEAR } from '@way/shared';
 
 export interface TimeWindow { tStart: number; tEnd: number }
 
@@ -9,6 +9,24 @@ const ERAS: { label: string; from: number; to: number }[] = [
   { label: 'Temps modernes', from: 1492, to: 1789 },
   { label: 'Époque contemporaine', from: 1789, to: MAX_YEAR },
 ];
+
+/** Play mode: years per step (0 = the timeline's own unit at that era) and seconds between steps. */
+const PLAY_STEPS = [0, 1, 5, 10, 25, 50, 100];
+const PLAY_DELAYS = [1, 2, 3, 5, 10];
+const PLAY_KEY = 'way:play';
+interface PlayPrefs { step: number; delay: number }
+
+function loadPlay(): PlayPrefs {
+  try {
+    const p = JSON.parse(localStorage.getItem(PLAY_KEY) ?? '{}') as Partial<PlayPrefs>;
+    return {
+      step: PLAY_STEPS.includes(p.step ?? -1) ? p.step! : 0,
+      delay: PLAY_DELAYS.includes(p.delay ?? -1) ? p.delay! : 2,
+    };
+  } catch {
+    return { step: 0, delay: 2 };
+  }
+}
 
 const MIN_WIDTH = 0.004;
 const MAX_WIDTH = 0.45;
@@ -33,12 +51,24 @@ export class Timeline {
   private statusEl: HTMLElement;
   private statusText: HTMLElement;
   private glide = 0;
+  private playTimer: number | undefined;
+  private play = loadPlay();
+  private playBtn: HTMLButtonElement;
 
   constructor(root: HTMLElement, initial: TimeWindow, private onChange: (w: TimeWindow) => void) {
     this.a = yearToPos(initial.tStart);
     this.b = yearToPos(initial.tEnd);
     root.innerHTML = `
       <div class="tl-head">
+        <div class="tl-play">
+          <button type="button" class="tl-play-btn" aria-label="Lecture" title="Faire défiler le temps (Espace)"></button>
+          <select class="tl-play-step" aria-label="Pas de temps" title="Avance à chaque pas">
+            ${PLAY_STEPS.map((y) => `<option value="${y}">${y === 0 ? 'Pas auto' : `+${y} an${y > 1 ? 's' : ''}`}</option>`).join('')}
+          </select>
+          <select class="tl-play-delay" aria-label="Cadence" title="Temps entre deux pas">
+            ${PLAY_DELAYS.map((d) => `<option value="${d}">toutes les ${d} s</option>`).join('')}
+          </select>
+        </div>
         <div class="tl-range"></div>
         <div class="tl-borders"></div>
         <div class="tl-status"><span class="tl-status-dot"></span><span class="tl-status-text">Connexion…</span></div>
@@ -60,6 +90,8 @@ export class Timeline {
     this.bordersEl = root.querySelector('.tl-borders')!;
     this.statusEl = root.querySelector('.tl-status')!;
     this.statusText = root.querySelector('.tl-status-text')!;
+    this.playBtn = root.querySelector('.tl-play-btn')!;
+    this.bindPlay(root);
     this.bind();
     this.render();
     requestAnimationFrame(() => this.layoutTicks());
@@ -104,6 +136,85 @@ export class Timeline {
       if (t < 1) requestAnimationFrame(step);
     };
     requestAnimationFrame(step);
+  }
+
+  get playing(): boolean {
+    return this.playTimer !== undefined;
+  }
+
+  /** Years the window moves per step: the chosen value, or the era's unit (1 year today, 100 in antiquity). */
+  private stepYears(): number {
+    if (this.play.step > 0) return this.play.step;
+    const { tStart, tEnd } = this.window;
+    return Math.max(1, Math.round(bucketStep(Math.round((tStart + tEnd) / 2)) / 2));
+  }
+
+  setPlaying(on: boolean): void {
+    clearInterval(this.playTimer);
+    this.playTimer = undefined;
+    if (on) {
+      this.advance();
+      this.playTimer = window.setInterval(() => this.advance(), this.play.delay * 1000);
+    }
+    this.playBtn.classList.toggle('on', on);
+    this.playBtn.setAttribute('aria-label', on ? 'Pause' : 'Lecture');
+    this.playBtn.innerHTML = on
+      ? '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="2.5" width="3" height="11" rx="1"/><rect x="9.5" y="2.5" width="3" height="11" rx="1"/></svg>'
+      : '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z"/></svg>';
+  }
+
+  /** One play step: the window slides forward by the same number of years, with a short glide. */
+  private advance(): void {
+    const { tStart, tEnd } = this.window;
+    const step = this.stepYears();
+    if (tEnd >= MAX_YEAR) {
+      this.setPlaying(false);
+      return;
+    }
+    const d = Math.min(step, MAX_YEAR - tEnd);
+    const fromA = this.a;
+    const fromB = this.b;
+    const toA = yearToPos(tStart + d);
+    const toB = yearToPos(tEnd + d);
+    const start = performance.now();
+    const token = ++this.glide;
+    const ms = Math.min(600, this.play.delay * 400);
+    const tick = () => {
+      if (token !== this.glide) return;
+      const t = Math.min(1, (performance.now() - start) / ms);
+      const e = 1 - (1 - t) ** 3;
+      this.a = fromA + (toA - fromA) * e;
+      this.b = fromB + (toB - fromB) * e;
+      this.commit();
+      if (t < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  private bindPlay(root: HTMLElement): void {
+    const stepSel = root.querySelector<HTMLSelectElement>('.tl-play-step')!;
+    const delaySel = root.querySelector<HTMLSelectElement>('.tl-play-delay')!;
+    stepSel.value = String(this.play.step);
+    delaySel.value = String(this.play.delay);
+    const persist = () => {
+      this.play = { step: Number(stepSel.value), delay: Number(delaySel.value) };
+      try {
+        localStorage.setItem(PLAY_KEY, JSON.stringify(this.play));
+      } catch {
+        /* not remembered */
+      }
+      if (this.playing) this.setPlaying(true); // new cadence right away
+    };
+    stepSel.addEventListener('change', persist);
+    delaySel.addEventListener('change', persist);
+    this.playBtn.addEventListener('click', () => this.setPlaying(!this.playing));
+    document.addEventListener('keydown', (e) => {
+      const t = e.target as HTMLElement;
+      if (e.code !== 'Space' || /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(t.tagName) || t.isContentEditable) return;
+      e.preventDefault();
+      this.setPlaying(!this.playing);
+    });
+    this.setPlaying(false);
   }
 
   setBordersNote(text: string): void {
@@ -157,6 +268,7 @@ export class Timeline {
         this.setRange(p - w / 2, p + w / 2);
       }
       this.glide++; // the user takes over
+      this.setPlaying(false);
       drag = { mode, origin: p, a: this.a, b: this.b };
       this.track.setPointerCapture(e.pointerId);
       e.preventDefault();

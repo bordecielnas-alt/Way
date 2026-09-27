@@ -25,6 +25,10 @@ clé gratuite (Gemini ou Groq), **Tester**, c'est actif tout de suite. Les varia
 [packages/core/providers.default.json](packages/core/providers.default.json)) marchent aussi ; une valeur
 saisie dans les réglages les remplace.
 
+Sur le globe : clic sur un territoire = sa fiche ; nouveau clic dedans = découpage en provinces / duchés
+(limites estimées), et ainsi de suite. ▶ sur la timeline (ou Espace) fait défiler le temps. Sons,
+ouverture au survol et filtre « Pendant ce temps » : Réglages → Interface.
+
 Unraid : voir [infra/unraid/README.md](infra/unraid/README.md). Avec Compose : `docker compose up -d`.
 
 ### Développement local (sans Docker)

@@ -9,15 +9,17 @@ import './style.css';
 import { ScreenSpaceEventType, Cartesian2, BoundingSphere, Cartesian3, Cartographic, Math as CesiumMath, type Entity } from 'cesium';
 import {
   cellsForRect, formatPoiDate, rectAreaKm2, resolutionForArea, CATEGORY_LABELS,
-  type Category, type Door, type ViewMessage,
+  type Category, type Door, type SubdivisionsResponse, type ViewMessage,
 } from '@way/shared';
 import { BordersLayer } from './borders.ts';
 import { Card } from './card.ts';
 import { Connection } from './connection.ts';
+import { contains, divide, type Area, type Region } from './divisions.ts';
 import { Filters, importanceFloor, type Scale } from './filters.ts';
 import { cameraState, createGlobe, restoreCamera, setBasemap, viewRect, type Basemap, type CameraState } from './globe.ts';
 import { PoiLayer } from './markers.ts';
-import { loadSoundSettings, playSound } from './sounds.ts';
+import { fetchCached } from './localcache.ts';
+import { loadUiSettings, playSound } from './sounds.ts';
 import { Timeline, type TimeWindow } from './timeline.ts';
 
 // ---------- persisted per-viewer preferences ----------
@@ -58,6 +60,8 @@ const timeline = new Timeline(timelineEl, saved.window ?? { tStart: -500, tEnd: 
   filters.setCounts(pois.countsInWindow());
   clearTimeout(bordersTimer);
   bordersTimer = window.setTimeout(() => borders.setYear(Math.round((w.tStart + w.tEnd) / 2)), 250);
+  // Regions are those of a year: moving in time folds them back into the territory.
+  if (divisions.length) backToTerritory();
   save({ window: w });
   scheduleSearch();
 });
@@ -106,14 +110,14 @@ const card = new Card(
   document.getElementById('card')!,
   () => {
     pois.select(null);
-    borders.highlight(null);
+    clearTerritory();
   },
   travel,
 );
 
 /** Shows a point's card; the camera only moves on click, not on hover. */
 function showPoi(id: string): void {
-  borders.highlight(null);
+  clearTerritory();
   pois.select(id);
   if (card.currentPoi !== id) void card.open(id);
 }
@@ -122,7 +126,7 @@ function showPoi(id: string): void {
 function travel(door: Door): void {
   const p = door.poi;
   playSound(p.category);
-  borders.highlight(null);
+  clearTerritory();
   pois.upsert([p]);
   pois.select(p.id);
   timeline.glideTo(p.date_start);
@@ -154,11 +158,11 @@ const conn = new Connection({
   },
 });
 
-// Searches start once the camera and timeline have been still for ~800 ms (brief §5.2).
+// Searches start once the camera and timeline have been still for a moment (brief §5.2).
 let searchTimer: number | undefined;
 function scheduleSearch(): void {
   clearTimeout(searchTimer);
-  searchTimer = window.setTimeout(sendView, 800);
+  searchTimer = window.setTimeout(sendView, 450);
 }
 function sendView(): void {
   const rect = viewRect(viewer);
@@ -186,8 +190,10 @@ const handler = viewer.screenSpaceEventHandler;
 // frame, and not at all while a mouse button drags the globe.
 let dragging = false;
 let hoverAt: Cartesian2 | null = null;
-// Resting on a point opens its card (hover intent: passing over it does not).
+// Resting on a point opens its card (hover intent: passing over it does not),
+// when turned on in the Réglages page.
 const HOVER_OPEN_MS = 350;
+let hoverOpen = false;
 let hoverPoi: string | null = null;
 let hoverTimer: number | undefined;
 function hover(): void {
@@ -199,7 +205,7 @@ function hover(): void {
   if ((poi?.id ?? null) !== hoverPoi) {
     hoverPoi = poi?.id ?? null;
     clearTimeout(hoverTimer);
-    if (poi && card.currentPoi !== poi.id) {
+    if (poi && hoverOpen && card.currentPoi !== poi.id) {
       hoverTimer = window.setTimeout(() => {
         if (hoverPoi !== poi.id || dragging) return;
         tooltip.hidden = true;
@@ -264,36 +270,147 @@ function flashHint(at: Cartesian2, text: string): void {
   window.setTimeout(() => (tooltip.hidden = true), 2000);
 }
 
+// ---------- territories: kingdom, then its regions, then theirs ----------
+
+interface Place { key: string; label: string; area: Area; qid: Promise<string | null> | string | null }
+/** Selected chain: a territory of the map, then regions picked inside it. */
+let path: Place[] = [];
+/** divisions[i]: the regions of path[i] (only the deepest level is drawn). */
+let divisions: Region[][] = [];
+let dividing = 0;
+
+const HINT_TERRITORY = 'Cliquez à nouveau dans le territoire pour le découper en provinces.';
+const HINT_REGION = 'Cliquez à nouveau dans la région pour la découper à son tour.';
+const midYear = () => Math.round((timeline.window.tStart + timeline.window.tEnd) / 2);
+
+function clearTerritory(): void {
+  dividing++;
+  path = [];
+  divisions = [];
+  borders.showRegions(null);
+  borders.highlight(null);
+}
+
+/** Folds the regions back: only the territory stays outlined. */
+function backToTerritory(): void {
+  dividing++;
+  divisions = [];
+  path = path.slice(0, 1);
+  borders.showRegions(null);
+  if (path[0]) borders.highlight(path[0].key);
+  card.setHint(HINT_TERRITORY);
+}
+
+/**
+ * A click on land: a territory is outlined and its card opens; a second
+ * click inside it splits it into regions, and so on one level down.
+ */
 function clickTerritory(position: Cartesian2): void {
   // No terrain: the ellipsoid is the ground, and it needs no rendered tile.
   const hit = viewer.camera.pickEllipsoid(position);
-  const name = hit
-    ? (() => {
-        const c = Cartographic.fromCartesian(hit);
-        return borders.territoryAt(CesiumMath.toDegrees(c.longitude), CesiumMath.toDegrees(c.latitude));
-      })()
-    : null;
+  const c = hit ? Cartographic.fromCartesian(hit) : null;
+  const lon = c ? CesiumMath.toDegrees(c.longitude) : 0;
+  const lat = c ? CesiumMath.toDegrees(c.latitude) : 0;
+  // Inside drawn regions (deepest level first).
+  for (let i = c ? divisions.length - 1 : -1; i >= 0; i--) {
+    const region = divisions[i]!.find((r) => contains(r, lon, lat));
+    if (!region) continue;
+    if (path[i + 1]?.key === region.qid && path.length === i + 2) void splitPlace(i + 1, position);
+    else selectRegion(i, region);
+    return;
+  }
+  const name = c ? borders.territoryAt(lon, lat) : null;
   if (!name) {
     // Sea or unclaimed land: a territory card closes, a point's card stays.
     if (card.currentPoi === null) card.close();
     if (hit) flashHint(position, 'Zone sans nom dans la carte historique');
     return;
   }
-  const { tStart, tEnd } = timeline.window;
+  if (path[0]?.key === name) {
+    if (divisions.length === 0 && path.length === 1) void splitPlace(0, position);
+    else {
+      // In the territory but outside its regions (no seat known there): back to the whole.
+      backToTerritory();
+      void card.openPolity({ name }, path[0].label, midYear(), HINT_TERRITORY);
+    }
+    return;
+  }
+  selectTerritory(name);
+}
+
+function selectTerritory(name: string): void {
+  dividing++;
   playSound('territory');
   pois.select(null);
+  borders.showRegions(null);
   borders.highlight(name);
-  void card.openPolity(name, borders.displayName(name), Math.round((tStart + tEnd) / 2));
+  const label = borders.displayName(name);
+  const info = card.openPolity({ name }, label, midYear(), HINT_TERRITORY);
+  path = [{ key: name, label, area: borders.territoryArea(name)!, qid: info.then((i) => i?.qid ?? null) }];
+  divisions = [];
 }
+
+function selectRegion(level: number, region: Region): void {
+  dividing++;
+  playSound('territory');
+  pois.select(null);
+  const deeper = divisions.length > level + 1;
+  path = [...path.slice(0, level + 1), { key: region.qid, label: region.label, area: region, qid: region.qid }];
+  divisions = divisions.slice(0, level + 1);
+  if (deeper) borders.showRegions(divisions[level]!); // back up from a deeper level
+  borders.outline(region);
+  void card.openPolity({ qid: region.qid }, region.label, midYear(), HINT_REGION);
+}
+
+/** Splits the selected place into its regions (Wikidata seats sharing its area). */
+async function splitPlace(level: number, at: Cartesian2): Promise<void> {
+  const place = path[level]!;
+  const token = ++dividing;
+  card.setHint('Recherche des provinces dans Wikidata…');
+  const qid = await place.qid;
+  if (token !== dividing) return;
+  if (!qid) {
+    card.setHint(null);
+    flashHint(at, 'Territoire sans fiche Wikidata : pas de découpage possible');
+    return;
+  }
+  const year = midYear();
+  const apply = (res: SubdivisionsResponse) => {
+    if (token !== dividing) return;
+    // The territory's shape follows the border snapshot of the moment.
+    const area = level === 0 ? (borders.territoryArea(place.key) ?? place.area) : place.area;
+    const regions = divide(area, res.items);
+    if (regions.length < 2) {
+      card.setHint('Aucune subdivision connue dans Wikidata à cette date.');
+      return;
+    }
+    const fresh = divisions.length !== level + 1;
+    divisions = [...divisions.slice(0, level), regions];
+    path = path.slice(0, level + 1);
+    borders.showRegions(regions);
+    if (fresh) playSound('polity');
+    card.setHint(`${regions.length} régions aux limites estimées d’après leurs chefs-lieux. Cliquez sur l’une d’elles pour sa fiche.`);
+  };
+  try {
+    await fetchCached<SubdivisionsResponse>(`/api/polity/subdivisions?${new URLSearchParams({ qid, year: String(year) })}`, apply);
+  } catch {
+    if (token === dividing) card.setHint('Wikidata ne répond pas pour le moment : réessayez dans un instant.');
+  }
+}
+
 // Cesium's default double-click tracks entities: not wanted here.
 handler.removeInputAction(ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
 
 // ---------- start ----------
 renderStatus();
-// Sound preference is set in the Réglages page: re-read when coming back to the globe.
-void loadSoundSettings();
+// Preferences are set in the Réglages page: re-read when coming back to the globe.
+const applyUi = async () => {
+  const ui = await loadUiSettings();
+  if (ui) hoverOpen = ui.hoverOpen;
+};
+void applyUi();
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') void loadSoundSettings();
+  if (document.visibilityState === 'visible') void applyUi();
 });
 await borders.init();
 borders.setCameraHeight(viewer.camera.positionCartographic.height);

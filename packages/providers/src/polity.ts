@@ -220,3 +220,89 @@ SELECT ?person ?personLabel ?office ?officeLabel ?s ?e ?img WHERE {
     rulers: rulerRows,
   };
 }
+
+export interface SubdivisionRow {
+  qid: string;
+  labelFr: string | null;
+  labelEn: string | null;
+  sitelinks: number;
+  /** English labels of its classes. */
+  classes: string[];
+  lat: number | null;
+  lon: number | null;
+  /** Inception / dissolution, and the validity qualifiers of the link to the parent. */
+  starts: number[];
+  ends: number[];
+  linkStarts: number[];
+  linkEnds: number[];
+  /** Items it is itself located in (to keep only the top level). */
+  parents: string[];
+}
+
+const point = (w: string | undefined) => (w ? /^Point\(([-\d.eE]+) ([-\d.eE]+)\)$/.exec(w.trim()) : null);
+
+/**
+ * Regions of a territory, as Wikidata links them: located in it (P131),
+ * listed as its subdivisions (P150), in it as a country (P17), or part of
+ * it (P361). Four simple queries: their UNION times out on big states.
+ */
+export async function subdivisions(qid: string): Promise<SubdivisionRow[]> {
+  const patterns = [
+    `?sub p:P131 ?st . ?st ps:P131 wd:${qid} .`,
+    `wd:${qid} p:P150 ?st . ?st ps:P150 ?sub .`,
+    `?sub p:P17 ?st . ?st ps:P17 wd:${qid} .`,
+    `?sub p:P361 ?st . ?st ps:P361 wd:${qid} .`,
+  ];
+  // One row per combination of optional facts: WDQS plans this shape well
+  // (about 2 s), where a UNION of facts around a subquery takes a minute.
+  const query = (pattern: string) => `
+SELECT ?sub ?sl ?cl ?coord ?cap ?s ?e ?ls ?le ?up ?lf ?len WHERE {
+  ${pattern}
+  ?sub wikibase:sitelinks ?sl .
+  OPTIONAL { ?st pq:P580 ?ls } OPTIONAL { ?st pq:P582 ?le }
+  OPTIONAL { ?sub wdt:P31 ?c . ?c rdfs:label ?cl . FILTER(LANG(?cl) = "en") }
+  OPTIONAL { ?sub wdt:P625 ?coord }
+  OPTIONAL { ?sub wdt:P36/wdt:P625 ?cap }
+  OPTIONAL { ?sub wdt:P571 ?s } OPTIONAL { ?sub wdt:P576 ?e }
+  OPTIONAL { ?sub wdt:P131 ?up }
+  OPTIONAL { ?sub rdfs:label ?lf . FILTER(LANG(?lf) = "fr") }
+  OPTIONAL { ?sub rdfs:label ?len . FILTER(LANG(?len) = "en") }
+} LIMIT 20000`;
+  // A list that times out (the Ottoman Empire as a "country" of thousands of items) is left out.
+  const results = await Promise.all(patterns.map((p) => sparql(query(p), 20_000).catch(() => null)));
+  if (results.every((r) => r === null)) throw new Error(`subdivisions of ${qid}: every query failed`);
+  const byId = new Map<string, SubdivisionRow & { capLat: number | null; capLon: number | null }>();
+  const push = (arr: number[], v: string | undefined) => {
+    const y = v ? parseYear(v) : null;
+    if (y !== null && !arr.includes(y)) arr.push(y);
+  };
+  for (const b of results.flatMap((r) => r ?? [])) {
+    const id = qidOf(b.sub!.value);
+    let s = byId.get(id);
+    if (!s) {
+      s = {
+        qid: id, labelFr: null, labelEn: null, sitelinks: Number(b.sl?.value ?? 0), classes: [], lat: null, lon: null,
+        capLat: null, capLon: null, starts: [], ends: [], linkStarts: [], linkEnds: [], parents: [],
+      };
+      byId.set(id, s);
+    }
+    const cl = b.cl?.value;
+    if (cl && !s.classes.includes(cl)) s.classes.push(cl);
+    const m = point(b.coord?.value);
+    if (m) { s.lon = Number(m[1]); s.lat = Number(m[2]); }
+    const cm = point(b.cap?.value);
+    if (cm) { s.capLon = Number(cm[1]); s.capLat = Number(cm[2]); }
+    push(s.starts, b.s?.value);
+    push(s.ends, b.e?.value);
+    push(s.linkStarts, b.ls?.value);
+    push(s.linkEnds, b.le?.value);
+    const up = b.up?.value ? qidOf(b.up.value) : null;
+    if (up && !s.parents.includes(up)) s.parents.push(up);
+    if (b.lf?.value) s.labelFr = b.lf.value;
+    if (b.len?.value) s.labelEn = b.len.value;
+  }
+  // Without coordinates of its own, a region is placed at its capital.
+  return [...byId.values()].map(({ capLat, capLon, ...s }) =>
+    s.lat === null && capLat !== null ? { ...s, lat: capLat, lon: capLon } : s,
+  );
+}

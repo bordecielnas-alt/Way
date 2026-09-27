@@ -6,7 +6,7 @@ import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { ClientMessage, type ServerMessage } from '@way/shared';
 import {
-  createPolities, createRouter, createSettings, createStore, DEFAULT_UI, devDir, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
+  createPolities, createRouter, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, snapshotFor, type JobBus,
 } from '@way/core';
 import { Auth, COOKIE, readCookie } from './auth.ts';
 import { ViewService, type View } from './views.ts';
@@ -18,7 +18,7 @@ const router = createRouter(cfg, settings);
 const auth = new Auth(join(cfg.dataDir ?? devDir, 'auth.json'));
 const bus: JobBus = cfg.redisUrl ? new RedisBus(cfg.redisUrl) : new InlineBus(store, cfg, router);
 const views = new ViewService(store, bus, cfg);
-const doors = new DoorService(store);
+const doors = new DoorService(store, () => normalizeUi(settings.get().ui).meanwhileMaxSpan);
 const polities = createPolities(cfg);
 const mode = {
   store: cfg.databaseUrl ? 'postgres' : cfg.dataDir ? 'embedded-postgres' : 'memory',
@@ -110,7 +110,7 @@ function settingsView() {
     level2: { enabled: router.enabled, source: saved.level2 === undefined ? 'env' : 'settings' },
     variables,
     providers: router.status(),
-    ui: saved.ui ?? DEFAULT_UI,
+    ui: normalizeUi(saved.ui),
   };
 }
 
@@ -120,7 +120,12 @@ const SettingsBody = z.object({
   level2: z.boolean().nullable().optional(),
   env: z.record(z.string(), z.string().max(500).nullable()).optional(),
   disabled: z.array(z.string()).optional(),
-  ui: z.object({ sounds: z.boolean(), volume: z.number().min(0).max(1) }).optional(),
+  ui: z.object({
+    sounds: z.boolean(),
+    volume: z.number().min(0).max(1),
+    hoverOpen: z.boolean(),
+    meanwhileMaxSpan: z.number().int().min(0).max(10000),
+  }).partial().optional(),
 });
 app.put('/api/settings', async (req, reply) => {
   const body = SettingsBody.safeParse(req.body);
@@ -128,7 +133,8 @@ app.put('/api/settings', async (req, reply) => {
   const allowed = new Set(router.variables());
   const ids = new Set(router.status().map((p) => p.id));
   const cur = settings.get();
-  const next = { level2: cur.level2, env: { ...cur.env }, disabled: [...cur.disabled], ui: body.data.ui ?? cur.ui };
+  const ui = body.data.ui ? normalizeUi({ ...normalizeUi(cur.ui), ...body.data.ui }) : cur.ui;
+  const next = { level2: cur.level2, env: { ...cur.env }, disabled: [...cur.disabled], ui };
   if (body.data.level2 !== undefined) next.level2 = body.data.level2 ?? undefined;
   for (const [name, value] of Object.entries(body.data.env ?? {})) {
     if (!allowed.has(name)) return reply.code(400).send({ error: `variable inconnue : ${name}` });
@@ -181,11 +187,29 @@ app.get<{ Params: { id: string } }>('/api/poi/:id/doors', async (req, reply) => 
 });
 
 // Kingdom card: the territory's name in the snapshot and the timeline year.
-const PolityQuery = z.object({ name: z.string().min(1).max(200), year: z.coerce.number().int().min(-10000).max(2100) });
+// A region picked inside a territory is asked by its Wikidata item instead.
+const Year = z.coerce.number().int().min(-10000).max(2100);
+const Qid = z.string().regex(/^Q\d{1,12}$/);
+const PolityQuery = z.union([
+  z.object({ qid: Qid, year: Year }),
+  z.object({ name: z.string().min(1).max(200), year: Year }),
+]);
 app.get('/api/polity', async (req, reply) => {
   const q = PolityQuery.safeParse(req.query);
   if (!q.success) return reply.code(400).send({ error: 'requête invalide' });
-  return polities.info(q.data.name, q.data.year);
+  return 'qid' in q.data ? polities.infoById(q.data.qid, q.data.year) : polities.info(q.data.name, q.data.year);
+});
+
+// Regions of a territory (duchies, provinces, counties) at a year, placed at their seats.
+app.get('/api/polity/subdivisions', async (req, reply) => {
+  const q = z.object({ qid: Qid, year: Year }).safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: 'requête invalide' });
+  try {
+    return await polities.subdivisions(q.data.qid, q.data.year);
+  } catch (e) {
+    req.log.warn(`subdivisions of ${q.data.qid} failed: ${(e as Error).message}`);
+    return reply.code(503).send({ error: 'Wikidata ne répond pas pour le moment.' });
+  }
 });
 
 // French names for the territories of the snapshot shown at `year`.
@@ -196,7 +220,7 @@ app.get<{ Querystring: { year?: string } }>('/api/polity/labels', async (req, re
 });
 
 // Interface preferences shared by every viewer (set in the Réglages page).
-app.get('/api/ui', async () => settings.get().ui ?? DEFAULT_UI);
+app.get('/api/ui', async () => normalizeUi(settings.get().ui));
 
 app.get<{ Querystring: { year?: string } }>('/api/borders', async (req, reply) => {
   const snapshots = listSnapshots(cfg.bordersDir);

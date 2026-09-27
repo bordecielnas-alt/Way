@@ -41,3 +41,21 @@ export interface PolityLabels {
   /** Names still being looked up. */
   pending: number;
 }
+
+/** A region inside a territory (duchy, province, county...), placed at its seat. */
+export interface SubdivisionItem {
+  qid: string;
+  label: string;
+  /** What kind of region, in English as Wikidata names it ("duchy", "satrapy of the Achaemenid Empire"). */
+  kind: string | null;
+  lat: number;
+  lon: number;
+  start: number | null;
+  end: number | null;
+}
+
+export interface SubdivisionsResponse {
+  qid: string;
+  year: number;
+  items: SubdivisionItem[];
+}

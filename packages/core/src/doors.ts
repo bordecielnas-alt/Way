@@ -14,7 +14,7 @@ import type { Store, StoredDoors } from './store/types.ts';
 //  - surprise:  a lesser-known place nearby, of another kind.
 
 /** Bump when the choice logic changes: cached doors are recomputed. */
-const DOORS_VERSION = 4;
+const DOORS_VERSION = 5;
 /** "Here" means close: dense cities hold hundreds of dated entities within a few km. */
 const HERE_KM = 8;
 /** Wider "here" for empty surroundings (a naval battle, a remote site). */
@@ -120,6 +120,11 @@ export function surpriseCandidates(poi: Poi, rows: DatedRow[], exclude: Set<stri
     }));
 }
 
+/** Years an event lasts (0 for a dated point). */
+export function spanYears(p: Pick<Poi, 'date_start' | 'date_end'>): number {
+  return p.date_end === null ? 0 : astroDiff(p.date_start, p.date_end);
+}
+
 /** Window around a POI's start for "meanwhile": wider in antiquity, where dates are coarser. */
 export function meanwhileRange(poi: Poi): [number, number] {
   const span = Math.max(1, Math.round(bucketStep(poi.date_start) / 2));
@@ -143,11 +148,13 @@ interface Progress {
 export class DoorService {
   private inflight = new Map<string, Progress>();
 
-  constructor(private store: Store) {}
+  /** `maxSpan`: "meanwhile" ignores events lasting longer (a century-long war says little about a moment). */
+  constructor(private store: Store, private maxSpan: () => number = () => 20) {}
 
   async get(id: string): Promise<DoorsResponse | null> {
     const cached = await this.store.getDoors(id);
-    if (cached && cached.v === DOORS_VERSION) {
+    // Doors chosen under another span limit are chosen again.
+    if (cached && cached.v === DOORS_VERSION && (cached.span ?? 20) === this.maxSpan()) {
       const doors = await this.resolveStored(cached);
       if (doors) return { doors, pending: [] };
     }
@@ -166,7 +173,8 @@ export class DoorService {
   warm(poi: Poi): void {
     if (this.inflight.has(poi.id)) return;
     void this.store.getDoors(poi.id).then((c) => {
-      if ((!c || c.v !== DOORS_VERSION) && !this.inflight.has(poi.id)) this.start(poi);
+      const stale = !c || c.v !== DOORS_VERSION || (c.span ?? 20) !== this.maxSpan();
+      if (stale && !this.inflight.has(poi.id)) this.start(poi);
     });
   }
 
@@ -226,6 +234,7 @@ export class DoorService {
       if (failed) return; // try again next time rather than caching a gap
       const stored: StoredDoors = {
         v: DOORS_VERSION,
+        span: this.maxSpan(),
         doors: DOOR_KINDS.flatMap((k) => {
           const d = doors.get(k);
           return d ? [{ kind: k, title: d.title, hint: d.hint, poi_id: d.poi.id }] : [];
@@ -262,22 +271,27 @@ export class DoorService {
   private async meanwhile(poi: Poi, taken: Taken): Promise<Door | null> {
     const [t0, t1] = meanwhileRange(poi);
     const far = (p: { lat: number; lon: number }) => distanceKm(poi, p) >= ELSEWHERE_KM;
+    const maxSpan = this.maxSpan();
+    const brief = (p: Pick<Poi, 'date_start' | 'date_end'>) => spanYears(p) <= maxSpan;
     // The cache usually knows the era already (global searches fill it).
-    const known = (await this.store.queryTimeRange(t0, t1, 300)).filter((p) => far(p) && !taken.ids.has(p.id)).slice(0, 12);
+    const known = (await this.store.queryTimeRange(t0, t1, 300))
+      .filter((p) => far(p) && brief(p) && !taken.ids.has(p.id))
+      .slice(0, 12);
     if (known.length > 0) {
       const dest = known[hash(poi.id) % known.length]!;
       taken.ids.add(dest.id);
       return { kind: 'meanwhile', title: 'Pendant ce temps', hint: formatDistance(poi, dest), poi: dest };
     }
+    // Spans are only known once materialized: take more candidates than needed.
     const rows = (await wikidata.queryGlobal(t0, t1 + 1, 10, 150))
       .filter(far)
-      .slice(0, 12)
+      .slice(0, 24)
       .sort((a, b) => hash(poi.id + a.qid) - hash(poi.id + b.qid));
-    const cands = rows.slice(0, CANDIDATES).map((row) => ({
+    const cands = rows.slice(0, CANDIDATES * 2).map((row) => ({
       row,
       title: () => 'Pendant ce temps',
       hint: (dest: Poi) => formatDistance(poi, dest),
     }));
-    return this.pick('meanwhile', cands, taken);
+    return this.pick('meanwhile', cands, taken, { accept: brief });
   }
 }

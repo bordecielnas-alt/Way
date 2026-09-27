@@ -12,13 +12,34 @@ export interface SettingsData {
   env: Record<string, string>;
   /** Provider ids turned off by hand. */
   disabled: string[];
-  /** Interface: click sounds. */
+  /** Interface and exploration preferences. */
   ui?: UiSettings;
 }
 
-export interface UiSettings { sounds: boolean; volume: number }
+export interface UiSettings {
+  sounds: boolean;
+  volume: number;
+  /** Resting the pointer on a point opens its card. */
+  hoverOpen: boolean;
+  /** "Pendant ce temps" skips events spanning more years than this. */
+  meanwhileMaxSpan: number;
+}
 
-export const DEFAULT_UI: UiSettings = { sounds: true, volume: 0.6 };
+export const DEFAULT_UI: UiSettings = { sounds: true, volume: 0.6, hoverOpen: false, meanwhileMaxSpan: 20 };
+
+/** Fills missing or invalid fields with defaults (older settings files, partial updates). */
+export function normalizeUi(raw: Partial<UiSettings> | undefined): UiSettings {
+  const u: Partial<UiSettings> = raw && typeof raw === 'object' ? raw : {};
+  return {
+    sounds: typeof u.sounds === 'boolean' ? u.sounds : DEFAULT_UI.sounds,
+    volume: typeof u.volume === 'number' ? Math.min(1, Math.max(0, u.volume)) : DEFAULT_UI.volume,
+    hoverOpen: typeof u.hoverOpen === 'boolean' ? u.hoverOpen : DEFAULT_UI.hoverOpen,
+    meanwhileMaxSpan:
+      typeof u.meanwhileMaxSpan === 'number' && u.meanwhileMaxSpan >= 0
+        ? Math.round(u.meanwhileMaxSpan)
+        : DEFAULT_UI.meanwhileMaxSpan,
+  };
+}
 
 const RELOAD_MS = 3000;
 
@@ -61,12 +82,7 @@ export class SettingsFile {
         level2: typeof raw.level2 === 'boolean' ? raw.level2 : undefined,
         env: Object.fromEntries(Object.entries(raw.env ?? {}).filter(([, v]) => typeof v === 'string' && v)),
         disabled: Array.isArray(raw.disabled) ? raw.disabled.filter((x) => typeof x === 'string') : [],
-        ui: raw.ui && typeof raw.ui === 'object'
-          ? {
-              sounds: typeof raw.ui.sounds === 'boolean' ? raw.ui.sounds : DEFAULT_UI.sounds,
-              volume: typeof raw.ui.volume === 'number' ? Math.min(1, Math.max(0, raw.ui.volume)) : DEFAULT_UI.volume,
-            }
-          : undefined,
+        ui: raw.ui ? normalizeUi(raw.ui) : undefined,
       };
       this.mtime = mtime;
     } catch (e) {

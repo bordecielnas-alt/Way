@@ -12,6 +12,8 @@ const DONE_CHANNEL = 'way:keys-done';
 /** Job transport between the API (producer) and the search pipeline (consumer). */
 export interface JobBus {
   enqueue(jobs: SearchJob[]): Promise<void>;
+  /** Low-priority searches (the periods next to the view), run only when nothing else waits. */
+  prefetch(jobs: SearchJob[]): Promise<void>;
   onKeysDone(cb: (keys: string[]) => void): void;
   stats(): Promise<{ waiting: number; active: number }>;
   close(): Promise<void>;
@@ -42,6 +44,9 @@ function describe(job: SearchJob): string {
 
 interface Lane { queue: SearchJob[]; active: number; concurrency: number }
 
+/** Prefetch jobs kept at most; older guesses are dropped for newer ones. */
+const PREFETCH_MAX = 24;
+
 /**
  * In-process queue, newest first (the current view wins). Level-2 jobs run
  * in their own lane, one at a time, so they never delay level 1.
@@ -49,6 +54,7 @@ interface Lane { queue: SearchJob[]; active: number; concurrency: number }
 export class InlineBus implements JobBus {
   private fast: Lane;
   private deep: Lane = { queue: [], active: 0, concurrency: 1 };
+  private idle: Lane = { queue: [], active: 0, concurrency: 1 };
   private events = new EventEmitter();
 
   constructor(private store: Store, private cfg: Config, private router?: ProviderRouter) {
@@ -61,20 +67,41 @@ export class InlineBus implements JobBus {
     this.pump(this.deep);
   }
 
+  async prefetch(jobs: SearchJob[]): Promise<void> {
+    this.idle.queue.push(...[...jobs].reverse());
+    if (this.idle.queue.length > PREFETCH_MAX) this.idle.queue.splice(0, this.idle.queue.length - PREFETCH_MAX);
+    this.pump(this.idle);
+  }
+
   private pump(lane: Lane): void {
+    // Prefetching waits until the searches someone is looking at are done.
+    if (lane === this.idle && (this.fast.queue.length > 0 || this.fast.active >= this.fast.concurrency)) return;
     while (lane.active < lane.concurrency && lane.queue.length > 0) {
       const job = lane.queue.pop()!;
       lane.active++;
-      runAndRecord(job, this.store, this.cfg, this.router)
+      const run = lane === this.idle ? this.runPrefetch(job) : runAndRecord(job, this.store, this.cfg, this.router);
+      run
         .then(({ keys, followUp }) => {
           if (followUp) void this.enqueue([followUp]);
-          this.events.emit('done', keys);
+          if (keys.length) this.events.emit('done', keys);
         })
         .finally(() => {
           lane.active--;
           this.pump(lane);
+          if (lane === this.fast) this.pump(this.idle);
         });
     }
+  }
+
+  /** Skips a guess the view has caught up with (searched or being searched since). */
+  private async runPrefetch(job: SearchJob): Promise<{ keys: string[]; followUp?: SearchJob }> {
+    const keys = jobKeys(job);
+    const known = await this.store.getKeys(keys);
+    if (keys.every((k) => known.has(k))) return { keys: [] };
+    await this.store.setKeys(keys.filter((k) => !known.has(k)), 'pending');
+    // No level 2 for guesses: it costs quota.
+    const { keys: done } = await runAndRecord(job, this.store, this.cfg);
+    return { keys: done };
   }
 
   onKeysDone(cb: (keys: string[]) => void): void {
@@ -85,6 +112,7 @@ export class InlineBus implements JobBus {
     return {
       waiting: this.fast.queue.length + this.deep.queue.length,
       active: this.fast.active + this.deep.active,
+      prefetch: { waiting: this.idle.queue.length, active: this.idle.active },
       level2: { waiting: this.deep.queue.length, active: this.deep.active },
     };
   }
@@ -92,6 +120,7 @@ export class InlineBus implements JobBus {
   async close(): Promise<void> {
     this.fast.queue = [];
     this.deep.queue = [];
+    this.idle.queue = [];
   }
 }
 
@@ -123,6 +152,13 @@ export class RedisBus implements JobBus {
         data,
         opts: { lifo: true, removeOnComplete: 500, removeOnFail: 500 },
       })),
+    );
+  }
+
+  async prefetch(jobs: SearchJob[]): Promise<void> {
+    // BullMQ serves lower priority numbers first; plain jobs have none, so they come before these.
+    await this.queue.addBulk(
+      jobs.map((data) => ({ name: data.kind, data, opts: { priority: 100, removeOnComplete: 500, removeOnFail: 500 } })),
     );
   }
 

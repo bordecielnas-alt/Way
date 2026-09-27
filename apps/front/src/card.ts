@@ -3,6 +3,7 @@ import {
   type PolityInfo, type PolityRulerInfo,
 } from '@way/shared';
 import { CATEGORY_COLORS } from './icons.ts';
+import { fetchCached } from './localcache.ts';
 
 const CONFIDENCE: Record<Poi['confidence'], { icon: string; label: string; title: string }> = {
   verified: { icon: '✓', label: 'Vérifié', title: 'Fait confirmé par Wikidata et Wikipédia' },
@@ -50,6 +51,8 @@ export class Card {
   private prefetched = new Map<string, Poi>();
   /** POI shown, or null for a territory or a closed panel. */
   private shown: string | null = null;
+  /** Territory card: what another click on the map will do. */
+  private hint: string | null = null;
 
   get currentPoi(): string | null {
     return this.root.hidden ? null : this.shown;
@@ -96,17 +99,26 @@ export class Card {
   }
 
   /** Card of a territory clicked on the map, at the timeline's year. */
-  async openPolity(name: string, shownName: string, year: number): Promise<void> {
+  /**
+   * Card of a territory clicked on the map (`name` in the border snapshot),
+   * or of a region inside one (`qid` known). Shown from the browser cache at
+   * once when possible, then refreshed. Resolves with the card's facts.
+   */
+  async openPolity(
+    target: { name: string } | { qid: string }, shownName: string, year: number, hint: string | null = null,
+  ): Promise<PolityInfo | null> {
     const token = ++this.token;
+    const region = 'qid' in target;
+    this.hint = hint;
     this.shown = null;
     this.root.hidden = false;
     document.body.classList.add('card-open');
     this.root.innerHTML = `
       <button class="card-close" type="button" aria-label="Fermer">×</button>
       <div class="card-scroll"><div class="card-body">
-        <div class="card-kicker"><span class="card-cat">Territoire en ${esc(formatYear(year))}</span></div>
+        <div class="card-kicker"><span class="card-cat">${region ? 'Région' : 'Territoire'} en ${esc(formatYear(year))}</span></div>
         <h2 class="card-title">${esc(shownName)}</h2>
-        <div class="card-summary-note">Recherche du royaume et de son dirigeant dans Wikidata…</div>
+        <div class="card-summary-note">${region ? 'Recherche de la région' : 'Recherche du royaume'} et de son dirigeant dans Wikidata…</div>
         <div class="skeleton" style="height:56px;margin-top:18px"></div>
         ${'<div class="skeleton" style="height:14px;margin-top:10px"></div>'.repeat(5)}
       </div></div>`;
@@ -115,21 +127,37 @@ export class Card {
       const note = token === this.token ? this.root.querySelector('.card-summary-note') : null;
       if (note) note.textContent = 'Wikidata est très sollicité et demande de patienter un peu…';
     }, 12_000);
+    const params = new URLSearchParams({ ...target, year: String(year) });
     try {
-      const r = await fetch(`/api/polity?${new URLSearchParams({ name, year: String(year) })}`);
-      if (!r.ok) throw new Error(String(r.status));
-      const info = (await r.json()) as PolityInfo;
-      if (token === this.token) this.renderPolity(info, shownName);
+      return await fetchCached<PolityInfo>(`/api/polity?${params}`, (info) => {
+        if (token !== this.token) return;
+        clearTimeout(slow);
+        const scroll = this.root.querySelector('.card-scroll')?.scrollTop ?? 0;
+        this.renderPolity(info, shownName, region);
+        this.root.querySelector('.card-scroll')!.scrollTop = scroll; // a background refresh does not jump
+      });
     } catch {
-      if (token !== this.token) return;
-      this.root.querySelector('.card-summary-note')!.textContent = 'Impossible de charger cette fiche pour le moment.';
-      this.root.querySelectorAll('.skeleton').forEach((el) => el.remove());
+      if (token === this.token) {
+        this.root.querySelector('.card-summary-note')!.textContent = 'Impossible de charger cette fiche pour le moment.';
+        this.root.querySelectorAll('.skeleton').forEach((el) => el.remove());
+      }
+      return null;
     } finally {
       clearTimeout(slow);
     }
   }
 
-  private renderPolity(p: PolityInfo, shownName: string): void {
+  /** Replaces the card's hint line (what another click will do). */
+  setHint(text: string | null): void {
+    this.hint = text;
+    const el = this.root.querySelector<HTMLElement>('.polity-hint');
+    if (!el) return;
+    el.hidden = !text;
+    el.textContent = text ?? '';
+  }
+
+  private renderPolity(p: PolityInfo, shownName: string, region: boolean): void {
+    const hint = this.hint;
     const span = p.start !== null || p.end !== null
       ? `${p.start !== null ? formatYear(p.start) : '?'} – ${p.end !== null ? formatYear(p.end) : 'aujourd’hui'}`
       : '';
@@ -158,8 +186,9 @@ export class Card {
         ${image}
         <div class="card-body">
           <div class="card-kicker">
-            <span class="card-cat"><i style="background:#b18be0"></i>${esc(p.kind ?? 'Territoire')}</span>
+            <span class="card-cat"><i style="background:#b18be0"></i>${esc(p.kind ?? (region ? 'Région' : 'Territoire'))}</span>
           </div>
+          <div class="polity-hint" ${hint ? '' : 'hidden'}>${esc(hint ?? '')}</div>
           <div class="polity-head">
             <h2 class="card-title">${esc(p.qid ? p.title : shownName)}</h2>
             ${p.emblem ? `<img class="polity-emblem" alt="" src="${esc(p.emblem)}" referrerpolicy="no-referrer">` : ''}
@@ -176,7 +205,9 @@ export class Card {
               .map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a></li>`)
               .join('')}
               <li><a href="https://github.com/aourednik/historical-basemaps" target="_blank" rel="noopener">Frontières : historical-basemaps</a></li></ul>
-            <div class="card-summary-note">Frontières approximatives.${p.qid ? ` Le territoire « ${esc(p.name)} » de la carte est relié à Wikidata automatiquement : vérifiez les sources.` : ''}</div>
+            <div class="card-summary-note">${region
+              ? 'Limites de la région estimées : le territoire est partagé entre les chefs-lieux connus de Wikidata, chaque lieu revenant au plus proche.'
+              : `Frontières approximatives.${p.qid ? ` Le territoire « ${esc(p.name)} » de la carte est relié à Wikidata automatiquement : vérifiez les sources.` : ''}`}</div>
           </div>
         </div>
       </div>`;
@@ -231,7 +262,7 @@ export class Card {
           ${p.description ? `<div class="card-desc">${esc(p.description)}</div>` : ''}
           ${summary}
           <div class="card-section doors" hidden>
-            <div class="card-section-title">Continuer la balade</div>
+            <div class="card-section-title">Continuer l’exploration</div>
             <div class="door-list"></div>
           </div>
           <div class="card-section">

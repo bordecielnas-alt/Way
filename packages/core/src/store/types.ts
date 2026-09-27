@@ -10,6 +10,8 @@ export interface KeyRecord {
 /** Doors cached on a POI (`related` column): destinations by id, and kinds searched without result. */
 export interface StoredDoors {
   v: number;
+  /** "Meanwhile" span limit in force when chosen. */
+  span?: number;
   doors: { kind: DoorKind; title: string; hint: string; poi_id: string }[];
   empty: DoorKind[];
 }

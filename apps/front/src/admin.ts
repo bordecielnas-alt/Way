@@ -34,8 +34,10 @@ interface SettingsResponse {
   level2: { enabled: boolean; source: 'settings' | 'env' };
   variables: Record<string, Variable>;
   providers: ProviderStatus[];
-  ui: { sounds: boolean; volume: number };
+  ui: UiPrefs;
 }
+
+interface UiPrefs { sounds: boolean; volume: number; hoverOpen: boolean; meanwhileMaxSpan: number }
 
 interface AdminResponse {
   mode: { store: string; queue: string };
@@ -402,6 +404,8 @@ function renderUi(): void {
   $<HTMLInputElement>('sounds').checked = ui.sounds;
   $<HTMLInputElement>('volume').value = String(ui.volume);
   $('volume-value').textContent = percent(ui.volume);
+  $<HTMLInputElement>('hover-open').checked = ui.hoverOpen;
+  $<HTMLInputElement>('meanwhile-span').value = String(ui.meanwhileMaxSpan);
   $('sound-list').innerHTML = SOUND_KINDS.map(
     ([k, label, color]) => `<button type="button" class="ghost" data-sound="${k}"><i style="background:${color}"></i>${esc(label)}</button>`,
   ).join('');
@@ -410,7 +414,13 @@ function renderUi(): void {
 let uiTimer: number | undefined;
 /** Interface preferences save on their own, a moment after the last change. */
 function saveUi(): void {
-  const ui = { sounds: $<HTMLInputElement>('sounds').checked, volume: Number($<HTMLInputElement>('volume').value) };
+  const span = Number($<HTMLInputElement>('meanwhile-span').value);
+  const ui: UiPrefs = {
+    sounds: $<HTMLInputElement>('sounds').checked,
+    volume: Number($<HTMLInputElement>('volume').value),
+    hoverOpen: $<HTMLInputElement>('hover-open').checked,
+    meanwhileMaxSpan: Number.isFinite(span) && span >= 0 ? Math.min(10000, Math.round(span)) : current!.ui.meanwhileMaxSpan,
+  };
   configureSounds(ui);
   $('volume-value').textContent = percent(ui.volume);
   clearTimeout(uiTimer);
@@ -427,6 +437,8 @@ function saveUi(): void {
 
 $('sounds').addEventListener('change', saveUi);
 $('volume').addEventListener('input', saveUi);
+$('hover-open').addEventListener('change', saveUi);
+$('meanwhile-span').addEventListener('change', saveUi);
 $('sound-list').addEventListener('click', (e) => {
   const kind = (e.target as HTMLElement).closest<HTMLElement>('[data-sound]')?.dataset.sound as SoundKind | undefined;
   if (kind) playSound(kind, { force: true });

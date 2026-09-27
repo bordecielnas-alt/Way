@@ -1,7 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { coolingUntil, polity, wikipedia, type PolityCandidate, type PolityDetails } from '@way/providers';
-import type { PolityInfo, PolityLabels, PolityRulerInfo } from '@way/shared';
+import {
+  background, coolingUntil, interactive, polity, wikipedia, type PolityCandidate, type PolityDetails, type SubdivisionRow,
+} from '@way/providers';
+import type { PolityInfo, PolityLabels, PolityRulerInfo, SubdivisionItem, SubdivisionsResponse } from '@way/shared';
 import { listSnapshots, snapshotFor } from './borders.ts';
 
 // Kingdoms and empires clicked on the map (and their names on it). The
@@ -22,18 +24,80 @@ const MATCH = 6;
 /** Above this, the French name replaces the English one on the map. */
 const CONFIDENT = 10;
 const FAILED_RETRY_MS = 3_600_000;
+/**
+ * Cached cards and region lists are served at once; past this age they are
+ * fetched again in the background, and replaced if Wikidata changed.
+ */
+const REFRESH_MS = 14 * 86_400_000;
+/** Names that matched nothing are tried again after this (Wikidata grows). */
+const MISS_RETRY_MS = 7 * 86_400_000;
 /** Pause between background lookups: map names are a nicety, Wikimedia's patience is not. */
 const BACKGROUND_GAP_MS = 1500;
 const HOSTS = ['www.wikidata.org', 'query.wikidata.org', 'en.wikipedia.org', 'fr.wikipedia.org'];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-interface Resolution { qid: string | null; score: number; labelFr: string | null; labelEn?: string | null }
+interface Resolution { qid: string | null; score: number; labelFr: string | null; labelEn?: string | null; at?: number; v?: number }
+/** Bump when matching changes: older matches are looked up again. */
+const MATCH_VERSION = 2;
 interface CachedDetails extends PolityDetails {
   summary: { text: string; lang: string; url: string; title: string } | null;
+  at?: number;
 }
-interface CacheFile { resolutions: Record<string, Resolution>; details: Record<string, CachedDetails> }
+interface CachedSubdivisions { at: number; rows: SubdivisionRow[] }
+interface CacheFile {
+  resolutions: Record<string, Resolution>;
+  details: Record<string, CachedDetails>;
+  subdivisions: Record<string, CachedSubdivisions>;
+}
 
 const range = (xs: number[], pick: (...v: number[]) => number) => (xs.length ? pick(...xs) : null);
+
+// ---------- regions inside a territory ----------
+
+/** Class names of regions (English, as Wikidata labels them). */
+const REGION = /\b(provinces?|duch(y|ies)|county|counties|countship|eyalet|vilayet|satrap\w*|regions?|principalit(y|ies)|principate|margraviate|landgraviate|theme|governorate|voivodeship|oblast|shire|earldom|march|prefecture|commandery|lordship|seigneury|states?|kingdom|electorate|bishopric|hochstift|imperial city|imperial abbey|circle|district|department|canton|territory|emirate|beylik|sanjak|khanate|viceroyalty|captaincy|intendancy|bailiwick|seneschalty|fief|barony|viscount\w*|marquisate|colony|protectorate|historical country|administrative territorial entity|dependency|vassal|nome|realm|appanage)\b/i;
+/** Classes that are never regions: places, buildings, people, documents, types. */
+const NOT_REGION = /\b(transcontinental|continent|geographic region|city|town|village|commune|municipality|settlement|building|church|castle|family|dynasty|title|office|edict|treaty|war|battle|type|position|legislature|parliament|court|school|university|college|monastery|river|mountain|lake|person|organization|company)\b/i;
+/** ...except these, which are states of their own (free imperial cities, city-states). */
+const CITY_STATE = /\b(imperial city|city-state|free city)\b/i;
+const MAX_REGIONS = 120;
+
+/** Region-like rows with a place: the part of the list worth caching, whatever the year. */
+export function regionRows(rows: SubdivisionRow[], parent: string): SubdivisionRow[] {
+  return rows.filter((r) => {
+    if (r.qid === parent || r.lat === null || r.lon === null) return false;
+    if (r.classes.some((c) => NOT_REGION.test(c) && !CITY_STATE.test(c))) return false;
+    return r.classes.some((c) => REGION.test(c) || CITY_STATE.test(c));
+  });
+}
+
+/**
+ * Regions of a territory at a year (exported for tests): valid then, and
+ * only the top level (a county inside a listed duchy is left for the duchy).
+ */
+export function regionsAt(rows: SubdivisionRow[], parent: string, year: number): SubdivisionItem[] {
+  const spans = regionRows(rows, parent).map((r) => {
+    // The link's own dates ("part of X from 1477") say more than the region's lifetime.
+    const start = range(r.linkStarts, Math.min) ?? range(r.starts, Math.min);
+    const end = range(r.linkEnds, Math.max) ?? range(r.ends, Math.max);
+    return { r, start, end };
+  });
+  const valid = spans.filter(({ start, end }) => (start === null || start <= year + 10) && (end === null || end >= year - 10));
+  const ids = new Set(valid.map((v) => v.r.qid));
+  return valid
+    .filter(({ r }) => !r.parents.some((p) => p !== parent && ids.has(p)))
+    .sort((a, b) => b.r.sitelinks - a.r.sitelinks)
+    .slice(0, MAX_REGIONS)
+    .map(({ r, start, end }) => ({
+      qid: r.qid,
+      label: r.labelFr ?? r.labelEn ?? r.qid,
+      kind: r.classes.find((c) => REGION.test(c) || CITY_STATE.test(c)) ?? null,
+      lat: r.lat!,
+      lon: r.lon!,
+      start,
+      end,
+    }));
+}
 
 /** Score of a candidate item for a snapshot name at a year (exported for tests). */
 export function scoreCandidate(c: PolityCandidate, name: string, year: number): number {
@@ -104,7 +168,9 @@ export function rulersAt(rulers: PolityDetails['rulers'], year: number): PolityR
 const KIND_WORD = /empire|royaume|république|sultanat|califat|khanat|émirat|cité|principauté|duché|confédération|dynastie|état/i;
 
 export class PolityService {
-  private cache: CacheFile = { resolutions: {}, details: {} };
+  private cache: CacheFile = { resolutions: {}, details: {}, subdivisions: {} };
+  /** Background refreshes of stale entries, run after the map names. */
+  private chores = new Map<string, () => Promise<unknown>>();
   private inflight = new Map<string, Promise<Resolution | null>>();
   private failed = new Map<string, number>();
   private queue: { name: string; year: number }[] = [];
@@ -118,7 +184,8 @@ export class PolityService {
   constructor(private file: string | null, private bordersDir: string) {
     if (file && existsSync(file)) {
       try {
-        this.cache = JSON.parse(readFileSync(file, 'utf8')) as CacheFile;
+        const raw = JSON.parse(readFileSync(file, 'utf8')) as Partial<CacheFile>;
+        this.cache = { resolutions: raw.resolutions ?? {}, details: raw.details ?? {}, subdivisions: raw.subdivisions ?? {} };
       } catch {
         /* corrupt cache: rebuilt on demand */
       }
@@ -129,15 +196,52 @@ export class PolityService {
   async info(name: string, year: number): Promise<PolityInfo> {
     this.interactive++;
     try {
-      return await this.build(name, year);
+      return await interactive(() => this.build(name, year));
     } finally {
       this.interactive--;
     }
   }
 
+  /** Card for a region picked from a territory's subdivisions (its item is known). */
+  async infoById(qid: string, year: number): Promise<PolityInfo> {
+    this.interactive++;
+    try {
+      const d = await interactive(() => this.details(qid));
+      return this.card(d?.labelFr ?? d?.labelEn ?? qid, d, year);
+    } finally {
+      this.interactive--;
+    }
+  }
+
+  /** Regions of a territory at a year; the list is cached per territory. */
+  async subdivisions(qid: string, year: number): Promise<SubdivisionsResponse> {
+    this.interactive++;
+    try {
+      let hit = this.cache.subdivisions[qid];
+      if (!hit) hit = await interactive(() => this.fetchSubdivisions(qid));
+      else if (Date.now() - hit.at > REFRESH_MS) this.chore(`s:${qid}`, () => this.fetchSubdivisions(qid));
+      return { qid, year, items: regionsAt(hit.rows, qid, year) };
+    } finally {
+      this.interactive--;
+    }
+  }
+
+  private async fetchSubdivisions(qid: string): Promise<CachedSubdivisions> {
+    const entry = { at: Date.now(), rows: regionRows(await polity.subdivisions(qid), qid) };
+    const prev = this.cache.subdivisions[qid];
+    if (prev && JSON.stringify(prev.rows) !== JSON.stringify(entry.rows)) console.log(`[polity] regions of ${qid} updated from Wikidata`);
+    this.cache.subdivisions[qid] = entry;
+    this.scheduleSave();
+    return entry;
+  }
+
   private async build(name: string, year: number): Promise<PolityInfo> {
     const res = await this.resolve(name, year);
     const d = res?.qid ? await this.details(res.qid) : null;
+    return this.card(name, d, year);
+  }
+
+  private card(name: string, d: CachedDetails | null, year: number): PolityInfo {
     const base: PolityInfo = {
       name, year, qid: null, title: name, kind: null, description: null, start: null, end: null, emblem: null,
       image: null, capital: null, government: [], religion: [], languages: [], rulers: [], summary: null,
@@ -177,7 +281,11 @@ export class PolityService {
     const labels: Record<string, string> = {};
     for (const name of this.snapshotNames(snap.file)) {
       const r = this.cache.resolutions[key(name, snap.year)];
-      if (r) {
+      const stale = r && (r.v !== MATCH_VERSION || (!r.qid && Date.now() - (r.at ?? 0) > MISS_RETRY_MS));
+      if (stale) {
+        delete this.cache.resolutions[key(name, snap.year)];
+        this.enqueue(name, snap.year);
+      } else if (r) {
         // Renaming on the map needs a sure match: same name, only translated.
         if (r.labelFr && r.score >= CONFIDENT && nameSimilarity(name, r.labelEn ?? '') >= 0.75) labels[name] = r.labelFr;
       } else this.enqueue(name, snap.year);
@@ -200,35 +308,53 @@ export class PolityService {
     if (this.queued.has(k) || (this.failed.get(k) ?? 0) > Date.now()) return;
     this.queued.add(k);
     this.queue.push({ name, year });
-    void this.work();
+    background(() => void this.work()); // a lookup queued from a click does not keep its priority
   }
 
   /** One lookup at a time: labels are a nicety, Wikidata's time is shared. */
   private async work(): Promise<void> {
     if (this.working) return;
     this.working = true;
-    while (this.queue.length) {
+    while (this.queue.length || this.chores.size) {
       // Yield to someone clicking a territory, and wait when Wikimedia asked us to.
       const cool = Math.max(...HOSTS.map(coolingUntil)) - Date.now();
       if (cool > 0) await sleep(cool + 2000);
       while (this.interactive > 0) await sleep(500);
-      const job = this.queue.shift()!;
-      await this.resolve(job.name, job.year).catch(() => null);
-      this.queued.delete(key(job.name, job.year));
+      const job = this.queue.shift();
+      if (job) {
+        const r = await this.resolve(job.name, job.year).catch(() => null);
+        // Prepare the card too, so the first click on the territory is instant.
+        if (r?.qid && !this.cache.details[r.qid]) {
+          while (this.interactive > 0) await sleep(500);
+          await this.details(r.qid).catch(() => null);
+        }
+        this.queued.delete(key(job.name, job.year));
+      } else {
+        const [k, chore] = this.chores.entries().next().value!;
+        this.chores.delete(k);
+        await chore().catch((e) => console.warn(`[polity] refresh ${k} failed: ${(e as Error).message}`));
+      }
       await sleep(BACKGROUND_GAP_MS);
     }
     this.working = false;
   }
 
+  /** Queues a background refresh (once per key). */
+  private chore(k: string, run: () => Promise<unknown>): void {
+    if (this.chores.has(k)) return;
+    this.chores.set(k, run);
+    background(() => void this.work()); // a lookup queued from a click does not keep its priority
+  }
+
   private resolve(name: string, year: number): Promise<Resolution | null> {
     const k = key(name, year);
     const hit = this.cache.resolutions[k];
-    if (hit) return Promise.resolve(hit);
+    if (hit && hit.v === MATCH_VERSION) return Promise.resolve(hit);
     let p = this.inflight.get(k);
     if (!p) {
       p = this.lookup(name, year)
         .then((r) => {
-          this.cache.resolutions[k] = r;
+          this.cache.resolutions[k] = { ...r, at: Date.now(), v: MATCH_VERSION };
           this.scheduleSave();
           return r;
         })
@@ -260,7 +386,9 @@ export class PolityService {
       ...(await safe(polity.searchIds(name))),
       ...(await safe(polity.articleIds(`${name} ${year < 0 ? 'ancient' : 'history'}`))),
     ]);
-    if (best.s < CONFIDENT) {
+    // A country that still exists wins on fame; long ago, its kingdom or empire is often the one meant.
+    const modern = best.c !== null && best.c.ends.length === 0 && year < 1800;
+    if (best.s < CONFIDENT || modern) {
       const more = [...(await safe(polity.searchIds(name, 'fr', 4)))];
       if (!STATE_WORD.test(name)) {
         more.push(...(await safe(polity.searchIds(`Kingdom of ${name}`))), ...(await safe(polity.searchIds(`${name} Empire`))));
@@ -273,7 +401,15 @@ export class PolityService {
 
   private async details(qid: string): Promise<CachedDetails | null> {
     const hit = this.cache.details[qid];
-    if (hit) return hit;
+    if (hit) {
+      if (Date.now() - (hit.at ?? 0) > REFRESH_MS) this.chore(`d:${qid}`, () => this.fetchDetails(qid));
+      return hit;
+    }
+    return this.fetchDetails(qid);
+  }
+
+  /** Fetches a card's facts; a refresh replaces the cached card, and says so if something changed. */
+  private async fetchDetails(qid: string): Promise<CachedDetails | null> {
     const d = await polity.polityDetails(qid);
     if (!d) return null;
     let summary: CachedDetails['summary'] = null;
@@ -285,7 +421,13 @@ export class PolityService {
         break;
       }
     }
-    const out = { ...d, summary };
+    const out: CachedDetails = { ...d, summary, at: Date.now() };
+    const prev = this.cache.details[qid];
+    if (prev) {
+      const { at: _a, ...before } = prev;
+      const { at: _b, ...after } = out;
+      if (JSON.stringify(before) !== JSON.stringify(after)) console.log(`[polity] card ${qid} updated from Wikidata`);
+    }
     this.cache.details[qid] = out;
     this.scheduleSave();
     return out;

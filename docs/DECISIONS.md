@@ -154,6 +154,7 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
   coûteraient bien plus cher pour des centaines de points. Plus d'agrandissement selon la distance (il
   floutait l'image) ; le globe est rendu à la densité de l'écran, plafonnée à 1,5×.
 - **Survol** : rester 350 ms sur un point ouvre sa fiche (sans déplacer la caméra) ; le clic vole jusqu'au point.
+  Désactivé par défaut (Réglages → Interface).
 - **Sons** synthétisés par Web Audio (aucun fichier à héberger ni licence), un par catégorie et un pour les
   territoires. Réglages → Interface (activé par défaut, volume), commun à tous les appareils.
 - **Clic sur un territoire** : détourage lumineux (couche d'imagerie limitée au territoire, l'empire avec
@@ -173,14 +174,46 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
   cherchés en tâche de fond, une à la fois, en pause dès que Wikimedia demande de ralentir (429) ou
   qu'une fiche est demandée. Les zones sans nom dans les données sont en gris neutre.
 
+## Découpage, lecture, chargement
+
+- **Sons** façon jeu de stratégie, toujours synthétisés : tambours de guerre, cors et fanfares (dents de
+  scie désaccordées, filtre qui s'ouvre, vibrato), chœur (formants), cloches et métal (partiels
+  inharmoniques), réverbération de salle commune (réponse impulsionnelle générée), compresseur.
+- **Territoire → régions → sous-régions** : 2e clic dans le territoire sélectionné = découpage ; clic sur
+  une région = sa fiche ; 2e clic dessus = découpage à son tour. Les cartes historiques ne dessinent que
+  les États : les régions viennent de Wikidata (P131, P150, P17 et P361 vers le territoire, quatre
+  requêtes simples en parallèle, la réunion en une seule expirant), filtrées par type (duché, comté,
+  province, satrapie, eyalet…), par dates (qualificatifs du lien, sinon création / dissolution) et au
+  premier niveau seulement. Leur tracé est **estimé** : le territoire est partagé entre les chefs-lieux
+  (diagramme de Voronoï découpé au contour, bordures en pointillés), ce que la fiche signale. Sans
+  subdivision connue à la date, la fiche le dit.
+- **Cache et fraîcheur** : fiches et listes de régions en cache disque (`/data/polities.json`) et dans le
+  navigateur (localStorage, 250 entrées) : affichage immédiat, puis vérification en arrière-plan, la fiche
+  n'étant redessinée que si elle a changé. Côté serveur, une entrée de plus de 14 jours est reprise de
+  Wikidata en tâche de fond ; les noms sans correspondance sont retentés au bout de 7 jours. Quand un nom
+  de la carte est rapproché de Wikidata en tâche de fond, sa fiche est préparée aussi.
+- **Priorité aux clics** : les requêtes d'une fiche passent devant les recherches de fond et peuvent
+  prendre une place de plus auprès de Wikidata (3 au lieu de 2).
+- **Correspondance** : un État encore existant (France) ne gagne plus d'office avant 1800 : les variantes
+  « Kingdom of X » / « X Empire » sont toujours essayées. Les anciennes correspondances sont recalculées.
+- **« Pendant ce temps »** ignore les événements de plus de 20 ans (réglable, Réglages → Interface).
+- **Lecture** : bouton ▶ sur la timeline (ou Espace). Pas automatique (l'unité de l'époque : 1 an au
+  XXe siècle, bien plus dans l'Antiquité) ou fixe, toutes les 1 à 10 s. La fenêtre garde sa durée en
+  années.
+- **Chargement des points** : recherche lancée 450 ms après l'arrêt (au lieu de 800), et préchargement
+  des périodes juste avant et après la fenêtre, en file basse priorité qui ne tourne que quand la file
+  principale est vide (24 recherches au plus, sans niveau 2).
+
 ## Hors V1 (prévu)
 
-Histogramme de densité, bouton Play, carnet de voyage, brouillard de connaissance, fils rouges,
+Histogramme de densité, carnet de voyage, brouillard de connaissance, fils rouges,
 campagnes animées, préchargement nocturne.
 
 ## Limites connues
 
 - Noms des territoires : en anglais tant que la traduction n'est pas trouvée ou pas sûre. Rapprochement avec Wikidata automatique, donc parfois faux sur les noms vagues (« Hunter-gatherers »).
+- Régions : tracé approximatif ; couverture Wikidata inégale (bonne pour l'Empire ottoman, le Saint-Empire, la France ; faible pour les niveaux fins : aucun comté rattaché au duché de Bourgogne).
+- Sons : vérifiés sans erreur, pas à l'oreille.
 - Wikimedia limite le débit : premier clic sur un territoire parfois lent (jusqu'à une minute) si le serveur vient de beaucoup interroger Wikidata ; ensuite en cache.
 - Le mode multi-services (Redis/BullMQ) n'a pas été exécuté ; le mode conteneur unique est testé.
 - Niveau 2 : testé avec des fournisseurs simulés (tests) et les adaptateurs sans clé en réel ; pas encore

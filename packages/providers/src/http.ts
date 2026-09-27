@@ -1,6 +1,8 @@
 // Polite HTTP client for open APIs: identifiable User-Agent, per-host
 // concurrency and spacing limits, retry on 429/5xx honoring Retry-After.
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 export interface HostPolicy {
   concurrency: number;
   minIntervalMs: number;
@@ -22,15 +24,37 @@ export function setUserAgent(ua: string): void {
   userAgent = ua;
 }
 
+/** Requests made for someone waiting on screen (a card being opened). */
+const urgent = new AsyncLocalStorage<boolean>();
+
+/**
+ * Runs `fn` with its requests ahead of background work: they jump the queue
+ * and may use one slot beyond the host's usual limit, so a click is not stuck
+ * behind 20-second area searches.
+ */
+export function interactive<T>(fn: () => Promise<T>): Promise<T> {
+  return urgent.run(true, fn);
+}
+
+/** Runs `fn` as background work, even when started from an interactive request. */
+export function background<T>(fn: () => T): T {
+  return urgent.exit(fn);
+}
+
 class HostLimiter {
   private active = 0;
   private last = 0;
-  private queue: (() => void)[] = [];
+  private queue: { go: () => void; urgent: boolean }[] = [];
   constructor(private policy: HostPolicy) {}
 
   async run<T>(fn: () => Promise<T>): Promise<T> {
-    await new Promise<void>((resolve) => {
-      this.queue.push(resolve);
+    const isUrgent = urgent.getStore() === true;
+    await new Promise<void>((go) => {
+      if (isUrgent) {
+        // After other urgent requests, before background ones.
+        const i = this.queue.findIndex((q) => !q.urgent);
+        this.queue.splice(i < 0 ? this.queue.length : i, 0, { go, urgent: true });
+      } else this.queue.push({ go, urgent: false });
       this.pump();
     });
     try {
@@ -42,7 +66,10 @@ class HostLimiter {
   }
 
   private pump(): void {
-    if (this.active >= this.policy.concurrency || this.queue.length === 0) return;
+    const next = this.queue[0];
+    if (!next) return;
+    const limit = this.policy.concurrency + (next.urgent ? 1 : 0);
+    if (this.active >= limit) return;
     const wait = this.last + this.policy.minIntervalMs - Date.now();
     if (wait > 0) {
       setTimeout(() => this.pump(), wait);
@@ -50,7 +77,7 @@ class HostLimiter {
     }
     this.active++;
     this.last = Date.now();
-    this.queue.shift()!();
+    this.queue.shift()!.go();
     this.pump();
   }
 }

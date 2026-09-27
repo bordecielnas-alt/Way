@@ -1,5 +1,5 @@
 import {
-  bucketsInRange, GLOBAL_SPACE, isGlobalSearchRes, makeKey,
+  bucketsInRange, GLOBAL_SPACE, isGlobalSearchRes, makeKey, MAX_YEAR, MIN_YEAR,
   type PoiLite, type ServerMessage, type ViewMessage,
 } from '@way/shared';
 import { planJobs, type Config, type JobBus, type Store } from '@way/core';
@@ -54,7 +54,26 @@ export class ViewService {
       await this.bus.enqueue(planJobs(missing, this.cfg));
       for (const k of missing) pending.add(k);
     }
+    void this.prefetchAround(v).catch((e) => console.warn('[views] prefetch failed', (e as Error).message));
     return { pois: await this.queryPois(v), pending };
+  }
+
+  /**
+   * Guesses where the viewer goes next: the periods just before and after
+   * the window, same place. Searched in the background when the queue is idle,
+   * so dragging the timeline (or playing it) finds points already there.
+   */
+  private async prefetchAround(v: View): Promise<void> {
+    const width = Math.max(1, v.tEnd - v.tStart);
+    const around: View[] = [
+      { ...v, tStart: v.tEnd + 1, tEnd: Math.min(MAX_YEAR, v.tEnd + width) },
+      { ...v, tStart: Math.max(MIN_YEAR, v.tStart - width), tEnd: v.tStart - 1 },
+    ].filter((w) => w.tStart <= w.tEnd);
+    const keys = around.flatMap((w) => this.keysFor(w));
+    if (!keys.length) return;
+    const known = await this.store.getKeys(keys);
+    const missing = keys.filter((k) => !known.has(k));
+    if (missing.length) await this.bus.prefetch(planJobs(missing, this.cfg));
   }
 
   queryPois(v: View): Promise<PoiLite[]> {

@@ -92,6 +92,20 @@ body.card-open .basemap { right: 452px; }
 /* ---------- timeline ---------- */
 .timeline { left: 16px; right: 16px; bottom: 16px; padding: 12px 18px 10px; user-select: none; }
 .tl-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 8px; }
+.tl-play { display: flex; align-items: center; gap: 6px; align-self: center; }
+.tl-play-btn {
+  width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; padding: 0; cursor: pointer;
+  border: 1px solid rgba(217, 164, 65, 0.55); background: rgba(217, 164, 65, 0.12); color: var(--gold);
+}
+.tl-play-btn svg { width: 14px; height: 14px; fill: currentColor; }
+.tl-play-btn:hover { background: rgba(217, 164, 65, 0.25); }
+.tl-play-btn.on { background: var(--gold); color: #1a1408; }
+.tl-play-btn:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.tl-play select {
+  font: inherit; font-size: 12px; color: var(--muted); background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px; padding: 3px 4px; cursor: pointer;
+}
+.tl-play select option { background: #14171d; color: #ece4d2; }
 .tl-range { font-family: var(--serif); font-size: 21px; line-height: 1; white-space: nowrap; }
 .tl-range em { font-style: italic; color: var(--muted); font-size: 16px; margin: 0 6px; }
 .tl-borders { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -194,6 +208,11 @@ body.card-open .cesium-viewer-bottom { right: 452px; }
 .cesium-credit-logoContainer { display: none !important; }
 
 /* ---------- territory card ---------- */
+.polity-hint {
+  margin: 2px 0 10px; padding: 7px 10px; border-radius: 6px; font-size: 12.5px; line-height: 1.4;
+  color: var(--gold); background: var(--gold-soft); border: 1px solid rgba(217, 164, 65, 0.3);
+}
+.polity-hint[hidden] { display: none; }
 .polity-head { display: flex; align-items: flex-start; gap: 14px; justify-content: space-between; }
 .polity-emblem { width: 58px; max-height: 72px; object-fit: contain; flex: none; margin-top: 4px; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.5)); }
 .ruler { display: flex; align-items: center; gap: 12px; padding: 8px 10px; margin: 0 -10px; border-radius: 10px; text-decoration: none; color: var(--ink); }
@@ -216,4 +235,8 @@ body.card-open .cesium-viewer-bottom { right: 452px; }
 @media (max-width: 520px) {
   .card { left: 8px; right: 8px; width: auto; top: 8px; }
   .polity-emblem { width: 44px; }
+  /* Timeline head on two lines: play controls, then the dates. */
+  .tl-head { flex-wrap: wrap; row-gap: 6px; align-items: center; }
+  .tl-range { font-size: 18px; }
+  .tl-borders { display: none; }
 }

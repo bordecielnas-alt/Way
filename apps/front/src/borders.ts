@@ -4,6 +4,7 @@ import {
   type ImageryProvider, type Viewer,
 } from 'cesium';
 import { formatYear, type PolityLabels } from '@way/shared';
+import type { Area, Region } from './divisions.ts';
 
 type Ring = [number, number][];
 interface Feature {
@@ -24,7 +25,7 @@ interface Shape {
 
 const TILE = 256;
 const HAIR_SPACE = String.fromCharCode(0x200a);
-type Style = 'normal' | 'highlight';
+type Style = 'normal' | 'highlight' | 'regions';
 const FADE_MS = 700;
 /** Main-thread time spent drawing border tiles per frame, so panning stays smooth. */
 const FRAME_BUDGET_MS = 6;
@@ -106,11 +107,14 @@ class BordersTiles {
   readonly hasAlphaChannel = true;
 
   constructor(private shapes: Shape[], private style: Style = 'normal') {
-    // The highlight only covers its territory: Cesium then requests no other tile.
-    const s = shapes[0];
-    this.rectangle = style === 'highlight' && s
-      ? Rectangle.fromDegrees(Math.max(-180, s.west - 1), Math.max(-90, s.south - 1), Math.min(180, s.east + 1), Math.min(90, s.north + 1))
-      : this.tilingScheme.rectangle;
+    // A highlight or a territory's regions only cover that territory: Cesium then requests no other tile.
+    if (style !== 'normal' && shapes.length) {
+      const w = Math.min(...shapes.map((s) => s.west));
+      const so = Math.min(...shapes.map((s) => s.south));
+      const e = Math.max(...shapes.map((s) => s.east));
+      const n = Math.max(...shapes.map((s) => s.north));
+      this.rectangle = Rectangle.fromDegrees(Math.max(-180, w - 1), Math.max(-90, so - 1), Math.min(180, e + 1), Math.min(90, n + 1));
+    } else this.rectangle = this.tilingScheme.rectangle;
   }
 
   getTileCredits(): undefined {
@@ -174,6 +178,11 @@ class BordersTiles {
       g.fillStyle = s.fill;
       g.fill('evenodd');
       g.strokeStyle = s.stroke;
+      if (this.style === 'regions') {
+        // Dashed: these inner borders are an approximation.
+        g.setLineDash([5, 4]);
+        g.lineWidth = 1.4;
+      }
       g.stroke();
     }
     return canvas;
@@ -200,10 +209,13 @@ export class BordersLayer {
   private highlightLayer: ImageryLayer | null = null;
   private highlighted: string | null = null;
   private frNames: Record<string, string> = {};
+  private regionsLayer: ImageryLayer | null = null;
+  private regionLabels: LabelCollection;
   private namesTimer: number | undefined;
 
   constructor(private viewer: Viewer, private onNote: (text: string) => void) {
     this.labels = viewer.scene.primitives.add(new LabelCollection());
+    this.regionLabels = viewer.scene.primitives.add(new LabelCollection());
     onDrained = () => viewer.scene.requestRender();
   }
 
@@ -286,23 +298,34 @@ export class BordersLayer {
     return this.frNames[name] ?? name;
   }
 
+  /** A territory with its vassals, as one area (null if the snapshot has no such name). */
+  territoryArea(name: string): Area | null {
+    const parts = this.shapes.filter((s) => s.name === name || s.owner === name);
+    if (!parts.length) return null;
+    return {
+      rings: parts.flatMap((p) => p.rings),
+      west: Math.min(...parts.map((p) => p.west)),
+      south: Math.min(...parts.map((p) => p.south)),
+      east: Math.max(...parts.map((p) => p.east)),
+      north: Math.max(...parts.map((p) => p.north)),
+    };
+  }
+
   /** Outlines a territory by name (null clears). Kept across snapshots while the name exists. */
   highlight(name: string | null): void {
+    this.outline(name ? this.territoryArea(name) : null);
     this.highlighted = name;
+  }
+
+  /** Outlines any area (a region inside a territory); not kept across snapshots. */
+  outline(area: Area | null): void {
+    this.highlighted = null;
     if (this.highlightLayer) {
       this.viewer.imageryLayers.remove(this.highlightLayer, true);
       this.highlightLayer = null;
     }
-    const parts = name ? this.shapes.filter((s) => s.name === name || s.owner === name) : [];
-    if (parts.length) {
-      const merged: Shape = {
-        ...parts[0]!,
-        rings: parts.flatMap((p) => p.rings),
-        west: Math.min(...parts.map((p) => p.west)),
-        south: Math.min(...parts.map((p) => p.south)),
-        east: Math.max(...parts.map((p) => p.east)),
-        north: Math.max(...parts.map((p) => p.north)),
-      };
+    if (area) {
+      const merged: Shape = { name: null, owner: null, fill: '', stroke: '', ...area };
       const layer = new ImageryLayer(new BordersTiles([merged], 'highlight') as unknown as ImageryProvider, { alpha: 0 });
       layer.show = this.visible;
       this.viewer.imageryLayers.add(layer);
@@ -316,6 +339,45 @@ export class BordersLayer {
       };
       requestAnimationFrame(step);
     }
+    this.viewer.scene.requestRender();
+  }
+
+  /** Draws a territory's regions with dashed borders and their names (null clears). */
+  showRegions(regions: Region[] | null): void {
+    if (this.regionsLayer) {
+      this.viewer.imageryLayers.remove(this.regionsLayer, true);
+      this.regionsLayer = null;
+    }
+    this.regionLabels.removeAll();
+    if (regions?.length) {
+      const shapes: Shape[] = regions.map((r) => ({
+        ...r, name: r.label, owner: null,
+        fill: `hsla(${hue(r.label)}, 45%, 60%, 0.22)`,
+        stroke: 'rgba(255, 240, 214, 0.8)',
+      }));
+      const layer = new ImageryLayer(new BordersTiles(shapes, 'regions') as unknown as ImageryProvider);
+      layer.show = this.visible;
+      this.viewer.imageryLayers.add(layer);
+      this.regionsLayer = layer;
+      // The outline stays above the regions.
+      if (this.highlightLayer) this.viewer.imageryLayers.raiseToTop(this.highlightLayer);
+      for (const r of regions) {
+        this.regionLabels.add({
+          position: Cartesian3.fromDegrees(r.lon, r.lat, 1500),
+          text: r.label,
+          font: 'italic 500 14px "EB Garamond", Georgia, serif',
+          fillColor: Color.fromCssColorString('#f4ead6'),
+          outlineColor: Color.fromCssColorString('#07090d').withAlpha(0.8),
+          outlineWidth: 3,
+          style: LabelStyle.FILL_AND_OUTLINE,
+          horizontalOrigin: HorizontalOrigin.CENTER,
+          verticalOrigin: VerticalOrigin.CENTER,
+          // Small regions are only named up close.
+          distanceDisplayCondition: new DistanceDisplayCondition(0, Math.max(8e5, Math.sqrt((r.east - r.west) * (r.north - r.south)) * 2.2e6)),
+        });
+      }
+    }
+    this.cullLabels();
     this.viewer.scene.requestRender();
   }
 
@@ -413,12 +475,16 @@ export class BordersLayer {
     const cam = this.viewer.camera.positionWC;
     const n = new Cartesian3();
     const d = new Cartesian3();
-    for (let i = 0; i < this.labels.length; i++) {
-      const l = this.labels.get(i);
-      Cartesian3.normalize(l.position, n);
-      Cartesian3.normalize(Cartesian3.subtract(cam, l.position, d), d);
-      l.show = Cartesian3.dot(n, d) > 0.2;
+    for (const labels of [this.labels, this.regionLabels]) {
+      for (let i = 0; i < labels.length; i++) {
+        const l = labels.get(i);
+        Cartesian3.normalize(l.position, n);
+        Cartesian3.normalize(Cartesian3.subtract(cam, l.position, d), d);
+        l.show = Cartesian3.dot(n, d) > 0.2;
+      }
     }
+    // While regions are shown, the realm names under them would only get in the way.
+    this.labels.show = this.visible && this.regionLabels.length === 0;
   }
 
   setCameraHeight(h: number): void {
@@ -431,7 +497,9 @@ export class BordersLayer {
     this.visible = v;
     if (this.layer) this.layer.show = v;
     if (this.highlightLayer) this.highlightLayer.show = v;
-    this.labels.show = v;
+    if (this.regionsLayer) this.regionsLayer.show = v;
+    this.labels.show = v && this.regionLabels.length === 0;
+    this.regionLabels.show = v;
     this.viewer.scene.requestRender();
   }
 }

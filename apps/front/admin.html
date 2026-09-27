@@ -61,8 +61,7 @@
           <div class="switch-row card">
             <div>
               <div class="switch-title">Sons au clic</div>
-              <div class="sub">Un son différent selon le type d’événement : fracas d’épées pour une bataille, cloche pour un
-                lieu sacré, fanfare pour un empire, grondement pour une catastrophe… et une carte qu’on déroule sur un territoire.</div>
+              <div class="sub">Ambiance jeu de stratégie, un son par type d’événement : tambours de guerre, fracas d’épées et cor pour une bataille, fanfare royale pour un empire, chœur et cloche pour un lieu sacré, tonnerre pour une catastrophe… et une carte déroulée sur la table de guerre pour un territoire.</div>
             </div>
             <label class="switch"><input type="checkbox" id="sounds" /><span></span></label>
           </div>
@@ -73,7 +72,23 @@
           </div>
           <h2>Écouter</h2>
           <div class="sound-list" id="sound-list"></div>
-          <p class="hint">Réglage commun à tous les appareils, appliqué au prochain chargement du globe.</p>
+
+          <h2>Exploration</h2>
+          <div class="switch-row card">
+            <div>
+              <div class="switch-title">Ouvrir la fiche au survol</div>
+              <div class="sub">Laisser le pointeur un instant sur un point ouvre sa fiche, sans clic. Désactivé : il faut cliquer.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="hover-open" /><span></span></label>
+          </div>
+          <div class="card volume">
+            <label for="meanwhile-span">« Pendant ce temps » : ignorer les événements de plus de</label>
+            <input type="number" id="meanwhile-span" min="0" max="10000" step="1" class="num-input" />
+            <span class="num">ans</span>
+          </div>
+          <p class="hint">Une guerre de cent ans ou une dynastie dit peu de choses sur un moment précis : la porte « Pendant ce temps »
+            propose plutôt des événements courts. 0 = uniquement des événements datés d’une seule année.</p>
+          <p class="hint">Réglages communs à tous les appareils, appliqués au prochain chargement du globe.</p>
         </section>
 
         <section data-panel="status" hidden>
