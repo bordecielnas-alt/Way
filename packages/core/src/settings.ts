@@ -14,6 +14,35 @@ export interface SettingsData {
   disabled: string[];
   /** Interface and exploration preferences. */
   ui?: UiSettings;
+  /** How much is kept on disk, and for how long before checking again. */
+  cache?: CacheSettings;
+}
+
+export interface CacheSettings {
+  /** Disk budget for everything cached (points, images), in GB (0.5 to 100). */
+  maxGb: number;
+  /** Cards, names, journeys and armies are checked again after this many days (0 = never). */
+  refreshDays: number;
+  /** Images (portraits, coats of arms, photos) are kept on the server instead of asked from Wikimedia each time. */
+  images: boolean;
+}
+
+export const CACHE_MAX_GB = 100;
+
+/** Defaults: the budget from CACHE_MAX_MB (10 GB when unset). */
+export function normalizeCache(raw: Partial<CacheSettings> | undefined, envMaxBytes: number): CacheSettings {
+  const c: Partial<CacheSettings> = raw && typeof raw === 'object' ? raw : {};
+  const gb = typeof c.maxGb === 'number' && Number.isFinite(c.maxGb) ? c.maxGb : envMaxBytes / 1024 ** 3;
+  return {
+    maxGb: Math.round(Math.min(CACHE_MAX_GB, Math.max(0.5, gb)) * 10) / 10,
+    refreshDays: typeof c.refreshDays === 'number' && c.refreshDays >= 0 ? Math.min(3650, Math.round(c.refreshDays)) : 180,
+    images: typeof c.images === 'boolean' ? c.images : true,
+  };
+}
+
+/** Age past which a cached answer is fetched again (Infinity: never). */
+export function refreshMs(c: CacheSettings): number {
+  return c.refreshDays > 0 ? c.refreshDays * 86_400_000 : Infinity;
 }
 
 export interface UiSettings {
@@ -83,6 +112,7 @@ export class SettingsFile {
         env: Object.fromEntries(Object.entries(raw.env ?? {}).filter(([, v]) => typeof v === 'string' && v)),
         disabled: Array.isArray(raw.disabled) ? raw.disabled.filter((x) => typeof x === 'string') : [],
         ui: raw.ui ? normalizeUi(raw.ui) : undefined,
+        cache: raw.cache && typeof raw.cache === 'object' ? raw.cache : undefined,
       };
       this.mtime = mtime;
     } catch (e) {

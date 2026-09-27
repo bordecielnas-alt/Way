@@ -1,4 +1,5 @@
 import type { ActivityKind, Army, ArmyBattle, JourneyStop, PersonHit, PersonJourney } from '@way/shared';
+import { dateToDecimal } from '@way/shared';
 import { fetchJson } from './http.ts';
 import { commonsThumb, parseYear, sparql, yearLiteral } from './wikidata.ts';
 
@@ -19,9 +20,8 @@ export function decimalYear(value: string | undefined): number | null {
   const y = parseYear(value);
   const m = /^-?\d+-(\d\d)-(\d\d)/.exec(value);
   if (y === null) return null;
-  const month = m ? Number(m[1]) : 1;
-  const day = m ? Number(m[2]) : 1;
-  return y + (Math.max(1, month) - 1) / 12 + (Math.max(1, day) - 1) / 365;
+  // Day of the year (precision "year" comes as 1 January).
+  return dateToDecimal(y, m ? Number(m[1]) : 1, m ? Number(m[2]) : 1);
 }
 
 interface WikiSearch { query?: { search?: { title: string }[] } }

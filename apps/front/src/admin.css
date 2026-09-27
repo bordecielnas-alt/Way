@@ -142,3 +142,7 @@ input.model { padding: 5px 8px; font-size: 12.5px; font-family: ui-monospace, Co
 .sound-import { cursor: pointer; }
 .sound-list .ghost { display: inline-flex; align-items: center; gap: 8px; }
 .sound-list i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.volume select {
+  font: inherit; color: var(--ink); background: #0d1016; border: 1px solid var(--border); border-radius: 7px; padding: 6px 8px;
+}
+.volume select:focus { outline: none; border-color: var(--gold); }

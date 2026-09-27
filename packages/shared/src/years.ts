@@ -103,6 +103,34 @@ export function formatMillennium(y: number): string {
   return `${ordinal(m, toRoman(m))} millénaire${y < 0 ? BC : ''}`;
 }
 
+// ---------- days: decimal years ----------
+// A day is 1/365 of a year (leap days ignored): 1805.92 ≈ 2 December 1805.
+
+const MONTH_START = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+const MONTHS_FR = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+export const DAY = 1 / 365;
+
+/** Decimal year of a date (month and day from 1). */
+export function dateToDecimal(year: number, month = 1, day = 1): number {
+  const m = Math.min(12, Math.max(1, month));
+  return year + (MONTH_START[m - 1]! + Math.min(31, Math.max(1, day)) - 1) / 365;
+}
+
+/** Year, month (1-12) and day of a decimal year; no year 0 (it counts as 1). */
+export function decimalToDate(t: number): { year: number; month: number; day: number } {
+  const y = Math.floor(t);
+  const doy = Math.min(364, Math.max(0, Math.floor((t - y) * 365 + 1e-6)));
+  let m = 0;
+  while (m < 11 && MONTH_START[m + 1]! <= doy) m++;
+  return { year: y === 0 ? 1 : y, month: m + 1, day: doy - MONTH_START[m]! + 1 };
+}
+
+/** "2 déc. 1805", "1er mars 44 av. J.-C." */
+export function formatDay(t: number): string {
+  const { year, month, day } = decimalToDate(t);
+  return `${day === 1 ? '1er' : day} ${MONTHS_FR[month - 1]} ${formatYear(year)}`;
+}
+
 export type DatePrecisionName = 'exact_year' | 'decade' | 'century' | 'millennium' | 'approximate';
 
 export function formatPoiDate(start: number, end: number | null | undefined, precision: DatePrecisionName): string {

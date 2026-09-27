@@ -14,6 +14,8 @@ import { Cliopatria } from './cliopatria.ts';
 import { BordersService } from './borders.ts';
 import { PeopleService } from './people.ts';
 import { SoundFiles } from './sounds.ts';
+import { MediaCache } from './media.ts';
+import { normalizeCache, refreshMs } from './settings.ts';
 import type { Store } from './store/types.ts';
 
 /** Local files in dev (no DATA_DIR): settings, account. */
@@ -33,6 +35,7 @@ export * from './borders.ts';
 export * from './cliopatria.ts';
 export * from './people.ts';
 export * from './sounds.ts';
+export * from './media.ts';
 export * from './store/types.ts';
 export { MemoryStore } from './store/memory.ts';
 export { PostgresStore, type Queryable } from './store/postgres.ts';
@@ -65,8 +68,9 @@ export function createRouter(cfg: Config, settings = createSettings(cfg)): Provi
 }
 
 /** Kingdom cards and French names on the map, cached next to the data. */
-export function createPolities(cfg: Config, clio: Cliopatria | null = null): PolityService {
-  return new PolityService(join(cfg.dataDir ?? devDir, 'polities.json'), cfg.bordersDir, clio);
+export function createPolities(cfg: Config, clio: Cliopatria | null = null, settings?: SettingsFile): PolityService {
+  const refresh = () => refreshMs(normalizeCache(settings?.get().cache, cfg.cache.maxBytes));
+  return new PolityService(join(cfg.dataDir ?? devDir, 'polities.json'), cfg.bordersDir, clio, refresh);
 }
 
 /** Yearly borders (Cliopatria), with the old snapshots before 3400 BCE. */
@@ -76,8 +80,23 @@ export function createBorders(cfg: Config): { clio: Cliopatria; borders: Borders
 }
 
 /** People followed on the map and armies, cached next to the data. */
-export function createPeople(cfg: Config): PeopleService {
-  return new PeopleService(join(cfg.dataDir ?? devDir, 'people.json'));
+export function createPeople(cfg: Config, settings?: SettingsFile): PeopleService {
+  const refresh = () => refreshMs(normalizeCache(settings?.get().cache, cfg.cache.maxBytes));
+  return new PeopleService(join(cfg.dataDir ?? devDir, 'people.json'), refresh);
+}
+
+/**
+ * Images kept on the server. They get at most half of the cache budget set
+ * in the Réglages page; the points get the rest.
+ */
+export function createMedia(cfg: Config, settings: SettingsFile): MediaCache {
+  const c = () => normalizeCache(settings.get().cache, cfg.cache.maxBytes);
+  return new MediaCache(join(cfg.dataDir ?? devDir, 'media'), () => (c().maxGb * 1024 ** 3) / 2, () => c().images);
+}
+
+/** Total disk budget for the cache, in bytes (Réglages page, else CACHE_MAX_MB). */
+export function cacheBudget(cfg: Config, settings: SettingsFile): number {
+  return normalizeCache(settings.get().cache, cfg.cache.maxBytes).maxGb * 1024 ** 3;
 }
 
 /** Sounds imported in the Réglages page, next to the data. */

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { distanceKm, formatDistance, formatYears } from './doors.ts';
 import {
   bucketEnd, bucketOf, bucketsInRange, cellsForRect, formatPoiDate, formatYear, makeKey, parseKey,
+  dateToDecimal, decimalToDate, formatDay, posToDecimalYear, DAY,
   posToYear, rectAreaKm2, resolutionForArea, yearToPos, CURRENT_YEAR, MIN_YEAR, poiInWindow,
 } from './index.ts';
 
@@ -95,5 +96,22 @@ describe('door formatting', () => {
     expect(formatYears(98)).toBe('98 ans');
     expect(formatYears(101)).toBe('un siècle');
     expect(formatYears(1487).replace(/\s/g, ' ')).toBe('1 500 ans');
+  });
+});
+
+describe('days', () => {
+  it('turns dates into decimal years and back', () => {
+    expect(dateToDecimal(1805, 12, 2)).toBeCloseTo(1805 + 335 / 365);
+    expect(decimalToDate(dateToDecimal(1805, 12, 2))).toEqual({ year: 1805, month: 12, day: 2 });
+    expect(decimalToDate(dateToDecimal(1805, 1, 31) + DAY)).toEqual({ year: 1805, month: 2, day: 1 });
+    expect(decimalToDate(dateToDecimal(-44, 3, 15))).toEqual({ year: -44, month: 3, day: 15 });
+  });
+  it('writes them in French', () => {
+    expect(formatDay(dateToDecimal(1805, 12, 2))).toBe('2 déc. 1805');
+    expect(formatDay(dateToDecimal(-44, 3, 1))).toBe('1er mars 44 av. J.-C.');
+  });
+  it('places days on the timeline', () => {
+    const t = dateToDecimal(1805, 12, 2);
+    expect(posToDecimalYear(yearToPos(t))).toBeCloseTo(t, 6);
   });
 });

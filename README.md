@@ -16,7 +16,7 @@ docker run -d --name way -p 8080:8080 -v ./data-way:/data ghcr.io/bordecielnas-a
 
 Puis ouvrir http://localhost:8080. Tout est dans l'image (site, API, recherche, Postgres embarqué) ;
 tout ce qui persiste est dans `/data`. Au premier démarrage, les frontières historiques (~66 Mo) se
-téléchargent en arrière-plan. Variable optionnelle : `WAY_CONTACT` (ton email, demandé par Wikimedia).
+téléchargent en arrière-plan. Variable optionnelle : `WAY_CONTACT` (un contact ajouté à l'adresse du projet dans les requêtes à Wikimedia).
 
 Recherche approfondie par IA (facultatif) : dans l'application, roue dentée ⚙ en haut à gauche →
 **Réglages** (compte `admin`, mot de passe `way` à changer dans l'onglet Compte). Coller au moins une
@@ -28,9 +28,11 @@ saisie dans les réglages les remplace.
 Sur le globe : frontières datées à l'année, noms des royaumes peints sur la carte. Clic sur un territoire
 = sa fiche ; nouveau clic dedans = découpage en vassaux et provinces (frontières de l'époque, ou limites
 estimées à défaut), et ainsi de suite. Panneau **Personnages** (en bas à gauche) : suivre un ou plusieurs
-personnages (études, voyages, combats, couronnement…) et afficher les armées en campagne. ▶ sur la
-timeline (ou Espace) fait défiler le temps. Sons (et import de vos propres fichiers audio), ouverture au
-survol et filtre « Pendant ce temps » : Réglages → Interface.
+personnages (études, voyages, combats, couronnement…) et afficher les armées en campagne ; rubrique
+**Blasons** : armoiries en filigrane sur les territoires, drapeaux sur les armées. ▶ sur la timeline (ou
+Espace) fait défiler le temps, jusqu'au jour près. Sons (et import de vos propres fichiers audio), ouverture
+au survol et filtre « Pendant ce temps » : Réglages → Interface. Taille et durée du cache (jusqu'à 100 Go) :
+Réglages → Cache.
 
 Unraid : voir [infra/unraid/README.md](infra/unraid/README.md). Avec Compose : `docker compose up -d`.
 
@@ -67,6 +69,6 @@ data/borders       Frontières historiques (GPL-3.0, non versionnées)
 ## Crédits des données
 
 - Faits : [Wikidata](https://www.wikidata.org) (CC0) et [Wikipédia](https://fr.wikipedia.org) (CC BY-SA), cités sur chaque fiche.
-- Images : [Wikimedia Commons](https://commons.wikimedia.org), chargées directement, jamais stockées.
+- Images : [Wikimedia Commons](https://commons.wikimedia.org), chacune sous sa propre licence (domaine public, CC BY-SA…). Gardées en cache sur votre serveur pour l'affichage (Réglages → Cache pour le désactiver) ; les photos des fiches renvoient à leur page Commons. Les blasons en filigrane sur la carte n'ont pas de crédit individuel : leur nom de fichier est celui de la page Commons.
 - Frontières : [Cliopatria](https://github.com/Seshat-Global-History-Databank/cliopatria), Seshat Global History Databank (CC BY 4.0), datées à l'année, simplifiées au kilomètre ; avant −3400, [aourednik/historical-basemaps](https://github.com/aourednik/historical-basemaps) (GPL-3.0), instantanés approximatifs.
 - Fond de carte : Natural Earth II (livré avec Cesium) ; satellite : Esri World Imagery par défaut (configurable).

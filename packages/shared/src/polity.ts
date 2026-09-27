@@ -42,6 +42,16 @@ export interface PolityLabels {
   pending: number;
 }
 
+/** Coat of arms and flag of a realm at a year (Commons file names). */
+export interface Emblem { coa: string | null; flag: string | null }
+
+export interface EmblemsResponse {
+  /** Wikidata item -> its emblems. */
+  emblems: Record<string, Emblem>;
+  /** Items still being looked up. */
+  pending: number;
+}
+
 /** A region inside a territory (duchy, province, county...), placed at its seat. */
 export interface SubdivisionItem {
   qid: string;

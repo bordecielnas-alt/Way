@@ -16,9 +16,12 @@ const POLICIES: Record<string, HostPolicy> = {
   // The search API answers bursts with a 40 s Retry-After: one request at a time.
   'www.wikidata.org': { concurrency: 1, minIntervalMs: 150 },
   'nominatim.openstreetmap.org': { concurrency: 1, minIntervalMs: 1100 },
+  // Images: a steady trickle, they are kept once fetched.
+  'commons.wikimedia.org': { concurrency: 2, minIntervalMs: 250 },
+  'upload.wikimedia.org': { concurrency: 2, minIntervalMs: 150 },
 };
 
-let userAgent = 'Way/0.1 (personal history globe; self-hosted)';
+let userAgent = 'Way/0.1 (https://github.com/bordecielnas-alt/Way; personal history globe)';
 
 export function setUserAgent(ua: string): void {
   userAgent = ua;
@@ -115,6 +118,29 @@ const cooling = new Map<string, number>();
 /** When a host that asked us to slow down accepts requests again (0 if it did not). */
 export function coolingUntil(host: string): number {
   return cooling.get(host) ?? 0;
+}
+
+/** A file (an image), following redirects; fails above `maxBytes`. */
+export async function fetchBytes(url: string, maxBytes: number, opts: FetchOptions = {}): Promise<{ data: Buffer; type: string }> {
+  const { timeoutMs = 30_000, retries = 1 } = opts;
+  const host = new URL(url).host;
+  for (let attempt = 0; ; attempt++) {
+    const res = await limiterFor(host).run(() =>
+      fetch(url, { headers: { 'User-Agent': userAgent, ...opts.headers }, signal: AbortSignal.timeout(timeoutMs) }),
+    );
+    if (res.ok) {
+      if (Number(res.headers.get('content-length') ?? 0) > maxBytes) throw new HttpError(413, `${host}: file too large`);
+      const data = Buffer.from(await res.arrayBuffer());
+      if (data.length > maxBytes) throw new HttpError(413, `${host}: file too large`);
+      return { data, type: (res.headers.get('content-type') ?? 'application/octet-stream').split(';')[0]!.trim() };
+    }
+    const retryable = res.status === 429 || res.status >= 500;
+    if (!retryable || attempt >= retries) throw new HttpError(res.status, `${res.status} ${host}`);
+    const retryAfter = Number(res.headers.get('retry-after'));
+    const wait = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2000 * (attempt + 1);
+    if (res.status === 429) cooling.set(host, Math.max(coolingUntil(host), Date.now() + wait));
+    await sleep(wait);
+  }
 }
 
 export async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {

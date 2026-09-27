@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Cliopatria } from './cliopatria.ts';
-import { fitsEra, frenchTitle, sameplace } from './polity.ts';
+import { fileAt, fitsEra, frenchTitle, sameplace } from './polity.ts';
+import { mediaSources, snapWidth } from './media.ts';
+import { normalizeCache, refreshMs } from './settings.ts';
 
 const square = [[[0, 0, 100, 0, 0, 100, -100, 0, 0, -100]]];
 
@@ -75,5 +77,49 @@ describe('sameplace', () => {
     expect(sameplace('Swedish Empire', 'Swedish Empire')).toBe(true);
     expect(sameplace('Kingdom of Portugal', 'Kingdom of Portugal')).toBe(true);
     expect(sameplace('Morocco', null)).toBe(true);
+  });
+});
+
+describe('coats of arms and flags', () => {
+  const flags = [
+    { file: 'Royal flag.svg', start: 1365, end: 1790 },
+    { file: 'Tricolore.svg', start: 1794, end: null },
+    { file: 'Undated.svg', start: null, end: null },
+  ];
+  it('picks the one of the era, else an undated one', () => {
+    expect(fileAt(flags, 1500)).toBe('Royal flag.svg');
+    expect(fileAt(flags, 1900)).toBe('Tricolore.svg');
+    expect(fileAt(flags, 1000)).toBe('Undated.svg');
+    expect(fileAt(flags.slice(0, 2), 1000)).toBeNull();
+  });
+  it('leaves out invented emblems and names of another era', () => {
+    const files = (...names: string[]) => names.map((file) => ({ file, start: null, end: null }));
+    expect(fileAt(files('Fictitious Ottoman flag 3.svg'), 1806)).toBeNull();
+    expect(fileAt(files('Coat of arms of the United Kingdom (1901–1952).svg', 'Royal arms.svg'), 1806)).toBe('Royal arms.svg');
+    expect(fileAt(files('Flag of Herat until 1842.svg'), 1806)).toBe('Flag of Herat until 1842.svg');
+    expect(fileAt(files('Flag of Herat until 1842.svg'), 1900)).toBeNull();
+  });
+});
+
+describe('image cache', () => {
+  it('only relays Wikimedia images, at standard widths', () => {
+    expect(snapWidth(200)).toBe(250);
+    expect(snapWidth(5000)).toBe(1280);
+    // Paths as Wikimedia builds them (checked against the live Special:FilePath redirect).
+    expect(mediaSources({ file: 'Flag of Denmark.svg', width: 200 })).toEqual([
+      'https://upload.wikimedia.org/wikipedia/commons/thumb/9/9c/Flag_of_Denmark.svg/250px-Flag_of_Denmark.svg.png',
+      'https://upload.wikimedia.org/wikipedia/commons/9/9c/Flag_of_Denmark.svg',
+    ]);
+    expect(mediaSources({ file: '../etc/passwd', width: 64 })).toEqual([]);
+    expect(mediaSources({ url: 'https://upload.wikimedia.org/a/b.jpg' })).toEqual(['https://upload.wikimedia.org/a/b.jpg']);
+    expect(mediaSources({ url: 'https://example.com/a.jpg' })).toEqual([]);
+    expect(mediaSources({ url: 'http://upload.wikimedia.org/a.jpg' })).toEqual([]);
+  });
+  it('bounds the settings', () => {
+    const env = 10 * 1024 ** 3;
+    expect(normalizeCache(undefined, env)).toEqual({ maxGb: 10, refreshDays: 180, images: true });
+    expect(normalizeCache({ maxGb: 500 }, env).maxGb).toBe(100);
+    expect(normalizeCache({ maxGb: 0.1 }, env).maxGb).toBe(0.5);
+    expect(refreshMs(normalizeCache({ refreshDays: 0 }, env))).toBe(Infinity);
   });
 });

@@ -35,7 +35,10 @@ interface SettingsResponse {
   variables: Record<string, Variable>;
   providers: ProviderStatus[];
   ui: UiPrefs;
+  cache: CachePrefs;
 }
+
+interface CachePrefs { maxGb: number; refreshDays: number; images: boolean }
 
 interface UiPrefs { sounds: boolean; volume: number; hoverOpen: boolean; meanwhileMaxSpan: number }
 
@@ -44,7 +47,7 @@ interface AdminResponse {
   queue: { waiting: number; active: number; level2?: { waiting: number; active: number } };
   keys: Record<'pending' | 'done' | 'partial' | 'failed', number>;
   pois: number;
-  cache: { bytes: number; maxBytes: number };
+  cache: { bytes: number; maxBytes: number; media: { bytes: number; count: number } };
   level2: { enabled: boolean; mode: 'active' | 'degraded' | 'no-llm' | 'off'; providers: ProviderStatus[] };
 }
 
@@ -92,6 +95,8 @@ const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const nf = new Intl.NumberFormat('fr-FR');
 const mb = (b: number) => `${nf.format(Math.round(b / 1048576))} Mo`;
+const gbf = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 });
+const size = (b: number) => (b >= 1024 ** 3 ? `${gbf.format(b / 1024 ** 3)} Go` : mb(b));
 
 class Unauthorized extends Error {}
 
@@ -156,14 +161,14 @@ $('logout').addEventListener('click', async () => {
 
 // ---------- tabs ----------
 
-type Tab = 'ai' | 'ui' | 'status' | 'account';
+type Tab = 'ai' | 'ui' | 'cache' | 'status' | 'account';
 
 function selectTab(tab: Tab): void {
-  if (!['ai', 'ui', 'status', 'account'].includes(tab)) tab = 'ai';
+  if (!['ai', 'ui', 'cache', 'status', 'account'].includes(tab)) tab = 'ai';
   document.querySelectorAll<HTMLElement>('[role=tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
   document.querySelectorAll<HTMLElement>('[data-panel]').forEach((p) => (p.hidden = p.dataset.panel !== tab));
   history.replaceState(null, '', `#${tab}`);
-  if (tab === 'status') startStatus();
+  if (tab === 'status' || tab === 'cache') startStatus();
   else stopStatus();
 }
 
@@ -193,6 +198,7 @@ async function loadSettings(): Promise<void> {
     resetDraft();
     renderSettings();
     renderUi();
+    renderCache();
   } catch (e) {
     if (!(e instanceof Unauthorized)) $('llm').innerHTML = `<p class="form-error">${esc((e as Error).message)}</p>`;
   }
@@ -491,6 +497,68 @@ $('sound-list').addEventListener('change', (e) => {
   input.value = '';
 });
 
+// ---------- cache ----------
+
+/** Budget steps of the slider, in GB. */
+const GB_STEPS = [0.5, 1, 2, 3, 5, 10, 15, 20, 30, 50, 75, 100];
+const gbLabel = (gb: number) => `${gbf.format(gb)} Go`;
+
+function renderCache(): void {
+  const c = current!.cache;
+  const i = GB_STEPS.findIndex((g) => g >= c.maxGb);
+  $<HTMLInputElement>('cache-size').value = String(i < 0 ? GB_STEPS.length - 1 : i);
+  $('cache-size-value').textContent = gbLabel(c.maxGb);
+  $<HTMLSelectElement>('cache-refresh').value = String(c.refreshDays);
+  // A value set by hand in settings.json may not be in the list.
+  if ($<HTMLSelectElement>('cache-refresh').value !== String(c.refreshDays)) $<HTMLSelectElement>('cache-refresh').value = '180';
+  $<HTMLInputElement>('cache-images').checked = c.images;
+}
+
+function renderCacheUsage(d: AdminResponse): void {
+  const used = d.cache.bytes + d.cache.media.bytes;
+  $('cache-usage').innerHTML = [
+    card('Utilisé', size(used), `sur ${size(d.cache.maxBytes)}`),
+    card('Points', nf.format(d.pois), size(d.cache.bytes)),
+    card('Images', nf.format(d.cache.media.count), size(d.cache.media.bytes)),
+  ].join('');
+}
+
+let cacheTimer: number | undefined;
+function saveCache(): void {
+  const gb = GB_STEPS[Number($<HTMLInputElement>('cache-size').value)] ?? 10;
+  const cache: CachePrefs = {
+    maxGb: gb,
+    refreshDays: Number($<HTMLSelectElement>('cache-refresh').value),
+    images: $<HTMLInputElement>('cache-images').checked,
+  };
+  $('cache-size-value').textContent = gbLabel(gb);
+  clearTimeout(cacheTimer);
+  cacheTimer = window.setTimeout(async () => {
+    try {
+      const res = await api<SettingsResponse>('/api/settings', { method: 'PUT', body: { cache } });
+      current = { ...current!, cache: res.cache };
+      flash('Enregistré.');
+      void refreshStatus();
+    } catch (err) {
+      if (!(err instanceof Unauthorized)) flash(`Échec : ${(err as Error).message}`);
+    }
+  }, 500);
+}
+
+$('cache-size').addEventListener('input', saveCache);
+$('cache-refresh').addEventListener('change', saveCache);
+$('cache-images').addEventListener('change', saveCache);
+$('cache-clear-media').addEventListener('click', async () => {
+  if (!confirm('Vider le cache des images ? Elles seront redemandées à Wikimedia au besoin.')) return;
+  try {
+    await api('/api/admin/media', { method: 'DELETE' });
+    flash('Cache des images vidé.');
+    void refreshStatus();
+  } catch (err) {
+    if (!(err instanceof Unauthorized)) flash(`Échec : ${(err as Error).message}`);
+  }
+});
+
 // ---------- status ----------
 
 const MODE: Record<AdminResponse['level2']['mode'], [string, string]> = {
@@ -522,7 +590,7 @@ function state(p: ProviderStatus): string {
 function renderStatus(d: AdminResponse): void {
   const q2 = d.queue.level2;
   $('summary').innerHTML = [
-    card('Points en cache', nf.format(d.pois), `${mb(d.cache.bytes)} sur ${mb(d.cache.maxBytes)}`),
+    card('Points en cache', nf.format(d.pois), `${size(d.cache.bytes + d.cache.media.bytes)} sur ${size(d.cache.maxBytes)} (images comprises)`),
     card('Zones explorées', nf.format(d.keys.done), `${d.keys.pending + d.keys.partial} en cours · ${d.keys.failed} en échec`),
     card('File de recherche', nf.format(d.queue.waiting), `${d.queue.active} en cours${q2 ? ` · niveau 2 : ${q2.waiting + q2.active}` : ''}`),
     card('Stockage', d.mode.store === 'embedded-postgres' ? 'Postgres intégré' : d.mode.store, `file ${d.mode.queue}`),
@@ -551,7 +619,9 @@ let statusTimer: ReturnType<typeof setInterval> | null = null;
 
 async function refreshStatus(): Promise<void> {
   try {
-    renderStatus(await api<AdminResponse>('/api/admin/providers'));
+    const d = await api<AdminResponse>('/api/admin/providers');
+    renderStatus(d);
+    renderCacheUsage(d);
   } catch (e) {
     if (!(e instanceof Unauthorized)) $('level2-hint').textContent = 'Serveur injoignable.';
   }

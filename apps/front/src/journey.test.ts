@@ -57,6 +57,10 @@ describe('armyAt', () => {
     expect(armyAt(army, 1805.97, 0.01)!.kind).toBe('travel');
     expect(armyAt(army, 1810, 0.05)).toBeNull();
   });
+  it('names the battle it is fighting, so two sides there can clash', () => {
+    expect(armyAt(army, 1805.003, 2 / 365)!.ref).toBe('Q3');
+    expect(armyAt(army, 1805.3, 2 / 365)!.ref).toBeUndefined();
+  });
 });
 
 describe('geometry', () => {

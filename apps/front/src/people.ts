@@ -3,10 +3,11 @@ import {
   LabelStyle, Material, NearFarScalar, PolylineCollection, VerticalOrigin,
   type Billboard, type Label, type Polyline, type Viewer,
 } from 'cesium';
-import { formatYear, type ArmiesResponse, type Army, type PersonHit, type PersonJourney } from '@way/shared';
-import { armyFigure, FIGURE_STYLES, figureId, PALETTE, personFigure, type FigureStyle } from './figures.ts';
+import { formatYear, type ArmiesResponse, type Army, type EmblemsResponse, type PersonHit, type PersonJourney } from '@way/shared';
+import { armyFigure, clashFigure, FIGURE_STYLES, figureId, PALETTE, personFigure, type FigureStyle } from './figures.ts';
 import { armyAt, presenceAt, type Presence } from './journey.ts';
 import { fetchCached } from './localcache.ts';
+import { commonsImage, dominantColor, loadImage, viaServer } from './media.ts';
 
 // People followed on the map (chosen by the viewer, remembered in the
 // browser) and the armies of the wars under way, moving with the timeline.
@@ -69,6 +70,16 @@ export class PeopleLayer {
   private billboards: BillboardCollection;
   private labels: LabelCollection;
   private trails: PolylineCollection;
+  /** Crossed swords where two armies meet, by battle item, with the armies there. */
+  private clashes = new Map<string, { bb: Billboard; armies: string[] }>();
+  private clashBoards: BillboardCollection;
+  /** Blasons → Armées: each side under its flag and in its colors. */
+  private heraldry = false;
+  /** Side at a decade -> its flag and main color (null: none known). */
+  private sideFlags = new Map<string, { img: HTMLImageElement; color: string | null } | null>();
+  private flagQueue = new Map<string, { qid: string; year: number }>();
+  private flagTimer: number | undefined;
+  private flagTries = 0;
   private window = { tStart: 0, tEnd: 0 };
   private tween = 0;
   private searchTimer: number | undefined;
@@ -83,6 +94,7 @@ export class PeopleLayer {
     this.trails = viewer.scene.primitives.add(new PolylineCollection());
     this.billboards = viewer.scene.primitives.add(new BillboardCollection({ scene: viewer.scene }));
     this.labels = viewer.scene.primitives.add(new LabelCollection({ scene: viewer.scene }));
+    this.clashBoards = viewer.scene.primitives.add(new BillboardCollection({ scene: viewer.scene }));
     root.innerHTML = `
       <button class="people-toggle" type="button" aria-expanded="false">
         <span class="people-title">Personnages</span><span class="people-count"></span><span class="people-caret">▾</span>
@@ -182,7 +194,7 @@ export class PeopleLayer {
       this.results.innerHTML = hits.length
         ? hits.map((h, i) => `
             <li><button type="button" data-i="${i}">
-              ${h.image ? `<img alt="" src="${esc(h.image)}" referrerpolicy="no-referrer">` : '<span class="people-noimg"></span>'}
+              ${h.image ? `<img alt="" src="${esc(viaServer(h.image))}" referrerpolicy="no-referrer">` : '<span class="people-noimg"></span>'}
               <span><b>${esc(h.name)}</b><small>${esc([lifespan(h.born, h.died), h.description].filter(Boolean).join(' · '))}</small></span>
             </button></li>`).join('')
         : '<li class="people-empty">Personne de ce nom dans Wikidata.</li>';
@@ -286,7 +298,7 @@ export class PeopleLayer {
       this.portraits.set(url, img);
       if (this.prefs.style === 'medallion') this.update(true);
     };
-    img.src = url;
+    img.src = viaServer(url);
   }
 
   private decadesInView(): number[] | null {
@@ -310,17 +322,85 @@ export class PeopleLayer {
 
   // ---------- map ----------
 
+  /** Time shown, in decimal years (a day is about 0.0027). */
   setWindow(tStart: number, tEnd: number): void {
     this.window = { tStart, tEnd };
     this.update(false);
+  }
+
+  setHeraldry(on: boolean): void {
+    if (on === this.heraldry) return;
+    this.heraldry = on;
+    this.update(true);
+  }
+
+  /** Decade key of a side's flag: flags change with regimes. */
+  private flagKey(a: Army): string | null {
+    if (!a.sideQid) return null;
+    return `${a.sideQid}|${Math.floor((a.battles[0]?.t ?? 0) / 10) * 10}`;
+  }
+
+  /** The side's flag once known and loaded; asks for it otherwise. */
+  private sideFlag(a: Army): { img: HTMLImageElement; color: string | null } | null {
+    const key = this.flagKey(a);
+    if (!key) return null;
+    if (!this.sideFlags.has(key) && !this.flagQueue.has(key)) {
+      this.flagQueue.set(key, { qid: a.sideQid!, year: Math.floor(a.battles[0]?.t ?? 0) });
+      clearTimeout(this.flagTimer);
+      this.flagTimer = window.setTimeout(() => void this.loadFlags(), 300);
+    }
+    return this.sideFlags.get(key) ?? null;
+  }
+
+  /** Flags of the sides in view, grouped by year, then their images. */
+  private async loadFlags(): Promise<void> {
+    const byYear = new Map<number, string[]>();
+    for (const { qid, year } of this.flagQueue.values()) byYear.set(year, [...(byYear.get(year) ?? []), qid]);
+    let pending = false;
+    for (const [year, qids] of byYear) {
+      try {
+        const r = await fetch(`/api/emblems?${new URLSearchParams({ qids: [...new Set(qids)].slice(0, 100).join(','), year: String(year) })}`);
+        if (!r.ok) continue;
+        const res = (await r.json()) as EmblemsResponse;
+        pending ||= res.pending > 0;
+        for (const qid of new Set(qids)) {
+          const key = `${qid}|${Math.floor(year / 10) * 10}`;
+          const e = res.emblems[qid];
+          const file = e ? (e.flag ?? e.coa) : null;
+          if (!file) {
+            if (res.pending === 0) {
+              this.sideFlags.set(key, null);
+              this.flagQueue.delete(key);
+            }
+            continue;
+          }
+          this.flagQueue.delete(key);
+          this.sideFlags.set(key, null);
+          void loadImage(commonsImage(file, 120)).then((img) => {
+            if (!img) {
+              window.setTimeout(() => this.sideFlags.delete(key), 60_000);
+              return;
+            }
+            this.sideFlags.set(key, { img, color: dominantColor(img) });
+            if (this.heraldry) this.update(true);
+          });
+        }
+      } catch {
+        /* plain banners */
+      }
+    }
+    // Wikidata is being asked in the background: come back for the rest.
+    if (pending && this.flagQueue.size && this.flagTries++ < 10) this.flagTimer = window.setTimeout(() => void this.loadFlags(), 6000);
+    else this.flagTries = 0;
   }
 
   /** Recomputes where everyone is; `redraw` also rebuilds their figures (style, color). */
   private update(redraw: boolean): void {
     const { tStart, tEnd } = this.window;
     const t = (tStart + tEnd) / 2;
-    // An event holds someone for a share of the window: yearly steps still catch a battle.
-    const tol = Math.max(0.08, (tEnd - tStart) / 10);
+    // An event holds someone for a share of the window: yearly steps still catch a battle,
+    // and day by day, a battle lasts a couple of days.
+    const tol = Math.max(2 / 365, (tEnd - tStart) / 10);
     const seen = new Set<string>();
     for (const f of this.prefs.followed) {
       const j = this.journeys.get(f.qid);
@@ -336,31 +416,76 @@ export class PeopleLayer {
     const decades = this.prefs.armies ? this.decadesInView() : null;
     if (decades) {
       for (const d of decades) this.loadArmies(d);
+      // Playing forward: the next decade is on its way before the window gets there.
+      if (tEnd - Math.floor(tEnd / 10) * 10 > 6) this.loadArmies(decades[decades.length - 1]! + 10);
       const byId = new Map<string, Army>();
       for (const d of decades) for (const a of this.armies.get(d) ?? []) {
         const cur = byId.get(a.id);
         if (!cur || a.battles.length > cur.battles.length) byId.set(a.id, a);
       }
-      const atBattle = new Map<string, number>();
+      const here: { a: Army; p: Presence; spot: string }[] = [];
       for (const a of byId.values()) {
         const p = armyAt(a, t, tol);
-        if (!p) continue;
-        const key = `a:${a.id}`;
-        seen.add(key);
-        const color = PALETTE[hashIndex(a.sideQid ?? a.side, PALETTE.length)]!;
-        // Two sides at the same battle stand apart, facing each other.
-        const spot = `${p.lat.toFixed(2)},${p.lon.toFixed(2)}`;
-        const n = atBattle.get(spot) ?? 0;
-        atBattle.set(spot, n + 1);
-        this.place(key, p, armyFigure(color, p.kind), a.side, Color.fromCssColorString(color), true, redraw, n);
+        if (p) here.push({ a, p, spot: p.ref ?? `${p.lat.toFixed(2)},${p.lon.toFixed(2)}` });
       }
+      const bySpot = new Map<string, typeof here>();
+      for (const h of here) bySpot.set(h.spot, [...(bySpot.get(h.spot) ?? []), h]);
+      for (const group of bySpot.values()) {
+        group.forEach(({ a, p }, i) => {
+          const key = `a:${a.id}`;
+          seen.add(key);
+          const flag = this.heraldry ? this.sideFlag(a) : null;
+          const color = flag?.color ?? PALETTE[hashIndex(a.sideQid ?? a.side, PALETTE.length)]!;
+          // Sides at the same place stand apart, facing each other.
+          const offset = (i - (group.length - 1) / 2) * 62;
+          this.place(key, p, armyFigure(color, p.kind, flag?.img ?? null), a.side, Color.fromCssColorString(color), true, redraw, offset);
+        });
+        // Two armies at the same battle: they clash.
+        const ref = group[0]!.p.ref;
+        const fighting = group.filter((h) => h.p.kind === 'battle');
+        if (ref && fighting.length >= 2) {
+          const key = `c:${ref}`;
+          seen.add(key);
+          this.placeClash(key, fighting[0]!.p, fighting.map((h) => `a:${h.a.id}`));
+        }
+      }
+    }
+    for (const [key, c] of this.clashes) {
+      if (seen.has(key)) continue;
+      this.clashBoards.remove(c.bb);
+      this.clashes.delete(key);
     }
     for (const key of [...this.actors.keys()]) if (!seen.has(key)) this.removeActor(key);
     this.animate();
     if (this.prefs.open) this.renderList();
   }
 
-  private place(key: string, p: Presence, image: HTMLCanvasElement, text: string, color: Color, army: boolean, redraw: boolean, slot = 0): void {
+  /** The clash sign over a battle, popping in when the armies meet. */
+  private placeClash(key: string, p: Presence, armies: string[]): void {
+    const cur = this.clashes.get(key);
+    if (cur) {
+      cur.armies = armies;
+      return;
+    }
+    const bb = this.clashBoards.add({
+      position: Cartesian3.fromDegrees(p.lon, p.lat, 1500), image: clashFigure() as unknown as string,
+      verticalOrigin: VerticalOrigin.CENTER, pixelOffset: new Cartesian2(0, -44), scale: 0.1,
+      disableDepthTestDistance: 5e4, scaleByDistance: new NearFarScalar(3e5, 1.15, 2e7, 0.55), id: key,
+    });
+    this.clashes.set(key, { bb, armies });
+    const start = performance.now();
+    const pop = () => {
+      if (this.clashes.get(key)?.bb !== bb) return;
+      const k = Math.min(1, (performance.now() - start) / 450);
+      // Overshoots a little, like a blow.
+      bb.scale = 0.1 + 0.9 * (1 + 2.2 * (k - 1) ** 3 + 1.2 * (k - 1) ** 2);
+      this.viewer.scene.requestRender();
+      if (k < 1) requestAnimationFrame(pop);
+    };
+    requestAnimationFrame(pop);
+  }
+
+  private place(key: string, p: Presence, image: HTMLCanvasElement, text: string, color: Color, army: boolean, redraw: boolean, offset = 0): void {
     let a = this.actors.get(key);
     const target: [number, number] = [p.lat, p.lon];
     if (!a) {
@@ -391,9 +516,8 @@ export class PeopleLayer {
       a.imageId = id;
     }
     a.label.text = text;
-    const off = slot ? (slot % 2 ? 34 : -34) * Math.ceil(slot / 2) : 0;
-    a.bb.pixelOffset = new Cartesian2(off, 0);
-    a.label.pixelOffset = new Cartesian2(off, 4);
+    a.bb.pixelOffset = new Cartesian2(offset, 0);
+    a.label.pixelOffset = new Cartesian2(offset, 4);
     a.presence = p;
     a.from = a.at;
     a.to = target;
@@ -441,7 +565,9 @@ export class PeopleLayer {
   /** The person or army under the cursor. */
   pick(position: Cartesian2): Picked | null {
     const hit = this.viewer.scene.pick(position) as { id?: unknown } | undefined;
-    const key = typeof hit?.id === 'string' ? hit.id : null;
+    let key = typeof hit?.id === 'string' ? hit.id : null;
+    // The clash sign stands for the armies fighting there.
+    if (key?.startsWith('c:')) key = this.clashes.get(key)?.armies[0] ?? null;
     const a = key ? this.actors.get(key) : undefined;
     if (!a?.presence) return null;
     if (key!.startsWith('p:')) {

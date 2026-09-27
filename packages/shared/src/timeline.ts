@@ -40,6 +40,17 @@ export function posToYear(pos: number): number {
   return MAX_YEAR;
 }
 
+/** Position in [0, 1] -> decimal year, unrounded (days and months). */
+export function posToDecimalYear(pos: number): number {
+  const p = Math.max(0, Math.min(1, pos)) * TOTAL;
+  let acc = 0;
+  for (const s of SEGMENTS) {
+    if (p <= acc + s.weight) return s.from + ((p - acc) / s.weight) * (s.to - s.from);
+    acc += s.weight;
+  }
+  return MAX_YEAR;
+}
+
 /** Tick marks for the timeline ruler. */
 export const TIMELINE_TICKS: number[] = [
   -5000, -4000, -3000, -2000, -1000, -500, 1, 500, 1000, 1500, 1600, 1700, 1800, 1850, 1900, 1950, 2000,

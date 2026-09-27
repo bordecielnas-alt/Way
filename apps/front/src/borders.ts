@@ -2,9 +2,10 @@ import {
   Event as CesiumEvent, GeographicTilingScheme, ImageryLayer, Math as CesiumMath, Rectangle,
   type ImageryProvider, type Viewer,
 } from 'cesium';
-import { formatYear, type BordersIndex, type BordersPeriod, type PolityLabels } from '@way/shared';
+import { formatYear, type BordersIndex, type BordersPeriod, type Emblem, type EmblemsResponse, type PolityLabels } from '@way/shared';
 import { bounds, type Area, type Region, type Ring } from './divisions.ts';
 import { letter, shortName, type Lettering } from './lettering.ts';
+import { commonsImage, loadImage } from './media.ts';
 
 /** A realm, or a member drawn inside a composite realm, for the period shown. */
 export interface BorderShape extends Area {
@@ -29,6 +30,9 @@ interface Drawn extends Area {
 }
 
 interface Named { text: Lettering; style: 'realm' | 'region' }
+
+/** A coat of arms (or flag) in watermark: centered at lon/lat, `h` degrees of latitude high. */
+interface Mark { img: HTMLImageElement; lon: number; lat: number; h: number }
 
 const TILE = 256;
 type Style = 'normal' | 'highlight' | 'regions';
@@ -81,6 +85,18 @@ function measure(font: string, tracking: number) {
   };
 }
 
+/** Watermark strength by its height on screen (under the realm's color): gone when too small or filling the view. */
+function markAlpha(px: number): number {
+  if (px < 22 || px > 1400) return 0;
+  return 0.3 * Math.min(1, (px - 22) / 30) * Math.min(1, (1400 - px) / 500);
+}
+
+/** Removes a layer, and drops the tiles it still had waiting to be drawn. */
+function drop(viewer: Viewer, layer: ImageryLayer): void {
+  (layer.imageryProvider as unknown as BordersTiles).retired = true;
+  viewer.imageryLayers.remove(layer, true);
+}
+
 /** Name fades in once its letters are readable, and out when they grow bigger than the screen needs. */
 function nameAlpha(px: number, style: Named['style']): number {
   const lo = style === 'realm' ? 6 : 7;
@@ -106,8 +122,10 @@ class BordersTiles {
   readonly credit = undefined;
   readonly proxy = undefined;
   readonly hasAlphaChannel = true;
+  /** Set when its layer is gone: tiles still queued are skipped. */
+  retired = false;
 
-  constructor(private shapes: Drawn[], private style: Style = 'normal', private names: Named[] = []) {
+  constructor(private shapes: Drawn[], private style: Style = 'normal', private names: Named[] = [], private marks: Mark[] = []) {
     // A highlight or a territory's regions only cover that territory: Cesium then requests no other tile.
     if (style !== 'normal' && shapes.length) {
       const w = Math.min(...shapes.map((s) => s.west));
@@ -131,6 +149,11 @@ class BordersTiles {
   }
 
   private draw(x: number, y: number, level: number): HTMLCanvasElement {
+    if (this.retired) {
+      const empty = document.createElement('canvas');
+      empty.width = empty.height = 1;
+      return empty;
+    }
     const r = this.tilingScheme.tileXYToRectangle(x, y, level);
     const west = CesiumMath.toDegrees(r.west);
     const east = CesiumMath.toDegrees(r.east);
@@ -185,8 +208,27 @@ class BordersTiles {
       g.stroke();
     }
     g.setLineDash([]);
+    this.drawMarks(g, west, south, east, north, sx, sy);
     this.drawNames(g, west, south, east, north, sx, sy);
     return canvas;
+  }
+
+  private drawMarks(g: CanvasRenderingContext2D, west: number, south: number, east: number, north: number, sx: number, sy: number): void {
+    for (const m of this.marks) {
+      const cos = Math.max(0.2, Math.cos((m.lat * Math.PI) / 180));
+      const hh = m.h / 2;
+      // A drawing without a size of its own is taken as square.
+      const hw = m.img.naturalWidth && m.img.naturalHeight ? (hh * m.img.naturalWidth) / m.img.naturalHeight : hh;
+      if (m.lon + hw / cos < west || m.lon - hw / cos > east || m.lat + hh < south || m.lat - hh > north) continue;
+      const alpha = markAlpha(m.h * sy);
+      if (alpha <= 0.01) continue;
+      g.globalAlpha = alpha;
+      // Degrees of latitude as the unit both ways, as for the names: the emblem keeps its shape.
+      g.setTransform(sx / cos, 0, 0, sy, (m.lon - west) * sx, (north - m.lat) * sy);
+      g.drawImage(m.img, -hw, -hh, hw * 2, hh * 2);
+    }
+    g.globalAlpha = 1;
+    g.setTransform(1, 0, 0, 1, 0, 0);
   }
 
   private drawNames(g: CanvasRenderingContext2D, west: number, south: number, east: number, north: number, sx: number, sy: number): void {
@@ -289,6 +331,17 @@ export class BordersLayer {
   private quietRealm: string | null = null;
   private namesTimer: number | undefined;
   private letterings = new Map<string, Lettering | null>();
+  /** Coats of arms in watermark (Blasons → Territoires). */
+  private heraldry = false;
+  private emblems: Record<string, Emblem> = {};
+  private emblemsFrom: number | null = null;
+  private emblemImages = new Map<string, HTMLImageElement | null>();
+  private emblemsTimer: number | undefined;
+  private redrawTimer: number | undefined;
+  /** Where each realm's watermark goes (behind the middle of its name), from the last drawing. */
+  private anchors: { key: string; qid: string | null; lon: number; lat: number; h: number }[] = [];
+  /** Watermarks have their own layer, under the realms' colors: an emblem arriving redraws only them. */
+  private marksLayer: ImageryLayer | null = null;
 
   constructor(private viewer: Viewer, private onNote: (text: string) => void) {
     onDrained = () => viewer.scene.requestRender();
@@ -351,6 +404,7 @@ export class BordersLayer {
       this.current = period;
       this.show();
       void this.loadNames(from);
+      if (this.heraldry) void this.loadEmblems(from);
       this.onNote(`Frontières de ${formatYear(period.from)}${period.to > period.from ? ` à ${formatYear(period.to)}` : ''}`);
       // Playing forward: the next period is fetched ahead.
       const next = this.index!.events.find((y) => y > period.to);
@@ -405,7 +459,7 @@ export class BordersLayer {
   outline(area: Area | null): void {
     this.highlighted = null;
     if (this.highlightLayer) {
-      this.viewer.imageryLayers.remove(this.highlightLayer, true);
+      drop(this.viewer, this.highlightLayer);
       this.highlightLayer = null;
     }
     if (area) {
@@ -429,7 +483,7 @@ export class BordersLayer {
   /** Draws a territory's regions and their names (null clears); estimated limits are dashed. */
   showRegions(regions: Region[] | null, realm: string | null = null): void {
     if (this.regionsLayer) {
-      this.viewer.imageryLayers.remove(this.regionsLayer, true);
+      drop(this.viewer, this.regionsLayer);
       this.regionsLayer = null;
     }
     const was = this.quietRealm;
@@ -475,6 +529,8 @@ export class BordersLayer {
     if (!period) return;
     const drawn: Drawn[] = [];
     const names: Named[] = [];
+    const anchors: typeof this.anchors = [];
+    const marked = new Set<string>();
     // Big realms first: small ones inside or across them stay visible.
     const byId = new Map(period.shapes.map((s) => [s.id, s]));
     const ordered = [...period.shapes].sort((a, b) => (a.parent === null ? 0 : 1) - (b.parent === null ? 0 : 1) || b.km2 - a.km2);
@@ -492,6 +548,12 @@ export class BordersLayer {
           const label = this.displayName(s.name);
           const text = this.lettering(`${s.id}:${label}`, s.main, label, 'realm');
           if (text) names.push({ text, style: 'realm' });
+          // One watermark per realm, on its largest piece, behind the middle of its name.
+          if (text?.glyphs.length && !marked.has(realmKey(s))) {
+            marked.add(realmKey(s));
+            const mid = text.glyphs[Math.floor(text.glyphs.length / 2)]!;
+            anchors.push({ key: realmKey(s), qid: s.qid, lon: mid.lon, lat: mid.lat, h: Math.min(text.size * 4.5, (s.north - s.south) * 0.8) });
+          }
         }
       } else {
         // A vassal inside its realm: a faint line, as on a strategy map.
@@ -504,6 +566,8 @@ export class BordersLayer {
     this.viewer.imageryLayers.add(layer, this.layer ? this.viewer.imageryLayers.indexOf(this.layer) + 1 : undefined);
     this.crossFade(this.layer, layer);
     this.layer = layer;
+    this.anchors = anchors;
+    this.showMarks();
     if (this.highlighted) this.highlight(this.highlighted);
   }
 
@@ -525,6 +589,78 @@ export class BordersLayer {
     }
   }
 
+  /** Shows or hides the coats of arms in watermark. */
+  setHeraldry(on: boolean): void {
+    if (on === this.heraldry) return;
+    this.heraldry = on;
+    if (on && this.current && this.emblemsFrom !== this.current.from) void this.loadEmblems(this.current.from);
+    this.showMarks();
+  }
+
+  /** The loaded coat of arms (else flag) of a realm's item, if any. */
+  private emblemImage(qid: string | null): HTMLImageElement | null {
+    const e = qid ? this.emblems[qid] : undefined;
+    const file = e ? (e.coa ?? e.flag) : null;
+    if (!file) return null;
+    if (!this.emblemImages.has(file)) {
+      this.emblemImages.set(file, null);
+      void loadImage(commonsImage(file, 250)).then((img) => {
+        this.emblemImages.set(file, img);
+        if (img) this.redrawSoon();
+        else window.setTimeout(() => this.emblemImages.delete(file), 60_000);
+      });
+    }
+    return this.emblemImages.get(file) ?? null;
+  }
+
+  /** Images arrive one by one: one redraw for a batch of them. */
+  private redrawSoon(): void {
+    clearTimeout(this.redrawTimer);
+    this.redrawTimer = window.setTimeout(() => this.showMarks(), 600);
+  }
+
+  /** Redraws the watermarks alone, just under the realms. */
+  private showMarks(): void {
+    const marks: Mark[] = [];
+    if (this.heraldry) {
+      for (const a of this.anchors) {
+        if (a.key === this.quietRealm) continue;
+        const img = this.emblemImage(a.qid);
+        if (img) marks.push({ img, lon: a.lon, lat: a.lat, h: a.h });
+      }
+    }
+    const old = this.marksLayer;
+    this.marksLayer = null;
+    if (marks.length && this.layer) {
+      const layer = new ImageryLayer(new BordersTiles([], 'normal', [], marks) as unknown as ImageryProvider);
+      layer.show = this.visible;
+      this.viewer.imageryLayers.add(layer, this.viewer.imageryLayers.indexOf(this.layer));
+      this.marksLayer = layer;
+    }
+    // The old one stays a moment, while the new tiles are drawn.
+    if (old) window.setTimeout(() => drop(this.viewer, old), this.marksLayer ? 900 : 0);
+    this.viewer.scene.requestRender();
+  }
+
+  /** Coats of arms come from the server progressively, like the names. */
+  private async loadEmblems(from: number, attempt = 0): Promise<void> {
+    clearTimeout(this.emblemsTimer);
+    try {
+      const r = await fetch(`/api/polity/emblems?year=${from}`);
+      const res = (await r.json()) as EmblemsResponse;
+      if (this.current?.from !== from || !this.heraldry) return;
+      const changed = JSON.stringify(res.emblems) !== JSON.stringify(this.emblems);
+      this.emblems = res.emblems;
+      this.emblemsFrom = from;
+      if (changed) this.showMarks();
+      if (res.pending > 0 && attempt < 12) {
+        this.emblemsTimer = window.setTimeout(() => void this.loadEmblems(from, attempt + 1), 6_000);
+      }
+    } catch {
+      /* no watermarks */
+    }
+  }
+
   private crossFade(from: ImageryLayer | null, to: ImageryLayer): void {
     const start = performance.now();
     const step = () => {
@@ -534,7 +670,7 @@ export class BordersLayer {
       if (from) from.alpha = this.alpha * (1 - t);
       this.viewer.scene.requestRender();
       if (t < 1) requestAnimationFrame(step);
-      else if (from) this.viewer.imageryLayers.remove(from, true);
+      else if (from) drop(this.viewer, from);
     };
     requestAnimationFrame(step);
   }
@@ -551,6 +687,7 @@ export class BordersLayer {
     if (this.layer) this.layer.show = v;
     if (this.highlightLayer) this.highlightLayer.show = v;
     if (this.regionsLayer) this.regionsLayer.show = v;
+    if (this.marksLayer) this.marksLayer.show = v;
     this.viewer.scene.requestRender();
   }
 }

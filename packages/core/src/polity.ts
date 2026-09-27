@@ -3,7 +3,8 @@ import { dirname } from 'node:path';
 import {
   background, coolingUntil, interactive, polity, wikipedia, type PolityCandidate, type PolityDetails, type SubdivisionRow,
 } from '@way/providers';
-import type { PolityInfo, PolityLabels, PolityRulerInfo, SubdivisionItem, SubdivisionsResponse } from '@way/shared';
+import type { EmblemsResponse, PolityInfo, PolityLabels, PolityRulerInfo, SubdivisionItem, SubdivisionsResponse } from '@way/shared';
+import type { DatedFile, ItemEmblems } from '@way/providers';
 import { listSnapshots, snapshotFor, SNAPSHOTS_BEFORE } from './borders.ts';
 import type { Cliopatria } from './cliopatria.ts';
 
@@ -26,10 +27,11 @@ const MATCH = 6;
 const CONFIDENT = 10;
 const FAILED_RETRY_MS = 3_600_000;
 /**
- * Cached cards and region lists are served at once; past this age they are
- * fetched again in the background, and replaced if Wikidata changed.
+ * Cached cards and region lists are served at once; past the age set in the
+ * Réglages page (180 days by default) they are fetched again in the
+ * background, and replaced if Wikidata changed.
  */
-const REFRESH_MS = 90 * 86_400_000;
+const DEFAULT_REFRESH_MS = 180 * 86_400_000;
 /** Names that matched nothing are tried again after this (Wikidata grows). */
 const MISS_RETRY_MS = 30 * 86_400_000;
 /** Realms whose card is prepared in the background when a period is shown (the largest ones). */
@@ -48,6 +50,7 @@ interface CachedDetails extends PolityDetails {
 }
 interface CachedSubdivisions { at: number; rows: SubdivisionRow[] }
 interface CachedLabel { fr: string | null; en: string | null; start?: number | null; end?: number | null; at: number }
+interface CachedEmblems extends ItemEmblems { at: number }
 /** Slack on an item's dates: borders and Wikidata rarely agree to the year. */
 const ERA_SLACK = 50;
 /** Whether an item's lifetime covers a year (undated items are trusted). */
@@ -60,6 +63,40 @@ interface CacheFile {
   subdivisions: Record<string, CachedSubdivisions>;
   /** Labels of the yearly borders' items (their Wikidata ids are known). */
   labels: Record<string, CachedLabel>;
+  /** Coats of arms and flags of those items. */
+  emblems: Record<string, CachedEmblems>;
+}
+
+/** Invented or reconstructed emblems: not shown as the real thing. */
+const FICTIONAL = /\b(fictitious|fictional|fantasy|hypothetical|imaginary|invented)\b/i;
+
+/** Years a file's name gives ("Flag of Spain (1873–1874)", "Flag of Herat until 1842"). */
+export function nameYears(file: string): { start: number | null; end: number | null } {
+  const range = /\b(\d{3,4})\s*(?:–|—|-|to)\s*(\d{3,4})\b/.exec(file);
+  if (range) return { start: Number(range[1]), end: Number(range[2]) };
+  const until = /\b(?:until|before|to)\s+(\d{3,4})\b/i.exec(file);
+  if (until) return { start: null, end: Number(until[1]) };
+  const since = /\b(?:since|from|after)\s+(\d{3,4})\b/i.exec(file);
+  if (since) return { start: Number(since[1]), end: null };
+  return { start: null, end: null };
+}
+
+/**
+ * The file in use at a year: one dated for that year first, else an undated
+ * one whose name does not say another era; never one of another era.
+ */
+export function fileAt(files: DatedFile[], year: number): string | null {
+  const real = files.filter((f) => !FICTIONAL.test(f.file));
+  const dated = real.filter((f) => f.start !== null || f.end !== null);
+  const now = dated
+    .filter((f) => (f.start ?? -Infinity) <= year && year <= (f.end ?? Infinity))
+    .sort((a, b) => (b.start ?? -Infinity) - (a.start ?? -Infinity))[0];
+  if (now) return now.file;
+  const fits = (f: DatedFile) => {
+    const n = nameYears(f.file);
+    return (n.start === null || n.start <= year + 5) && (n.end === null || n.end >= year - 5);
+  };
+  return real.find((f) => f.start === null && f.end === null && fits(f))?.file ?? null;
 }
 
 const range = (xs: number[], pick: (...v: number[]) => number) => (xs.length ? pick(...xs) : null);
@@ -199,8 +236,9 @@ export function rulersAt(rulers: PolityDetails['rulers'], year: number): PolityR
 const KIND_WORD = /empire|royaume|république|sultanat|califat|khanat|émirat|cité|principauté|duché|confédération|dynastie|état/i;
 
 export class PolityService {
-  private cache: CacheFile = { resolutions: {}, details: {}, subdivisions: {}, labels: {} };
+  private cache: CacheFile = { resolutions: {}, details: {}, subdivisions: {}, labels: {}, emblems: {} };
   private labelQueue = new Set<string>();
+  private emblemQueue = new Set<string>();
   /** Background refreshes of stale entries, run after the map names. */
   private chores = new Map<string, () => Promise<unknown>>();
   private inflight = new Map<string, Promise<Resolution | null>>();
@@ -213,12 +251,18 @@ export class PolityService {
   /** Territory cards being prepared: background lookups wait for them. */
   private interactive = 0;
 
-  constructor(private file: string | null, private bordersDir: string, private clio: Cliopatria | null = null) {
+  constructor(
+    private file: string | null,
+    private bordersDir: string,
+    private clio: Cliopatria | null = null,
+    private refreshMs: () => number = () => DEFAULT_REFRESH_MS,
+  ) {
     if (file && existsSync(file)) {
       try {
         const raw = JSON.parse(readFileSync(file, 'utf8')) as Partial<CacheFile>;
         this.cache = {
           resolutions: raw.resolutions ?? {}, details: raw.details ?? {}, subdivisions: raw.subdivisions ?? {}, labels: raw.labels ?? {},
+          emblems: raw.emblems ?? {},
         };
       } catch {
         /* corrupt cache: rebuilt on demand */
@@ -259,7 +303,7 @@ export class PolityService {
     try {
       let hit = this.cache.subdivisions[qid];
       if (!hit) hit = await interactive(() => this.fetchSubdivisions(qid));
-      else if (Date.now() - hit.at > REFRESH_MS) this.chore(`s:${qid}`, () => this.fetchSubdivisions(qid));
+      else if (Date.now() - hit.at > this.refreshMs()) this.chore(`s:${qid}`, () => this.fetchSubdivisions(qid));
       return { qid, year, items: regionsAt(hit.rows, qid, year) };
     } finally {
       this.interactive--;
@@ -345,12 +389,9 @@ export class PolityService {
     for (const f of features) {
       const hit = f.qid ? this.cache.labels[f.qid] : undefined;
       // Labels cached before dates were kept are fetched again.
-      if (f.qid && (!hit || hit.start === undefined || Date.now() - hit.at > REFRESH_MS)) this.labelQueue.add(f.qid);
-      // The dataset sometimes links another era's item (the Restoration for the medieval kingdom).
-      const fr = hit && fitsEra(hit.start, hit.end, year) ? hit.fr : null;
-      const fits = fr && sameplace(f.name, hit?.en ?? null)
-        && (!this.clio?.ambiguous(f.qid!) || nameSimilarity(f.name, hit?.en ?? '') >= 0.75);
-      const name = fits ? fr : frenchTitle(f.name);
+      if (f.qid && (!hit || hit.start === undefined || Date.now() - hit.at > this.refreshMs())) this.labelQueue.add(f.qid);
+      const fr = this.itemFits(f, year) ? hit!.fr : null;
+      const name = fr ?? frenchTitle(f.name);
       if (name && name !== f.name) labels[f.name] = name;
     }
     // The biggest realms get their card ready: the first click on them is instant.
@@ -360,6 +401,58 @@ export class PolityService {
     }
     if (this.labelQueue.size) this.chore('labels', () => this.fetchLabels());
     return { labels, pending: this.labelQueue.size };
+  }
+
+  /**
+   * Whether a feature's item is really that realm at that year: the dataset
+   * sometimes links another era's item (the Restoration for the medieval
+   * kingdom) or the office ("sultan") instead of the realm.
+   */
+  private itemFits(f: { name: string; qid: string | null }, year: number): boolean {
+    const hit = f.qid ? this.cache.labels[f.qid] : undefined;
+    if (!hit || !fitsEra(hit.start, hit.end, year)) return false;
+    return sameplace(f.name, hit.en ?? null) && (!this.clio?.ambiguous(f.qid!) || nameSimilarity(f.name, hit.en ?? '') >= 0.75);
+  }
+
+  /**
+   * Coats of arms and flags of the realms shown at a year (by item), for
+   * the watermarks on the map. Unknown ones are looked up in the background.
+   */
+  emblems(year: number): EmblemsResponse {
+    const period = year >= SNAPSHOTS_BEFORE ? this.clio?.period(year) : null;
+    if (!period) return { emblems: {}, pending: 0 };
+    // Only items known to be the right realm (their names are checked first).
+    const sure = period.features.filter((f) => f.qid && this.itemFits(f, period.from)).map((f) => f.qid!);
+    const unnamed = period.features.some((f) => f.qid && !this.cache.labels[f.qid]);
+    const res = this.emblemsOf(sure, period.from);
+    return { emblems: res.emblems, pending: res.pending + (unnamed ? 1 : 0) };
+  }
+
+  /** Coats of arms and flags of any items at a year (the sides of an army). */
+  emblemsOf(qids: string[], year: number): EmblemsResponse {
+    const emblems: EmblemsResponse['emblems'] = {};
+    for (const qid of new Set(qids)) {
+      const hit = this.cache.emblems[qid];
+      if (!hit || Date.now() - hit.at > this.refreshMs()) this.emblemQueue.add(qid);
+      if (!hit) continue;
+      const coa = fileAt(hit.coa, year);
+      const flag = fileAt(hit.flag, year);
+      if (coa || flag) emblems[qid] = { coa, flag };
+    }
+    if (this.emblemQueue.size) this.chore('emblems', () => this.fetchEmblems());
+    return { emblems, pending: this.emblemQueue.size };
+  }
+
+  private async fetchEmblems(): Promise<void> {
+    const ids = [...this.emblemQueue].slice(0, 200);
+    const got = await polity.itemEmblems(ids);
+    const at = Date.now();
+    for (const id of ids) {
+      this.cache.emblems[id] = { ...(got.get(id) ?? { coa: [], flag: [] }), at };
+      this.emblemQueue.delete(id);
+    }
+    this.scheduleSave();
+    if (this.emblemQueue.size) this.chore('emblems', () => this.fetchEmblems());
   }
 
   private async fetchLabels(): Promise<void> {
@@ -483,7 +576,7 @@ export class PolityService {
   private async details(qid: string): Promise<CachedDetails | null> {
     const hit = this.cache.details[qid];
     if (hit) {
-      if (Date.now() - (hit.at ?? 0) > REFRESH_MS) this.chore(`d:${qid}`, () => this.fetchDetails(qid));
+      if (Date.now() - (hit.at ?? 0) > this.refreshMs()) this.chore(`d:${qid}`, () => this.fetchDetails(qid));
       return hit;
     }
     return this.fetchDetails(qid);

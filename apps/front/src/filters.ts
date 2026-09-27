@@ -23,7 +23,14 @@ export function importanceFloor(scale: Scale, height: number): number {
   return Math.round((scale === 'major' ? floor + 0.2 : floor) * 20) / 20;
 }
 
-/** Category toggles (they double as the map legend) and the impact scale. */
+/** Coats of arms and flags: faint on the territories, on the armies' banners. */
+export interface Heraldry { territories: boolean; armies: boolean }
+const HERALDRY: { key: keyof Heraldry; label: string; title: string }[] = [
+  { key: 'territories', label: 'Territoires', title: 'Blason ou drapeau en filigrane sur chaque territoire' },
+  { key: 'armies', label: 'Armées', title: 'Drapeau et couleurs de leur camp sur les armées' },
+];
+
+/** Category toggles (they double as the map legend), the impact scale and the coats of arms. */
 export class Filters {
   private hidden: Set<Category>;
   private buttons = new Map<Category, HTMLButtonElement>();
@@ -35,6 +42,8 @@ export class Filters {
     private onChange: (hidden: Set<Category>) => void,
     public scale: Scale,
     private onScale: (scale: Scale) => void,
+    public heraldry: Heraldry,
+    private onHeraldry: (h: Heraldry) => void,
   ) {
     this.hidden = new Set(initialHidden.filter((c) => Category.safeParse(c).success));
     root.innerHTML = `
@@ -43,6 +52,12 @@ export class Filters {
       </div>
       <div class="scale" role="group" aria-label="Échelle d’impact">${SCALES.map(
         (s) => `<button type="button" data-scale="${s.value}" title="${s.title}">${s.label}</button>`,
+      ).join('')}</div>
+      <div class="filters-head">
+        <span class="filters-title">Blasons</span>
+      </div>
+      <div class="scale heraldry" role="group" aria-label="Blasons et drapeaux">${HERALDRY.map(
+        (h) => `<button type="button" data-heraldry="${h.key}" title="${h.title}">${h.label}</button>`,
       ).join('')}</div>
       <div class="filters-head">
         <span class="filters-title">Thèmes</span>
@@ -68,6 +83,16 @@ export class Filters {
         this.scale = v;
         this.syncScale();
         this.onScale(v);
+      });
+    });
+    root.querySelectorAll<HTMLButtonElement>('[data-heraldry]').forEach((b) => {
+      const k = b.dataset.heraldry as keyof Heraldry;
+      const sync = () => b.setAttribute('aria-pressed', String(this.heraldry[k]));
+      sync();
+      b.addEventListener('click', () => {
+        this.heraldry = { ...this.heraldry, [k]: !this.heraldry[k] };
+        sync();
+        this.onHeraldry(this.heraldry);
       });
     });
     if (!this.scaleButtons.has(this.scale)) this.scale = 'selection';

@@ -1,4 +1,6 @@
-import { bucketStep, formatYear, posToYear, TIMELINE_TICKS, yearToPos, MAX_YEAR, MIN_YEAR } from '@way/shared';
+import {
+  bucketStep, DAY, formatDay, formatYear, posToDecimalYear, posToYear, TIMELINE_TICKS, yearToPos, MAX_YEAR, MIN_YEAR,
+} from '@way/shared';
 
 export interface TimeWindow { tStart: number; tEnd: number }
 
@@ -10,26 +12,44 @@ const ERAS: { label: string; from: number; to: number }[] = [
   { label: 'Époque contemporaine', from: 1789, to: MAX_YEAR },
 ];
 
-/** Play mode: years per step (0 = the timeline's own unit at that era) and seconds between steps. */
-const PLAY_STEPS = [0, 1, 5, 10, 25, 50, 100];
-const PLAY_DELAYS = [1, 2, 3, 5, 10];
+/**
+ * Play mode: how far each step goes (auto = the timeline's own unit at that
+ * era), down to a day; the window then shrinks to one step. And seconds
+ * between steps.
+ */
+const PLAY_STEPS: { id: string; years: number; label: string }[] = [
+  { id: 'auto', years: 0, label: 'Pas auto' },
+  { id: '1d', years: DAY, label: '+1 jour' },
+  { id: '1w', years: 7 * DAY, label: '+1 semaine' },
+  { id: '1m', years: 1 / 12, label: '+1 mois' },
+  ...[1, 5, 10, 25, 50, 100].map((y) => ({ id: `${y}y`, years: y, label: `+${y} an${y > 1 ? 's' : ''}` })),
+];
+const PLAY_DELAYS = [0.5, 1, 2, 3, 5, 10];
 const PLAY_KEY = 'way:play';
-interface PlayPrefs { step: number; delay: number }
+interface PlayPrefs { step: string; delay: number }
 
 function loadPlay(): PlayPrefs {
   try {
-    const p = JSON.parse(localStorage.getItem(PLAY_KEY) ?? '{}') as Partial<PlayPrefs>;
+    const p = JSON.parse(localStorage.getItem(PLAY_KEY) ?? '{}') as { step?: string | number; delay?: number };
+    // Older preferences counted steps in years (0 = auto).
+    const step = typeof p.step === 'number' ? (p.step > 0 ? `${p.step}y` : 'auto') : p.step;
     return {
-      step: PLAY_STEPS.includes(p.step ?? -1) ? p.step! : 0,
+      step: PLAY_STEPS.some((x) => x.id === step) ? step! : 'auto',
       delay: PLAY_DELAYS.includes(p.delay ?? -1) ? p.delay! : 2,
     };
   } catch {
-    return { step: 0, delay: 2 };
+    return { step: 'auto', delay: 2 };
   }
 }
 
-const MIN_WIDTH = 0.004;
+/** The window can shrink to a day. */
+const MIN_YEARS = DAY;
 const MAX_WIDTH = 0.45;
+
+/** Width on the scale of `years` around a decimal year. */
+function widthAt(center: number, years: number): number {
+  return Math.max(1e-9, yearToPos(center + years / 2) - yearToPos(center - years / 2));
+}
 
 function tickLabel(y: number): string {
   if (y === 1) return '1';
@@ -55,7 +75,8 @@ export class Timeline {
   private play = loadPlay();
   private playBtn: HTMLButtonElement;
 
-  constructor(root: HTMLElement, initial: TimeWindow, private onChange: (w: TimeWindow) => void) {
+  /** `onChange` gets the whole years shown and the same window to the day. */
+  constructor(root: HTMLElement, initial: TimeWindow, private onChange: (w: TimeWindow, moment: TimeWindow) => void) {
     this.a = yearToPos(initial.tStart);
     this.b = yearToPos(initial.tEnd);
     root.innerHTML = `
@@ -63,10 +84,10 @@ export class Timeline {
         <div class="tl-play">
           <button type="button" class="tl-play-btn" aria-label="Lecture" title="Faire défiler le temps (Espace)"></button>
           <select class="tl-play-step" aria-label="Pas de temps" title="Avance à chaque pas">
-            ${PLAY_STEPS.map((y) => `<option value="${y}">${y === 0 ? 'Pas auto' : `+${y} an${y > 1 ? 's' : ''}`}</option>`).join('')}
+            ${PLAY_STEPS.map((x) => `<option value="${x.id}">${x.label}</option>`).join('')}
           </select>
           <select class="tl-play-delay" aria-label="Cadence" title="Temps entre deux pas">
-            ${PLAY_DELAYS.map((d) => `<option value="${d}">toutes les ${d} s</option>`).join('')}
+            ${PLAY_DELAYS.map((d) => `<option value="${d}">toutes les ${String(d).replace('.', ',')} s</option>`).join('')}
           </select>
         </div>
         <div class="tl-range"></div>
@@ -109,10 +130,22 @@ export class Timeline {
     }
   }
 
+  /** Years shown, whole (for points and borders): a window under a year gives its year. */
   get window(): TimeWindow {
+    const m = this.moment;
+    if (m.tEnd - m.tStart < 1) {
+      const y = Math.floor((m.tStart + m.tEnd) / 2) || 1;
+      return { tStart: y, tEnd: y };
+    }
     return { tStart: posToYear(this.a), tEnd: posToYear(this.b) };
   }
 
+  /** The window in decimal years, to the day (people and armies move with it). */
+  get moment(): TimeWindow {
+    return { tStart: posToDecimalYear(this.a), tEnd: posToDecimalYear(this.b) };
+  }
+
+  /** Takes decimal years too (a saved window of a few days). */
   setWindow(w: TimeWindow): void {
     this.a = yearToPos(w.tStart);
     this.b = yearToPos(w.tEnd);
@@ -144,15 +177,32 @@ export class Timeline {
 
   /** Years the window moves per step: the chosen value, or the era's unit (1 year today, 100 in antiquity). */
   private stepYears(): number {
-    if (this.play.step > 0) return this.play.step;
+    const fixed = PLAY_STEPS.find((x) => x.id === this.play.step)?.years ?? 0;
+    if (fixed > 0) return fixed;
     const { tStart, tEnd } = this.window;
     return Math.max(1, Math.round(bucketStep(Math.round((tStart + tEnd) / 2)) / 2));
+  }
+
+  /** The window becomes one step wide, around its middle: it shows what each step brings. */
+  private fitToStep(): void {
+    const years = PLAY_STEPS.find((x) => x.id === this.play.step)?.years ?? 0;
+    if (!years) return;
+    const { tStart, tEnd } = this.moment;
+    const c = (tStart + tEnd) / 2;
+    // Under a year, the window starts at midnight of the day in the middle: one whole day, week or month.
+    const from = years < 1 ? Math.floor(c) + Math.floor((c - Math.floor(c)) * 365 + 1e-6) / 365 : c - years / 2;
+    const a = yearToPos(from);
+    const b = yearToPos(from + years);
+    if (Math.abs(b - a - (this.b - this.a)) < 1e-9) return;
+    this.glide++;
+    this.setRange(a, b);
   }
 
   setPlaying(on: boolean): void {
     clearInterval(this.playTimer);
     this.playTimer = undefined;
     if (on) {
+      this.fitToStep();
       this.advance();
       this.playTimer = window.setInterval(() => this.advance(), this.play.delay * 1000);
     }
@@ -165,7 +215,7 @@ export class Timeline {
 
   /** One play step: the window slides forward by the same number of years, with a short glide. */
   private advance(): void {
-    const { tStart, tEnd } = this.window;
+    const { tStart, tEnd } = this.moment;
     const step = this.stepYears();
     if (tEnd >= MAX_YEAR) {
       this.setPlaying(false);
@@ -197,12 +247,14 @@ export class Timeline {
     stepSel.value = String(this.play.step);
     delaySel.value = String(this.play.delay);
     const persist = () => {
-      this.play = { step: Number(stepSel.value), delay: Number(delaySel.value) };
+      const stepChanged = this.play.step !== stepSel.value;
+      this.play = { step: stepSel.value, delay: Number(delaySel.value) };
       try {
         localStorage.setItem(PLAY_KEY, JSON.stringify(this.play));
       } catch {
         /* not remembered */
       }
+      if (stepChanged) this.fitToStep();
       if (this.playing) this.setPlaying(true); // new cadence right away
     };
     stepSel.addEventListener('change', persist);
@@ -229,18 +281,41 @@ export class Timeline {
   private render(): void {
     this.win.style.left = `${this.a * 100}%`;
     this.win.style.width = `${(this.b - this.a) * 100}%`;
-    const { tStart, tEnd } = this.window;
-    this.rangeEl.innerHTML = `${formatYear(tStart)}<em>→</em>${formatYear(tEnd)}`;
-    this.track.setAttribute('aria-valuetext', `de ${formatYear(tStart)} à ${formatYear(tEnd)}`);
+    // A window of a few days is thinner than its drawn minimum: keep it centered on its date.
+    const px = (this.b - this.a) * this.track.clientWidth;
+    this.win.style.marginLeft = px < 6 ? `${-(6 - px) / 2}px` : '';
+    const m = this.moment;
+    const days = Math.round((m.tEnd - m.tStart) * 365);
+    let text: string;
+    let label: string;
+    if (days <= 1) {
+      text = label = formatDay(m.tStart);
+    } else if (m.tEnd - m.tStart < 2) {
+      // The last day shown is the one before the end.
+      const last = formatDay(m.tEnd - DAY);
+      text = `${formatDay(m.tStart)}<em>→</em>${last}`;
+      label = `du ${formatDay(m.tStart)} au ${last}`;
+    } else {
+      const { tStart, tEnd } = this.window;
+      text = `${formatYear(tStart)}<em>→</em>${formatYear(tEnd)}`;
+      label = `de ${formatYear(tStart)} à ${formatYear(tEnd)}`;
+    }
+    this.rangeEl.innerHTML = text;
+    this.track.setAttribute('aria-valuetext', label);
   }
 
   private commit(): void {
     this.render();
-    this.onChange(this.window);
+    this.onChange(this.window, this.moment);
+  }
+
+  /** Narrowest window at a position: one day there. */
+  private minWidth(pos: number): number {
+    return widthAt(posToDecimalYear(pos), MIN_YEARS);
   }
 
   private setRange(a: number, b: number): void {
-    const w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, b - a));
+    const w = Math.min(MAX_WIDTH, Math.max(this.minWidth((a + b) / 2), b - a));
     a = Math.max(0, Math.min(1 - w, a));
     this.a = a;
     this.b = a + w;
@@ -279,12 +354,12 @@ export class Timeline {
       const d = this.posFromEvent(e) - drag.origin;
       if (drag.mode === 'move') this.setRange(drag.a + d, drag.b + d);
       else if (drag.mode === 'start') {
-        const a = Math.max(0, Math.min(drag.b - MIN_WIDTH, drag.a + d));
+        const a = Math.max(0, Math.min(drag.b - this.minWidth(drag.b), drag.a + d));
         this.a = Math.max(a, drag.b - MAX_WIDTH);
         this.b = drag.b;
         this.commit();
       } else {
-        const b = Math.min(1, Math.max(drag.a + MIN_WIDTH, drag.b + d));
+        const b = Math.min(1, Math.max(drag.a + this.minWidth(drag.a), drag.b + d));
         this.a = drag.a;
         this.b = Math.min(b, drag.a + MAX_WIDTH);
         this.commit();

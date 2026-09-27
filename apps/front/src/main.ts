@@ -15,7 +15,7 @@ import { BordersLayer, realmKey, type BorderShape } from './borders.ts';
 import { Card } from './card.ts';
 import { Connection } from './connection.ts';
 import { bounds, contains, divide, type Area, type Region } from './divisions.ts';
-import { Filters, importanceFloor, type Scale } from './filters.ts';
+import { Filters, importanceFloor, type Heraldry, type Scale } from './filters.ts';
 import { cameraState, createGlobe, restoreCamera, setBasemap, viewRect, type Basemap, type CameraState } from './globe.ts';
 import { PoiLayer } from './markers.ts';
 import { PeopleLayer, type Picked } from './people.ts';
@@ -24,7 +24,7 @@ import { loadUiSettings, playSound } from './sounds.ts';
 import { Timeline, type TimeWindow } from './timeline.ts';
 
 // ---------- persisted per-viewer preferences ----------
-interface Saved { camera?: CameraState; window?: TimeWindow; hidden?: Category[]; basemap?: Basemap; scale?: Scale }
+interface Saved { camera?: CameraState; window?: TimeWindow; hidden?: Category[]; basemap?: Basemap; scale?: Scale; heraldry?: Heraldry }
 const STORAGE_KEY = 'way:state';
 function load(): Saved {
   try {
@@ -57,20 +57,20 @@ const people = new PeopleLayer(viewer, document.getElementById('people')!);
 // ---------- timeline & borders ----------
 const timelineEl = document.getElementById('timeline')!;
 let bordersTimer: number | undefined;
-const timeline = new Timeline(timelineEl, saved.window ?? { tStart: -500, tEnd: -300 }, (w) => {
+const timeline = new Timeline(timelineEl, saved.window ?? { tStart: -500, tEnd: -300 }, (w, moment) => {
   pois.setWindow(w.tStart, w.tEnd);
-  people.setWindow(w.tStart, w.tEnd);
+  people.setWindow(moment.tStart, moment.tEnd);
   filters.setCounts(pois.countsInWindow());
   clearTimeout(bordersTimer);
   bordersTimer = window.setTimeout(() => borders.setYear(Math.round((w.tStart + w.tEnd) / 2)), 250);
   // Regions are those of a year: moving in time folds them back into the territory.
   if (divisions.length) backToTerritory();
-  save({ window: w });
+  save({ window: moment });
   scheduleSearch();
 });
 const borders = new BordersLayer(viewer, (t) => timeline.setBordersNote(t));
 pois.setWindow(timeline.window.tStart, timeline.window.tEnd);
-people.setWindow(timeline.window.tStart, timeline.window.tEnd);
+people.setWindow(timeline.moment.tStart, timeline.moment.tEnd);
 
 /** Following someone: to where they are, and into their lifetime if the window is outside it. */
 people.onGoTo = (qid) => {
@@ -115,7 +115,15 @@ const filters = new Filters(
     save({ scale });
     applyZoom();
   },
+  saved.heraldry ?? { territories: false, armies: false },
+  (heraldry) => {
+    save({ heraldry });
+    borders.setHeraldry(heraldry.territories);
+    people.setHeraldry(heraldry.armies);
+  },
 );
+borders.setHeraldry(filters.heraldry.territories);
+people.setHeraldry(filters.heraldry.armies);
 pois.setHidden(filters.hiddenSet);
 
 /** Semantic zoom: the camera height and the impact scale set the importance floor. */

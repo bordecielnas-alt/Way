@@ -7,10 +7,10 @@ import type { ArmiesResponse, PersonHit, PersonJourney } from '@way/shared';
 // much: answers are kept on disk and only checked again after months, so
 // following someone costs Wikidata three small queries, once.
 
-/** Journeys and armies are fetched again (in the background) after this. */
-const REFRESH_MS = 180 * 86_400_000;
+/** Journeys and armies are fetched again (in the background) after this, unless set in the Réglages page. */
+const DEFAULT_REFRESH_MS = 180 * 86_400_000;
 const SEARCH_MS = 30 * 86_400_000;
-const SEARCH_KEEP = 500;
+const SEARCH_KEEP = 2000;
 const FAILED_RETRY_MS = 30 * 60_000;
 
 interface Entry<T> { at: number; value: T }
@@ -26,7 +26,7 @@ export class PeopleService {
   private failed = new Map<string, number>();
   private saveTimer: NodeJS.Timeout | null = null;
 
-  constructor(private file: string | null) {
+  constructor(private file: string | null, private refreshMs: () => number = () => DEFAULT_REFRESH_MS) {
     if (file && existsSync(file)) {
       try {
         const raw = JSON.parse(readFileSync(file, 'utf8')) as Partial<CacheFile>;
@@ -70,7 +70,7 @@ export class PeopleService {
       return value;
     });
     if (hit) {
-      if (Date.now() - hit.at > REFRESH_MS) background(() => void run().catch(() => undefined));
+      if (Date.now() - hit.at > this.refreshMs()) background(() => void run().catch(() => undefined));
       return hit.value;
     }
     const until = this.failed.get(`${kind}:${key}`) ?? 0;

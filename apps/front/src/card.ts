@@ -4,6 +4,7 @@ import {
 } from '@way/shared';
 import { CATEGORY_COLORS } from './icons.ts';
 import { fetchCached } from './localcache.ts';
+import { viaServer } from './media.ts';
 
 const CONFIDENCE: Record<Poi['confidence'], { icon: string; label: string; title: string }> = {
   verified: { icon: '✓', label: 'Vérifié', title: 'Fait confirmé par Wikidata et Wikipédia' },
@@ -28,7 +29,7 @@ function reign(r: PolityRulerInfo): string {
 function rulerEl(r: PolityRulerInfo): string {
   const when = r.when === 'before' ? 'Juste avant : ' : r.when === 'after' ? 'Juste après : ' : '';
   const portrait = r.image
-    ? `<img alt="" src="${esc(r.image)}" referrerpolicy="no-referrer">`
+    ? `<img alt="" src="${esc(viaServer(r.image))}" referrerpolicy="no-referrer">`
     : `<span aria-hidden="true">${esc(r.name.slice(0, 1))}</span>`;
   return `
     <a class="ruler ${r.when}" href="https://www.wikidata.org/wiki/${esc(r.qid)}" target="_blank" rel="noopener">
@@ -170,7 +171,7 @@ export class Card {
     this.root.innerHTML = `
       <button class="card-close" type="button" aria-label="Fermer">×</button>
       <div class="card-scroll">
-        ${j.image ? `<div class="card-image"><img alt="" src="${esc(j.image)}" referrerpolicy="no-referrer"></div>` : ''}
+        ${j.image ? `<div class="card-image"><img alt="" src="${esc(viaServer(j.image))}" referrerpolicy="no-referrer"></div>` : ''}
         <div class="card-body">
           <div class="card-kicker"><span class="card-cat"><i style="background:#e377c2"></i>Personnage suivi</span></div>
           <h2 class="card-title">${esc(j.name)}</h2>
@@ -268,7 +269,7 @@ export class Card {
       : '';
     const note = p.summaryLang && p.summaryLang !== 'fr' ? '<div class="card-summary-note">Résumé disponible uniquement en anglais.</div>' : '';
     const image = p.image
-      ? `<div class="card-image"><img alt="" src="${esc(p.image)}" referrerpolicy="no-referrer"></div>`
+      ? `<div class="card-image"><img alt="" src="${esc(viaServer(p.image))}" referrerpolicy="no-referrer"></div>`
       : '';
     this.root.innerHTML = `
       <button class="card-close" type="button" aria-label="Fermer">×</button>
@@ -281,7 +282,7 @@ export class Card {
           <div class="polity-hint" ${hint ? '' : 'hidden'}>${esc(hint ?? '')}</div>
           <div class="polity-head">
             <h2 class="card-title">${esc(p.qid ? p.title : shownName)}</h2>
-            ${p.emblem ? `<img class="polity-emblem" alt="" src="${esc(p.emblem)}" referrerpolicy="no-referrer">` : ''}
+            ${p.emblem ? `<img class="polity-emblem" alt="" src="${esc(viaServer(p.emblem))}" referrerpolicy="no-referrer">` : ''}
           </div>
           ${span ? `<div class="card-date">${esc(span)}</div>` : ''}
           ${p.description ? `<div class="card-desc">${esc(p.description)}</div>` : ''}
@@ -339,7 +340,7 @@ export class Card {
       ? `<p class="card-summary">${esc(p.summary)}</p>${note ? `<div class="card-summary-note">${note}</div>` : ''}`
       : '<div class="card-summary-note">Aucun résumé disponible : consultez les sources.</div>';
     const image = p.image_url
-      ? `<div class="card-image"><img alt="" src="${esc(p.image_url)}" referrerpolicy="no-referrer">
+      ? `<div class="card-image"><img alt="" src="${esc(viaServer(p.image_url))}" referrerpolicy="no-referrer">
            <a class="card-image-credit" href="${esc(p.image_url.split('?')[0]!)}" target="_blank" rel="noopener">Image : Wikimedia Commons</a></div>`
       : '';
     this.root.innerHTML = `
@@ -440,7 +441,7 @@ export class Card {
         if (!poi) return;
         if (this.prefetched.size > 40) this.prefetched.delete(this.prefetched.keys().next().value!);
         this.prefetched.set(poi.id, poi);
-        if (poi.image_url) new Image().src = poi.image_url;
+        if (poi.image_url) new Image().src = viaServer(poi.image_url);
       })
       .catch(() => {});
   }

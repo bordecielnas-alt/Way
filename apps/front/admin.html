@@ -31,6 +31,7 @@
         <nav class="tabs" role="tablist">
           <button type="button" role="tab" data-tab="ai" aria-selected="true">Recherche IA</button>
           <button type="button" role="tab" data-tab="ui">Interface</button>
+          <button type="button" role="tab" data-tab="cache">Cache</button>
           <button type="button" role="tab" data-tab="status">État</button>
           <button type="button" role="tab" data-tab="account">Compte</button>
         </nav>
@@ -90,6 +91,43 @@
           <p class="hint">Une guerre de cent ans ou une dynastie dit peu de choses sur un moment précis : la porte « Pendant ce temps »
             propose plutôt des événements courts. 0 = uniquement des événements datés d’une seule année.</p>
           <p class="hint">Réglages communs à tous les appareils, appliqués au prochain chargement du globe.</p>
+        </section>
+
+        <section data-panel="cache" hidden>
+          <p class="hint">Tout ce que Way apprend est gardé sur le serveur (dossier <code>/data</code>) : les points, les fiches, les noms,
+            les parcours, les armées et les images. Plus le cache est grand et gardé longtemps, moins Way interroge Wikidata,
+            Wikipédia et l’IA, et plus ce qui a déjà été vu s’ouvre vite.</p>
+          <div class="cards" id="cache-usage"></div>
+          <div class="card volume">
+            <label for="cache-size">Taille maximale</label>
+            <input type="range" id="cache-size" min="0" max="11" step="1" />
+            <span class="num" id="cache-size-value"></span>
+          </div>
+          <p class="hint">Jusqu’à 100 Go. Au-delà, les points les moins consultés et les images les plus anciennes sont retirés
+            (les points majeurs restent toujours). Les images ont droit à la moitié au plus.</p>
+          <div class="card volume">
+            <label for="cache-refresh">Revérifier les données après</label>
+            <select id="cache-refresh">
+              <option value="30">1 mois</option>
+              <option value="90">3 mois</option>
+              <option value="180">6 mois</option>
+              <option value="365">1 an</option>
+              <option value="730">2 ans</option>
+              <option value="1825">5 ans</option>
+              <option value="0">Jamais</option>
+            </select>
+          </div>
+          <p class="hint">Fiches des territoires, noms, blasons, parcours des personnages et armées : servis tout de suite depuis
+            le cache, puis revérifiés en arrière-plan passé ce délai. L’histoire change peu : « Jamais » supprime ces appels.</p>
+          <div class="switch-row card">
+            <div>
+              <div class="switch-title">Garder les images sur le serveur</div>
+              <div class="sub">Portraits, photos, blasons et drapeaux ne sont demandés qu’une fois à Wikimedia. Désactivé : ils
+                passent par le serveur sans y rester.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="cache-images" /><span></span></label>
+          </div>
+          <p><button type="button" class="ghost" id="cache-clear-media">Vider le cache des images</button></p>
         </section>
 
         <section data-panel="status" hidden>

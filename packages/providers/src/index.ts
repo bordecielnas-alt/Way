@@ -9,5 +9,5 @@ export type { GeoHit, WikiSummary } from './wikipedia.ts';
 export type { SearchHit } from './search.ts';
 export type { Place } from './geocode.ts';
 export * as polity from './polity.ts';
-export type { PolityCandidate, PolityDetails, PolityRuler, DatedValue, ItemLabel, SubdivisionRow } from './polity.ts';
+export type { PolityCandidate, PolityDetails, PolityRuler, DatedValue, DatedFile, ItemEmblems, ItemLabel, SubdivisionRow } from './polity.ts';
 export * as people from './people.ts';

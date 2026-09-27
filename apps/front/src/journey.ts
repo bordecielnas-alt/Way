@@ -10,6 +10,8 @@ export interface Presence {
   kind: ActivityKind;
   /** What they are doing, in French. */
   text: string;
+  /** The event under way (a battle's item), when there is one: two armies at the same one clash. */
+  ref?: string;
   /** Places passed so far (for the trail), oldest first. */
   trail: [number, number][];
 }
@@ -86,7 +88,7 @@ export function presenceAt(j: PersonJourney, t: number, tol: number): Presence |
   const event = placed
     .filter((s) => s.end === null && EVENT_RANK[s.kind] !== undefined && Math.abs(t - s.start) <= tol)
     .sort((a, b) => (EVENT_RANK[b.kind]! - EVENT_RANK[a.kind]!) || Math.abs(t - a.start) - Math.abs(t - b.start))[0];
-  if (event) return { lat: event.lat, lon: event.lon, kind: event.kind, text: describe(event), trail: [...trail, [event.lat, event.lon]] };
+  if (event) return { lat: event.lat, lon: event.lon, kind: event.kind, text: describe(event), ref: event.qid ?? undefined, trail: [...trail, [event.lat, event.lon]] };
 
   // A stay under way (studies, a residence, a reign in its capital).
   const stay = placed
@@ -130,7 +132,7 @@ export function armyAt(army: Army, t: number, tol: number): Presence | null {
   const fight = b.filter((x) => Math.abs(t - x.t) <= tol).sort((x, y) => Math.abs(t - x.t) - Math.abs(t - y.t))[0];
   if (fight) {
     const who = fight.commanders.length ? ` (${fight.commanders.join(', ')})` : '';
-    return { lat: fight.lat, lon: fight.lon, kind: 'battle', text: `${fight.label}${who}`, trail: [...trail, [fight.lat, fight.lon]] };
+    return { lat: fight.lat, lon: fight.lon, kind: 'battle', text: `${fight.label}${who}`, ref: fight.qid, trail: [...trail, [fight.lat, fight.lon]] };
   }
   if (t < first.t) return { lat: first.lat, lon: first.lon, kind: 'wait', text: `Rassemblement avant ${first.label}`, trail: [[first.lat, first.lon]] };
   if (t > last.t) return { lat: last.lat, lon: last.lon, kind: 'wait', text: `Après ${last.label}`, trail };

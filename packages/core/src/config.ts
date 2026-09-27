@@ -59,8 +59,9 @@ export function loadConfig(env = process.env): Config {
     bordersDir:
       env.BORDERS_DIR ?? (dataDir ? join(dataDir, 'borders') : fileURLToPath(new URL('../../../data/borders/', import.meta.url))),
     cliopatriaFile: env.CLIOPATRIA_FILE ?? fileURLToPath(new URL('../../../data/cliopatria/borders.json', import.meta.url)),
-    // Wikimedia asks for a contact in the User-Agent: set WAY_CONTACT.
-    userAgent: `Way/0.1 (personal history globe${contact ? `; ${contact}` : ''})`,
+    // Wikimedia asks for a contact in the User-Agent (its image servers refuse requests without one):
+    // the project's page, plus WAY_CONTACT when set.
+    userAgent: `Way/0.1 (https://github.com/bordecielnas-alt/Way; personal history globe${contact ? `; ${contact}` : ''})`,
     workerConcurrency: num(env.WORKER_CONCURRENCY, 2),
     level2: {
       enabled: env.LEVEL2 !== 'off',

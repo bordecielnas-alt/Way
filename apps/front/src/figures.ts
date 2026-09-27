@@ -403,9 +403,12 @@ export function personFigure(style: FigureStyle, color: string, kind: ActivityKi
   return c;
 }
 
-/** An army: three soldiers with spears and shields in the side's color, under its banner. */
-export function armyFigure(color: string, kind: ActivityKind): HTMLCanvasElement {
-  const key = `army|${color}|${kind}`;
+/**
+ * An army: three soldiers with spears and shields in the side's color, under
+ * its banner; with `flag` (Blasons → Armées), the banner is the side's flag.
+ */
+export function armyFigure(color: string, kind: ActivityKind, flag: HTMLImageElement | null = null): HTMLCanvasElement {
+  const key = `army|${color}|${kind}|${flag ? flag.src : ''}`;
   let c = cache.get(key);
   if (c) return c;
   const [cv, g] = canvas();
@@ -413,22 +416,49 @@ export function armyFigure(color: string, kind: ActivityKind): HTMLCanvasElement
   // banner behind
   g.beginPath();
   g.moveTo(W / 2, H - 20);
-  g.lineTo(W / 2, 6);
+  g.lineTo(W / 2, flag ? 3 : 6);
   g.strokeStyle = '#5b3f22';
   g.lineWidth = 2.2;
   g.stroke();
-  g.beginPath();
-  g.moveTo(W / 2 + 1, 8);
-  g.lineTo(W / 2 + 22, 8);
-  g.lineTo(W / 2 + 16, 16);
-  g.lineTo(W / 2 + 22, 24);
-  g.lineTo(W / 2 + 1, 24);
-  g.closePath();
-  g.fillStyle = color;
-  g.fill();
-  g.strokeStyle = INK;
-  g.lineWidth = 1.1;
-  g.stroke();
+  if (flag) {
+    // The flag itself, a little waving, framed in ink.
+    const h = 20;
+    const w = Math.min(34, Math.max(20, (h * flag.naturalWidth) / Math.max(1, flag.naturalHeight)));
+    const x = W / 2 + 1;
+    const y = 4;
+    g.save();
+    g.beginPath();
+    g.moveTo(x, y);
+    g.quadraticCurveTo(x + w / 2, y - 2, x + w, y + 1);
+    g.lineTo(x + w, y + h + 1);
+    g.quadraticCurveTo(x + w / 2, y + h - 2, x, y + h);
+    g.closePath();
+    g.clip();
+    g.drawImage(flag, x, y - 1, w, h + 3);
+    g.restore();
+    g.beginPath();
+    g.moveTo(x, y);
+    g.quadraticCurveTo(x + w / 2, y - 2, x + w, y + 1);
+    g.lineTo(x + w, y + h + 1);
+    g.quadraticCurveTo(x + w / 2, y + h - 2, x, y + h);
+    g.closePath();
+    g.strokeStyle = INK;
+    g.lineWidth = 1.1;
+    g.stroke();
+  } else {
+    g.beginPath();
+    g.moveTo(W / 2 + 1, 8);
+    g.lineTo(W / 2 + 22, 8);
+    g.lineTo(W / 2 + 16, 16);
+    g.lineTo(W / 2 + 22, 24);
+    g.lineTo(W / 2 + 1, 24);
+    g.closePath();
+    g.fillStyle = color;
+    g.fill();
+    g.strokeStyle = INK;
+    g.lineWidth = 1.1;
+    g.stroke();
+  }
   const soldier = (x: number, y: number, s: number) => {
     // spear
     g.beginPath();
@@ -478,4 +508,45 @@ export function armyFigure(color: string, kind: ActivityKind): HTMLCanvasElement
   cache.set(key, cv);
   ids.set(cv, key);
   return cv;
+}
+
+/** Two armies meeting: crossed swords over a burst of fire. */
+export function clashFigure(): HTMLCanvasElement {
+  const key = 'clash';
+  let c = cache.get(key);
+  if (c) return c;
+  const S = 64;
+  c = document.createElement('canvas');
+  c.width = S;
+  c.height = S;
+  const g = c.getContext('2d')!;
+  g.lineJoin = 'round';
+  const cx = S / 2;
+  const cy = S / 2;
+  // burst
+  const glow = g.createRadialGradient(cx, cy, 2, cx, cy, 30);
+  glow.addColorStop(0, 'rgba(255, 214, 120, 0.95)');
+  glow.addColorStop(0.45, 'rgba(226, 92, 40, 0.75)');
+  glow.addColorStop(1, 'rgba(160, 30, 20, 0)');
+  g.beginPath();
+  for (let i = 0; i < 24; i++) {
+    const r = i % 2 ? 13 : i % 4 ? 24 : 30;
+    const a = (i * Math.PI) / 12;
+    g.lineTo(cx + r * Math.cos(a), cy + r * Math.sin(a));
+  }
+  g.closePath();
+  g.fillStyle = glow;
+  g.fill();
+  // disc
+  g.beginPath();
+  g.arc(cx, cy, 15, 0, Math.PI * 2);
+  g.fillStyle = '#7a1f1a';
+  g.fill();
+  g.lineWidth = 2;
+  g.strokeStyle = GOLD;
+  g.stroke();
+  swords(g, cx, cy, 9);
+  cache.set(key, c);
+  ids.set(c, key);
+  return c;
 }

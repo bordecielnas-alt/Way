@@ -307,6 +307,42 @@ SELECT ?sub ?sl ?cl ?coord ?cap ?s ?e ?ls ?le ?up ?lf ?len WHERE {
   );
 }
 
+/** A coat of arms or flag, with the years it was used (from the statement's qualifiers). */
+export interface DatedFile { file: string; start: number | null; end: number | null }
+export interface ItemEmblems { coa: DatedFile[]; flag: DatedFile[] }
+
+/** Commons file name of a Special:FilePath URL. */
+export function commonsFile(uri: string): string {
+  return decodeURIComponent(uri.slice(uri.lastIndexOf('/') + 1)).replace(/_/g, ' ');
+}
+
+/** Coats of arms (P94) and flags (P41) of items, deprecated ones left out, 50 per query. */
+export async function itemEmblems(qids: string[]): Promise<Map<string, ItemEmblems>> {
+  const out = new Map<string, ItemEmblems>();
+  for (let i = 0; i < qids.length; i += 50) {
+    const q = `
+SELECT ?item ?kind ?file ?s ?e WHERE {
+  VALUES ?item { ${qids.slice(i, i + 50).map((x) => `wd:${x}`).join(' ')} }
+  VALUES (?p ?ps ?kind) { (p:P94 ps:P94 "coa") (p:P41 ps:P41 "flag") }
+  ?item ?p ?st . ?st ?ps ?file .
+  FILTER NOT EXISTS { ?st wikibase:rank wikibase:DeprecatedRank }
+  OPTIONAL { ?st pq:P580 ?s }
+  OPTIONAL { ?st pq:P582 ?e }
+}`;
+    for (const b of await sparql(q, 30_000)) {
+      const id = qidOf(b.item!.value);
+      const kind = b.kind?.value === 'coa' ? 'coa' : 'flag';
+      const cur = out.get(id) ?? { coa: [], flag: [] };
+      const file = commonsFile(b.file!.value);
+      if (!cur[kind].some((x) => x.file === file)) {
+        cur[kind].push({ file, start: b.s?.value ? parseYear(b.s.value) : null, end: b.e?.value ? parseYear(b.e.value) : null });
+      }
+      out.set(id, cur);
+    }
+  }
+  return out;
+}
+
 export interface ItemLabel { fr: string | null; en: string | null; start: number | null; end: number | null }
 
 /**

@@ -5,7 +5,7 @@ import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { ClientMessage, type ServerMessage } from '@way/shared';
 import {
-  createBorders, createPeople, createPolities, createSoundFiles, SOUND_MAX_BYTES, SOUND_TYPES, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, type JobBus,
+  cacheBudget, createMedia, normalizeCache, CACHE_MAX_GB, createBorders, createPeople, createPolities, createSoundFiles, SOUND_MAX_BYTES, SOUND_TYPES, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, type JobBus,
 } from '@way/core';
 import { Auth, COOKIE, readCookie } from './auth.ts';
 import { ViewService, type View } from './views.ts';
@@ -19,8 +19,9 @@ const bus: JobBus = cfg.redisUrl ? new RedisBus(cfg.redisUrl) : new InlineBus(st
 const views = new ViewService(store, bus, cfg);
 const doors = new DoorService(store, () => normalizeUi(settings.get().ui).meanwhileMaxSpan);
 const { clio, borders } = createBorders(cfg);
-const polities = createPolities(cfg, clio);
-const people = createPeople(cfg);
+const polities = createPolities(cfg, clio, settings);
+const people = createPeople(cfg, settings);
+const media = createMedia(cfg, settings);
 const soundFiles = createSoundFiles(cfg);
 const mode = {
   store: cfg.databaseUrl ? 'postgres' : cfg.dataDir ? 'embedded-postgres' : 'memory',
@@ -113,6 +114,7 @@ function settingsView() {
     variables,
     providers: router.status(),
     ui: normalizeUi(saved.ui),
+    cache: normalizeCache(saved.cache, cfg.cache.maxBytes),
   };
 }
 
@@ -128,6 +130,11 @@ const SettingsBody = z.object({
     hoverOpen: z.boolean(),
     meanwhileMaxSpan: z.number().int().min(0).max(10000),
   }).partial().optional(),
+  cache: z.object({
+    maxGb: z.number().min(0.5).max(CACHE_MAX_GB),
+    refreshDays: z.number().int().min(0).max(3650),
+    images: z.boolean(),
+  }).partial().optional(),
 });
 app.put('/api/settings', async (req, reply) => {
   const body = SettingsBody.safeParse(req.body);
@@ -136,7 +143,8 @@ app.put('/api/settings', async (req, reply) => {
   const ids = new Set(router.status().map((p) => p.id));
   const cur = settings.get();
   const ui = body.data.ui ? normalizeUi({ ...normalizeUi(cur.ui), ...body.data.ui }) : cur.ui;
-  const next = { level2: cur.level2, env: { ...cur.env }, disabled: [...cur.disabled], ui };
+  const cache = body.data.cache ? normalizeCache({ ...normalizeCache(cur.cache, cfg.cache.maxBytes), ...body.data.cache }, cfg.cache.maxBytes) : cur.cache;
+  const next = { level2: cur.level2, env: { ...cur.env }, disabled: [...cur.disabled], ui, cache };
   if (body.data.level2 !== undefined) next.level2 = body.data.level2 ?? undefined;
   for (const [name, value] of Object.entries(body.data.env ?? {})) {
     if (!allowed.has(name)) return reply.code(400).send({ error: `variable inconnue : ${name}` });
@@ -146,6 +154,11 @@ app.put('/api/settings', async (req, reply) => {
   }
   if (body.data.disabled) next.disabled = body.data.disabled.filter((id) => ids.has(id));
   settings.save(next);
+  // A smaller budget applies at once.
+  if (body.data.cache) {
+    media.evict();
+    void checkCache();
+  }
   req.log.info({ level2: next.level2, vars: Object.keys(next.env), disabled: next.disabled }, 'settings saved');
   return settingsView();
 });
@@ -219,6 +232,45 @@ app.get<{ Querystring: { year?: string } }>('/api/polity/labels', async (req, re
   const year = Number(req.query.year);
   if (!Number.isFinite(year)) return reply.code(400).send({ error: 'année manquante' });
   return polities.labels(year);
+});
+
+// Coats of arms and flags of the realms shown at a year (watermarks on the map).
+app.get<{ Querystring: { year?: string } }>('/api/polity/emblems', async (req, reply) => {
+  const year = Number(req.query.year);
+  if (!Number.isFinite(year)) return reply.code(400).send({ error: 'année manquante' });
+  return polities.emblems(year);
+});
+
+// Coats of arms and flags of given items (the sides of the armies shown).
+app.get('/api/emblems', async (req, reply) => {
+  const q = z.object({
+    qids: z.string().transform((s) => s.split(',').filter((x) => Qid.safeParse(x).success).slice(0, 100)),
+    year: Year,
+  }).safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: 'requête invalide' });
+  return polities.emblemsOf(q.data.qids, q.data.year);
+});
+
+// Wikimedia images through the server: asked once, then served from disk
+// (and same-origin, so the map can paint coats of arms).
+app.get<{ Querystring: { f?: string; w?: string; u?: string } }>('/api/media', async (req, reply) => {
+  const { f, w, u } = req.query;
+  const want = f ? { file: f, width: Number(w) || 256 } : u ? { url: u } : null;
+  if (!want) return reply.code(400).send({ error: 'requête invalide' });
+  try {
+    const got = await media.get(want);
+    if (!got) return reply.code(400).send({ error: 'image non prise en charge' });
+    return reply.header('Content-Type', got.type).header('Cache-Control', 'public, max-age=2592000')
+      .header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'").send(got.data);
+  } catch (e) {
+    req.log.warn(`media ${f ?? u} failed: ${(e as Error).message}`);
+    return reply.code(502).send({ error: 'image indisponible' });
+  }
+});
+
+app.delete('/api/admin/media', async () => {
+  media.clear();
+  return { bytes: media.bytes, count: media.count };
 });
 
 // ---------- people followed on the map, armies ----------
@@ -317,7 +369,11 @@ app.get('/api/admin/providers', async () => ({
   queue: await bus.stats(),
   keys: await store.keyStats(),
   pois: await store.poiCount(),
-  cache: { bytes: await store.cacheBytes(), maxBytes: cfg.cache.maxBytes },
+  cache: {
+    bytes: await store.cacheBytes(),
+    maxBytes: cacheBudget(cfg, settings),
+    media: { bytes: media.bytes, count: media.count },
+  },
   level1: [
     { name: 'wikidata', status: 'active' },
     { name: 'wikipedia', status: 'active' },
@@ -370,12 +426,14 @@ if (cfg.dataDir && !listSnapshots(cfg.bordersDir).some((s) => s.year < SNAPSHOTS
     .catch((e) => app.log.warn(`borders download failed: ${(e as Error).message}`));
 }
 // Bounded cache: checked shortly after start, then hourly.
-const checkCache = () =>
-  enforceCacheLimit(store, cfg)
+// Points get the budget left by the images.
+function checkCache(): Promise<void> {
+  return enforceCacheLimit(store, cfg, Math.max(256 * 1024 ** 2, cacheBudget(cfg, settings) - media.bytes))
     .then(({ bytes, removed }) => {
       if (removed) app.log.info(`cache: evicted ${removed} POIs, now ${Math.round(bytes / 1048576)} MB`);
     })
     .catch((e) => app.log.warn(`cache check failed: ${(e as Error).message}`));
+}
 setTimeout(checkCache, 60_000).unref();
 setInterval(checkCache, 3_600_000).unref();
 

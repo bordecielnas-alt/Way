@@ -103,7 +103,9 @@ fleuves) n'ont pas de sens ici : ces entités ne sont presque jamais datées.
 
 ## V1 : cache borné
 
-Plafond `CACHE_MAX_MB` (10 Go), vérifié une minute après le démarrage puis toutes les heures.
+Plafond réglable dans Réglages → Cache, de 0,5 à 100 Go (par défaut `CACHE_MAX_MB`, 10 Go), vérifié une
+minute après le démarrage, toutes les heures et à chaque changement. Les images en prennent la moitié au plus ;
+les points ont le reste.
 Mesure : taille logique des lignes (~800 octets par POI). Éviction des moins vus, puis des plus
 anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zones touchées sont oubliées.
 
@@ -225,7 +227,7 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
   médiéval, « sultan » pour un sultanat) : les dates de l'élément doivent couvrir l'époque (± 50 ans) et
   son nom anglais nommer le même lieu, sinon le titre est traduit par motif (« Duchy of Athens » →
   « duché d'Athens ») et la fiche cherche par nom.
-- **Cache renforcé** : fiches, régions et libellés gardés 90 jours avant vérification (noms introuvables
+- **Cache renforcé** : fiches, régions et libellés gardés 90 jours (6 mois depuis, réglable) avant vérification (noms introuvables
   retentés après 30 jours), recherches échouées retentées après 1 h, 600 entrées dans le navigateur.
 - **Personnages suivis** (panneau Personnages, mémorisé par navigateur) : parcours tiré de Wikidata en
   trois requêtes simples (naissance, mort, résidences P551, études P69, lieux de travail P937 / P108,
@@ -245,6 +247,34 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
   gardé dans `/data/sounds`, joué à la place du son synthétisé. Way n'embarque aucun son de jeu
   commercial (droits d'auteur) ; chacun peut importer les fichiers qu'il possède.
 
+## Blasons, lecture au jour, cache configurable
+
+- **Blasons** (panneau de gauche, rubrique Blasons ; mémorisé par navigateur) : armoiries (P94), à défaut
+  drapeau (P41), de l'élément Wikidata de chaque royaume, seulement quand son nom a été vérifié pour
+  l'époque (sinon on afficherait les armes de la Restauration sur le royaume médiéval). Le fichier en
+  usage à l'année vient des qualificatifs P580 / P582 ; sans dates, un fichier dont le nom annonce une
+  autre époque (« (1901–1952) ») ou une invention (« Fictitious ») est écarté. Dessinés en filigrane sous la
+  couleur du royaume, derrière le milieu de son nom, sur un calque à part : un blason qui arrive ne
+  redessine pas les frontières.
+- **Armées** (même rubrique) : bannière au drapeau du camp à la décennie de la guerre, soldats à la couleur
+  dominante du drapeau (la plus fréquente, les couleurs vives comptant triple face au blanc et au noir).
+- **Affrontement** : deux armées ou plus à la même bataille (même élément Wikidata) au même moment :
+  épées croisées sur un éclat, entre les camps écartés de part et d'autre.
+- **Lecture au jour** : pas de 1 jour, 1 semaine, 1 mois, puis 1 à 100 ans, cadence dès 0,5 s. Choisir un
+  pas ramène la fenêtre à la largeur d'un pas (un jour commence à minuit). Les dates sont des années
+  décimales, un jour valant 1/365 (29 février ignoré) ; les dates Wikidata « à l'année » tombent le
+  1er janvier. Points et frontières restent à l'année (fenêtre de moins d'un an = son année) ; personnages
+  et armées bougent au jour, un événement les retenant 2 jours au moins.
+- **Images par le serveur** : portraits, photos, blasons et drapeaux passent par `/api/media` et sont
+  gardés sur disque (`/data/media`, les moins récemment vus retirés d'abord). Même origine : ils peuvent être
+  peints sur la carte. Demandés directement aux serveurs d'images de Wikimedia (chemin tiré du MD5 du nom),
+  aux largeurs standard (60, 120, 250, 330, 500, 960, 1280 px) : `Special:FilePath` et les autres largeurs
+  sont limités en rafale. Le User-Agent porte l'adresse du projet : sans contact, les serveurs d'images
+  répondent 429 (politique robots de Wikimedia).
+- **Cache configurable** (Réglages → Cache) : taille (0,5 à 100 Go), délai avant revérification des fiches,
+  noms, blasons, parcours et armées (1 mois à 5 ans, ou jamais ; 6 mois par défaut), images gardées ou non,
+  bouton pour vider les images. Les armées de la décennie suivante sont préchargées pendant la lecture.
+
 ## Hors V1 (prévu)
 
 Histogramme de densité, carnet de voyage, brouillard de connaissance, fils rouges,
@@ -255,7 +285,9 @@ préchargement nocturne.
 - Noms des territoires : en anglais tant que la traduction n'est pas trouvée ou pas sûre ; titre traduit par motif sinon, le lieu restant en anglais (« duché d'Athens »).
 - Frontières Cliopatria : couverture des vassaux inégale selon les régions et les époques ; en dessous, régions estimées.
 - Personnages : aussi précis que Wikidata ; trajets supposés en ligne droite ; un personnage peu renseigné (naissance et mort seulement) attend puis traverse la carte.
-- Armées : seules les batailles rattachées à une guerre (P361) et localisées ; les camps viennent des participants de chaque bataille.
+- Armées : seules les batailles rattachées à une guerre (P361) et localisées ; les camps viennent des participants de chaque bataille. Austerlitz, par exemple, n'est rattachée à aucune guerre dans Wikidata : pas d'armées ni d'affrontement ce jour-là.
+- Blasons : aussi justes que Wikidata ; un élément sans dates sur ses armoiries peut montrer celles d'une autre époque (Espagne de 1806 sous le drapeau de 1873).
+- Lecture au jour : points et frontières restent à l'année ; un événement daté à l'année seulement tombe le 1er janvier.
 - Régions : tracé approximatif ; couverture Wikidata inégale (bonne pour l'Empire ottoman, le Saint-Empire, la France ; faible pour les niveaux fins : aucun comté rattaché au duché de Bourgogne).
 - Sons : vérifiés sans erreur, pas à l'oreille.
 - Wikimedia limite le débit : premier clic sur un territoire parfois lent (jusqu'à une minute) si le serveur vient de beaucoup interroger Wikidata ; ensuite en cache.
