@@ -42,6 +42,16 @@ const MISSING_RETRY_MS = 3 * 86_400_000;
 const REFINE_EVERY_MS = 90_000;
 /** Items handed to each queue per sweep: small, so a click never waits long behind it. */
 const REFINE_BATCH = 50;
+/**
+ * Interest in a realm (its clicks) halves over this: France clicked every day
+ * stays among the watched realms, a realm clicked once last year does not.
+ */
+const INTEREST_HALF_LIFE_MS = 14 * 86_400_000;
+/** Freshness asked of the most watched realms: never checked more often than this. */
+const HOT_FRESH_MS = 86_400_000;
+const HOT_MISSING_MS = 6 * 3_600_000;
+/** Watched realms whose card and regions the sweep also checks, each time. */
+const REFINE_HOT = 3;
 /** Pause between background lookups: map names are a nicety, Wikimedia's patience is not. */
 const BACKGROUND_GAP_MS = 1500;
 const HOSTS = ['www.wikidata.org', 'query.wikidata.org', 'en.wikipedia.org', 'fr.wikipedia.org'];
@@ -74,6 +84,8 @@ interface CacheFile {
   emblems: Record<string, CachedEmblems>;
   /** Religions of those items (the religious backdrop). */
   faiths: Record<string, CachedFaiths>;
+  /** Clicks on each realm (decayed score and when last counted): the refresh follows them. */
+  interest: Record<string, { n: number; at: number }>;
 }
 
 /** Invented or reconstructed emblems: not shown as the real thing. */
@@ -288,7 +300,9 @@ export function faithAt(list: DatedFaith[], year: number): Faith | null {
 const KIND_WORD = /empire|royaume|république|sultanat|califat|khanat|émirat|cité|principauté|duché|confédération|dynastie|état/i;
 
 export class PolityService {
-  private cache: CacheFile = { resolutions: {}, details: {}, subdivisions: {}, labels: {}, emblems: {}, faiths: {} };
+  private cache: CacheFile = { resolutions: {}, details: {}, subdivisions: {}, labels: {}, emblems: {}, faiths: {}, interest: {} };
+  /** Chores for a realm just clicked: they pass before the rest of the background work. */
+  private urgent = new Set<string>();
   private labelQueue = new Set<string>();
   private emblemQueue = new Set<string>();
   private faithQueue = new Set<string>();
@@ -315,7 +329,7 @@ export class PolityService {
         const raw = JSON.parse(readFileSync(file, 'utf8')) as Partial<CacheFile>;
         this.cache = {
           resolutions: raw.resolutions ?? {}, details: raw.details ?? {}, subdivisions: raw.subdivisions ?? {}, labels: raw.labels ?? {},
-          emblems: raw.emblems ?? {}, faiths: raw.faiths ?? {},
+          emblems: raw.emblems ?? {}, faiths: raw.faiths ?? {}, interest: raw.interest ?? {},
         };
       } catch {
         /* corrupt cache: rebuilt on demand */
@@ -344,6 +358,7 @@ export class PolityService {
       const ends = d?.ends.length ? Math.max(...d.ends) : null;
       const starts = d?.starts.length ? Math.min(...d.starts) : null;
       if (name && (!d || !fitsEra(starts, ends, year))) return await interactive(() => this.build(name, year));
+      this.watch(qid);
       return this.card(name ?? d?.labelFr ?? d?.labelEn ?? qid, d, year);
     } finally {
       this.interactive--;
@@ -356,7 +371,8 @@ export class PolityService {
     try {
       let hit = this.cache.subdivisions[qid];
       if (!hit) hit = await interactive(() => this.fetchSubdivisions(qid));
-      else if (Date.now() - hit.at > this.refreshMs()) this.chore(`s:${qid}`, () => this.fetchSubdivisions(qid));
+      // Opening its regions is looking closely at a realm: it counts, less than a click.
+      this.watch(qid, 0.5);
       return { qid, year, items: regionsAt(hit.rows, qid, year) };
     } finally {
       this.interactive--;
@@ -375,6 +391,7 @@ export class PolityService {
   private async build(name: string, year: number): Promise<PolityInfo> {
     const res = await this.resolve(name, year);
     const d = res?.qid ? await this.details(res.qid) : null;
+    if (res?.qid) this.watch(res.qid);
     return this.card(name, d, year);
   }
 
@@ -442,7 +459,7 @@ export class PolityService {
     for (const f of features) {
       const hit = f.qid ? this.cache.labels[f.qid] : undefined;
       // Labels cached before dates were kept are fetched again.
-      if (f.qid && (!hit || hit.start === undefined || Date.now() - hit.at > this.refreshMs())) this.labelQueue.add(f.qid);
+      if (f.qid && this.labelStale(f.qid)) this.labelQueue.add(f.qid);
       const fr = this.itemFits(f, year) ? hit!.fr : null;
       const name = fr ?? frenchTitle(f.name);
       if (name && name !== f.name) labels[f.name] = name;
@@ -486,8 +503,7 @@ export class PolityService {
     const emblems: EmblemsResponse['emblems'] = {};
     for (const qid of new Set(qids)) {
       const hit = this.cache.emblems[qid];
-      // Entries from before lifespans were kept are asked again.
-      if (this.emblemStale(hit)) this.emblemQueue.add(qid);
+      if (this.emblemStale(qid)) this.emblemQueue.add(qid);
       if (!hit) continue;
       const life = { start: hit.start ?? null, end: hit.end ?? null };
       const coa = fileAt(hit.coa, year, life);
@@ -509,7 +525,7 @@ export class PolityService {
     const faiths: FaithsResponse['faiths'] = {};
     for (const qid of new Set(period.features.filter((f) => f.qid && this.itemFits(f, period.from)).map((f) => f.qid!))) {
       const hit = this.cache.faiths[qid];
-      if (!hit || hit.v !== polity.FAITHS_VERSION || Date.now() - hit.at > this.refreshMs()) this.faithQueue.add(qid);
+      if (this.faithStale(qid)) this.faithQueue.add(qid);
       const f = hit ? faithAt(hit.list, period.from) : null;
       if (f) faiths[qid] = f;
     }
@@ -519,7 +535,7 @@ export class PolityService {
   }
 
   private async fetchFaiths(): Promise<void> {
-    const ids = [...this.faithQueue].slice(0, 200);
+    const ids = this.batch(this.faithQueue);
     const got = await polity.itemFaiths(ids);
     const at = Date.now();
     for (const id of ids) {
@@ -530,21 +546,24 @@ export class PolityService {
     if (this.faithQueue.size) this.chore('faiths', () => this.fetchFaiths());
   }
 
-  /** Unknown, too old, or found empty a while ago (new sources, or Wikidata filled in since). */
-  private emblemStale(hit: CachedEmblems | undefined): boolean {
-    if (!hit || !('end' in hit)) return true;
-    const age = Date.now() - hit.at;
-    if (!hit.coa.length && !hit.flag.length) return hit.v !== polity.EMBLEMS_VERSION || age > MISSING_RETRY_MS;
-    return age > this.refreshMs();
+  /** A batch for one lookup: the most watched realms first, then in the order they came. */
+  private batch(queue: Set<string>): string[] {
+    const now = Date.now();
+    const ids = [...queue];
+    const hot = ids.filter((q) => this.interestOf(q, now) > 0).sort((a, b) => this.interestOf(b, now) - this.interestOf(a, now));
+    const hotSet = new Set(hot);
+    return [...hot, ...ids.filter((q) => !hotSet.has(q))].slice(0, 200);
   }
 
   /**
    * Refining sweep, in the background: goes over every realm of the yearly
    * borders (not only the periods viewed) and hands small batches to the
-   * lookup queues: names first (emblems and faiths need them to check the
-   * item), then missing emblems and faiths, then what was found empty a
-   * while ago. It only runs when no lookup waits and nobody is clicking, so
-   * the map completes itself without the viewer feeling it.
+   * lookup queues. The realms looked at lately come first, with their card
+   * and regions too (a realm clicked every day is kept up to date); then
+   * names (emblems and faiths need them to check the item), missing emblems
+   * and faiths, what was found empty a while ago, and what is getting old.
+   * It only runs when no lookup waits and nobody is clicking, so the map
+   * completes itself without the viewer feeling it.
    */
   startRefining(): void {
     const timer = setInterval(() => this.refine(), REFINE_EVERY_MS);
@@ -556,39 +575,44 @@ export class PolityService {
     // A few chores waiting is fine (they come and go while someone browses); a click or a name to match is not.
     if (!this.clio || this.interactive > 0 || this.queue.length || this.chores.size > 2) return 0;
     if (Math.max(...HOSTS.map(coolingUntil)) > Date.now()) return 0;
-    const all = this.clio.allQids();
-    const now = Date.now();
+    const watched = this.watched();
+    // Cards and regions go one realm at a time: only the few most watched are checked.
+    let cards = 0;
+    for (const q of watched) {
+      if (cards >= REFINE_HOT) break;
+      const d = this.cache.details[q] && this.detailsStale(q);
+      const s = this.regionsStale(q);
+      if (d) this.chore(`d:${q}`, () => this.fetchDetails(q));
+      if (s) this.chore(`s:${q}`, () => this.fetchSubdivisions(q));
+      if (d || s) cards++;
+    }
+    const order = [...new Set([...watched, ...this.clio.allQids()])];
     const pick = (stale: (q: string) => boolean) => {
       const out: string[] = [];
-      for (const q of all) {
+      for (const q of order) {
         if (out.length >= REFINE_BATCH) break;
         if (stale(q)) out.push(q);
       }
       return out;
     };
-    const labels = pick((q) => {
-      const l = this.cache.labels[q];
-      return !l || l.start === undefined || (!l.fr && now - l.at > MISSING_RETRY_MS);
-    });
-    const emblems = pick((q) => !!this.cache.labels[q] && this.emblemStale(this.cache.emblems[q]));
-    const faiths = pick((q) => {
-      const f = this.cache.faiths[q];
-      if (!this.cache.labels[q]) return false;
-      return !f || f.v !== polity.FAITHS_VERSION || (!f.list.length && now - f.at > MISSING_RETRY_MS);
-    });
+    const labels = pick((q) => this.labelStale(q));
+    const emblems = pick((q) => !!this.cache.labels[q] && this.emblemStale(q));
+    const faiths = pick((q) => !!this.cache.labels[q] && this.faithStale(q));
     for (const q of labels) this.labelQueue.add(q);
     for (const q of emblems) this.emblemQueue.add(q);
     for (const q of faiths) this.faithQueue.add(q);
     if (labels.length) this.chore('labels', () => this.fetchLabels());
     if (emblems.length) this.chore('emblems', () => this.fetchEmblems());
     if (faiths.length) this.chore('faiths', () => this.fetchFaiths());
-    const n = labels.length + emblems.length + faiths.length;
-    if (n) console.log(`[polity] refining: ${labels.length} names, ${emblems.length} emblems, ${faiths.length} faiths`);
+    const n = labels.length + emblems.length + faiths.length + cards;
+    if (n) {
+      console.log(`[polity] refining: ${labels.length} names, ${emblems.length} emblems, ${faiths.length} faiths, ${cards} watched cards`);
+    }
     return n;
   }
 
   /** How complete the background knowledge of the realms is (Réglages page). */
-  refineStats(): { realms: number; named: number; emblems: number; faiths: number } {
+  refineStats(): { realms: number; named: number; emblems: number; faiths: number; watched: number } {
     const all = this.clio?.allQids() ?? [];
     let named = 0;
     let emblems = 0;
@@ -599,11 +623,11 @@ export class PolityService {
       if (e && (e.coa.length || e.flag.length)) emblems++;
       if (this.cache.faiths[q]?.list.length) faiths++;
     }
-    return { realms: all.length, named, emblems, faiths };
+    return { realms: all.length, named, emblems, faiths, watched: this.watched().length };
   }
 
   private async fetchEmblems(): Promise<void> {
-    const ids = [...this.emblemQueue].slice(0, 200);
+    const ids = this.batch(this.emblemQueue);
     const got = await polity.itemEmblems(ids);
     const at = Date.now();
     for (const id of ids) {
@@ -615,7 +639,7 @@ export class PolityService {
   }
 
   private async fetchLabels(): Promise<void> {
-    const ids = [...this.labelQueue].slice(0, 200);
+    const ids = this.batch(this.labelQueue);
     const got = await polity.itemLabels(ids);
     const at = Date.now();
     for (const id of ids) {
@@ -653,7 +677,10 @@ export class PolityService {
       const cool = Math.max(...HOSTS.map(coolingUntil)) - Date.now();
       if (cool > 0) await sleep(cool + 2000);
       while (this.interactive > 0) await sleep(500);
-      const job = this.queue.shift();
+      // A realm just clicked goes before the names still to match and the sweep.
+      for (const k of this.urgent) if (!this.chores.has(k)) this.urgent.delete(k);
+      const urgent = this.urgent.values().next().value;
+      const job = urgent ? undefined : this.queue.shift();
       if (job) {
         const r = await this.resolve(job.name, job.year).catch(() => null);
         // Prepare the card too, so the first click on the territory is instant.
@@ -663,8 +690,9 @@ export class PolityService {
         }
         this.queued.delete(key(job.name, job.year));
       } else {
-        const [k, chore] = this.chores.entries().next().value!;
+        const [k, chore] = urgent ? [urgent, this.chores.get(urgent)!] : this.chores.entries().next().value!;
         this.chores.delete(k);
+        this.urgent.delete(k);
         await chore().catch((e) => console.warn(`[polity] refresh ${k} failed: ${(e as Error).message}`));
       }
       await sleep(BACKGROUND_GAP_MS);
@@ -735,10 +763,111 @@ export class PolityService {
   private async details(qid: string): Promise<CachedDetails | null> {
     const hit = this.cache.details[qid];
     if (hit) {
-      if (Date.now() - (hit.at ?? 0) > this.refreshMs()) this.chore(`d:${qid}`, () => this.fetchDetails(qid));
+      if (this.detailsStale(qid)) this.chore(`d:${qid}`, () => this.fetchDetails(qid));
       return hit;
     }
     return this.fetchDetails(qid);
+  }
+
+  // ---------- freshness: the more a realm is looked at, the fresher it is kept ----------
+
+  /** Interest in a realm now (its clicks, halved every two weeks). */
+  private interestOf(qid: string | null | undefined, now = Date.now()): number {
+    const i = qid ? this.cache.interest[qid] : undefined;
+    return i ? i.n * 0.5 ** ((now - i.at) / INTEREST_HALF_LIFE_MS) : 0;
+  }
+
+  /**
+   * Age past which what is known of a realm is checked again: the usual
+   * delay (Réglages page) for a realm nobody looks at, down to a day for one
+   * clicked again and again. What was looked for and not found is asked
+   * again sooner, the same way.
+   */
+  private freshMs(qid?: string | null): number {
+    const n = this.interestOf(qid);
+    return Math.max(Math.min(HOT_FRESH_MS, this.refreshMs()), this.refreshMs() / (1 + 4 * n));
+  }
+  private missingMs(qid?: string | null): number {
+    const n = this.interestOf(qid);
+    return Math.max(HOT_MISSING_MS, MISSING_RETRY_MS / (1 + 2 * n));
+  }
+
+  /** Unknown, from an older lookup, too old, or found empty a while ago (Wikidata fills in). */
+  private labelStale(qid: string): boolean {
+    const l = this.cache.labels[qid];
+    if (!l || l.start === undefined) return true;
+    return Date.now() - l.at > (l.fr ? this.freshMs(qid) : this.missingMs(qid));
+  }
+  private emblemStale(qid: string): boolean {
+    const hit = this.cache.emblems[qid];
+    if (!hit || !('end' in hit)) return true;
+    const age = Date.now() - hit.at;
+    if (!hit.coa.length && !hit.flag.length) return hit.v !== polity.EMBLEMS_VERSION || age > this.missingMs(qid);
+    return age > this.freshMs(qid);
+  }
+  private faithStale(qid: string): boolean {
+    const hit = this.cache.faiths[qid];
+    if (!hit || hit.v !== polity.FAITHS_VERSION) return true;
+    return Date.now() - hit.at > (hit.list.length ? this.freshMs(qid) : this.missingMs(qid));
+  }
+  /** The card: its government and rulers are the political side, looked after like the emblems. */
+  private detailsStale(qid: string): boolean {
+    const d = this.cache.details[qid];
+    if (!d) return true;
+    const thin = !d.government.length && !d.rulers.length;
+    return Date.now() - (d.at ?? 0) > (thin ? this.missingMs(qid) : this.freshMs(qid));
+  }
+  private regionsStale(qid: string): boolean {
+    const s = this.cache.subdivisions[qid];
+    if (!s) return false; // regions are only kept for realms someone opened
+    return Date.now() - s.at > (s.rows.length ? this.freshMs(qid) : this.missingMs(qid));
+  }
+
+  /**
+   * A realm was clicked: it counts one more view, and whatever is out of
+   * date for it (name, emblems, faith, card, regions) is refreshed first
+   * among the background work, right after the answer.
+   */
+  private watch(qid: string, weight = 1): void {
+    const now = Date.now();
+    this.cache.interest[qid] = { n: this.interestOf(qid, now) + weight, at: now };
+    this.scheduleSave();
+    this.freshen(qid, true);
+  }
+
+  /** Queues the lookups a realm needs; `first`: ahead of the other chores. */
+  private freshen(qid: string, first = false): number {
+    let n = 0;
+    const add = (k: string, run: () => Promise<unknown>) => {
+      n++;
+      if (first) this.urgent.add(k);
+      this.chore(k, run);
+    };
+    if (this.labelStale(qid)) {
+      this.labelQueue.add(qid);
+      add('labels', () => this.fetchLabels());
+    }
+    if (this.emblemStale(qid)) {
+      this.emblemQueue.add(qid);
+      add('emblems', () => this.fetchEmblems());
+    }
+    if (this.faithStale(qid)) {
+      this.faithQueue.add(qid);
+      add('faiths', () => this.fetchFaiths());
+    }
+    if (this.cache.details[qid] && this.detailsStale(qid)) add(`d:${qid}`, () => this.fetchDetails(qid));
+    if (this.regionsStale(qid)) add(`s:${qid}`, () => this.fetchSubdivisions(qid));
+    return n;
+  }
+
+  /** Realms looked at lately, most watched first. */
+  private watched(): string[] {
+    const now = Date.now();
+    return Object.keys(this.cache.interest)
+      .map((q) => [q, this.interestOf(q, now)] as const)
+      .filter(([, n]) => n >= 0.25)
+      .sort((a, b) => b[1] - a[1])
+      .map(([q]) => q);
   }
 
   /** Fetches a card's facts; a refresh replaces the cached card, and says so if something changed. */

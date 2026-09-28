@@ -568,6 +568,8 @@ function selectTerritory(realm: BorderShape): void {
   borders.highlight(key);
   const label = borders.displayName(realm.name);
   const info = card.openPolity(realm.qid ? { qid: realm.qid, name: realm.name } : { name: realm.name }, label, midYear(), HINT_TERRITORY, 'territory');
+  // The server refreshes this realm first: its colors are asked again shortly.
+  borders.freshenSoon();
   path = [{
     key, label, name: realm.name, area: borders.territoryArea(key)!, featureId: realm.id,
     // The card checks the item against the era: its answer is the one to split.
