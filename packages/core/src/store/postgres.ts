@@ -29,7 +29,7 @@ const UPDATABLE = [
   'h3_cells', 'importance', 'sources', 'wiki_title', 'wiki_lang',
 ];
 
-const LITE_COLS = 'id, title, category, date_start, date_end, date_precision, lat, lon, importance, confidence';
+const LITE_COLS = 'id, title, category, date_start, date_end, date_precision, lat, lon, importance, confidence, tags';
 
 /** Split a migration file into statements (PGlite's extended protocol takes one per query). */
 function splitSql(sql: string): string[] {
@@ -162,10 +162,12 @@ export class PostgresStore implements Store {
 
   async getKeys(keys: string[]): Promise<Map<string, KeyRecord>> {
     if (keys.length === 0) return new Map();
-    const r = await this.db.query<{ key: string; status: KeyStatus; fetched_at: Date | string }>(
-      'SELECT key, status, fetched_at FROM search_keys WHERE key = ANY($1::text[])', [keys],
+    const r = await this.db.query<{ key: string; status: KeyStatus; fetched_at: Date | string; providers_used: string[] }>(
+      'SELECT key, status, fetched_at, providers_used FROM search_keys WHERE key = ANY($1::text[])', [keys],
     );
-    return new Map(r.rows.map((x) => [x.key, { status: x.status, updatedAt: new Date(x.fetched_at).getTime() }]));
+    return new Map(r.rows.map((x) => [
+      x.key, { status: x.status, updatedAt: new Date(x.fetched_at).getTime(), providers: x.providers_used ?? [] },
+    ]));
   }
 
   async setKeys(keys: string[], status: KeyStatus, providers: string[] = []): Promise<void> {

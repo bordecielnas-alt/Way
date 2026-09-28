@@ -20,6 +20,8 @@ const TWEEN_MS = 800;
 /** Armies are shown for windows up to this many years (beyond, too many wars at once). */
 const ARMIES_MAX_SPAN = 120;
 const ARMIES_MAX_DECADES = 12;
+/** Army lookups at once (they are slow: a decade can take Wikidata half a minute). */
+const ARMY_FETCHES = 2;
 /** Time spent searching new ways in one update; the rest are searched right after. */
 const WAY_BUDGET_MS = 25;
 const WAYS_KEPT = 6000;
@@ -65,6 +67,7 @@ export class PeopleLayer {
   private portraits = new Map<string, HTMLImageElement | null>();
   private armies = new Map<number, Army[]>();
   private armyLoading = new Set<number>();
+  private armyQueue: number[] = [];
   private actors = new Map<string, Actor>();
   private billboards: BillboardCollection;
   private labels: LabelCollection;
@@ -369,15 +372,35 @@ export class PeopleLayer {
     return out;
   }
 
+  /**
+   * Armies of a decade, queued: a decade can take Wikidata half a minute, and
+   * the browser only opens a few connections to the server. At most
+   * ARMY_FETCHES at once, so the borders (and the points) never wait behind
+   * them while the timeline plays; decades the timeline has passed meanwhile
+   * are dropped.
+   */
   private loadArmies(decade: number): void {
-    if (this.armies.has(decade) || this.armyLoading.has(decade)) return;
-    this.armyLoading.add(decade);
-    fetchCached<ArmiesResponse>(`/api/armies?decade=${decade}`, (r) => {
-      this.armies.set(decade, r.armies);
-      this.update(false);
-    })
-      .catch(() => undefined)
-      .finally(() => this.armyLoading.delete(decade));
+    if (this.armies.has(decade) || this.armyLoading.has(decade) || this.armyQueue.includes(decade)) return;
+    this.armyQueue.push(decade);
+    this.pumpArmies();
+  }
+
+  private pumpArmies(): void {
+    while (this.armyLoading.size < ARMY_FETCHES && this.armyQueue.length) {
+      const decade = this.armyQueue.shift()!;
+      const inView = this.decadesInView() ?? [];
+      if (!inView.includes(decade) && !inView.includes(decade - 10)) continue;
+      this.armyLoading.add(decade);
+      fetchCached<ArmiesResponse>(`/api/armies?decade=${decade}`, (r) => {
+        this.armies.set(decade, r.armies);
+        this.update(false);
+      })
+        .catch(() => undefined)
+        .finally(() => {
+          this.armyLoading.delete(decade);
+          this.pumpArmies();
+        });
+    }
   }
 
   // ---------- map ----------

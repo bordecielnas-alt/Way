@@ -132,7 +132,7 @@ export class Timeline {
         </div>
         <div class="tl-range"></div>
         <div class="tl-borders"></div>
-        <div class="tl-status"><span class="tl-status-dot"></span><span class="tl-status-text">Connexion…</span></div>
+        <div class="tl-status"><span class="tl-status-dot"></span><svg class="tl-hourglass" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12M6 21h12M7 3c0 5 10 5 10 9s-10 4-10 9M17 3c0 5-10 5-10 9s10 4 10 9"/><path class="sand" d="M9.5 19.5h5l-2.5-2.5z" fill="currentColor" stroke="none"/></svg><span class="tl-status-text">Connexion…</span></div>
       </div>
       <div class="tl-track" role="slider" tabindex="0" aria-label="Fenêtre temporelle">
         <div class="tl-eras">${ERAS.map((e) => {
@@ -340,9 +340,14 @@ export class Timeline {
     this.bordersEl.textContent = text;
   }
 
-  setStatus(state: 'idle' | 'busy' | 'offline', text: string): void {
+  /**
+   * Search activity, kept discreet: nothing when idle, a pulsing dot while
+   * points are fetched, an hourglass while the AI searches the web.
+   */
+  setStatus(state: 'idle' | 'busy' | 'ai' | 'offline', text: string, title = text): void {
     this.statusEl.className = `tl-status ${state}`;
     this.statusText.textContent = text;
+    this.statusEl.title = title;
   }
 
   private render(): void {

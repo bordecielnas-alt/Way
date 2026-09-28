@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PolityCandidate, SubdivisionRow } from '@way/providers';
-import { nameSimilarity, regionsAt, rulersAt, scoreCandidate } from './polity.ts';
+import { faithAt, nameSimilarity, regionsAt, rulersAt, scoreCandidate } from './polity.ts';
 import { normalizeUi } from './settings.ts';
 import { spanYears } from './doors.ts';
 
@@ -85,5 +85,28 @@ describe('settings and meanwhile', () => {
     expect(spanYears({ date_start: 1337, date_end: 1453 })).toBe(116);
     expect(spanYears({ date_start: -10, date_end: 10 })).toBe(19);
     expect(spanYears({ date_start: 1515, date_end: null })).toBe(0);
+  });
+});
+
+describe('faithAt', () => {
+  it('picks the faith in force at the year', () => {
+    const rome = [
+      { faith: 'ancient', start: -27, end: 380, weight: 1 },
+      { faith: 'christianity', start: 380, end: null, weight: 1 },
+      { faith: 'other', start: null, end: null, weight: 1 },
+    ];
+    expect(faithAt(rome, 100)).toBe('ancient');
+    expect(faithAt(rome, 450)).toBe('christianity');
+    // Nothing dated around the year: the undated statement.
+    expect(faithAt(rome, -100)).toBe('other');
+    const u = (faith: string, weight = 1) => ({ faith, start: null, end: null, weight });
+    expect(faithAt([u('islam'), u('other'), u('other')], 900)).toBe('islam');
+    // Most weight wins: the official religion over those merely present.
+    expect(faithAt([u('christianity'), u('judaism'), u('islam', 2)], 1600)).toBe('islam');
+    expect(faithAt([u('islam'), u('christianity'), u('islam')], 1600)).toBe('islam');
+    // The Achaemenids: two statements for Zoroastrianism outweigh four local cults.
+    expect(faithAt([u('zoroastrianism'), u('zoroastrianism'), u('ancient'), u('ancient'), u('ancient'), u('ancient')], -400)).toBe('zoroastrianism');
+    expect(faithAt([u('ancient')], -400)).toBe('ancient');
+    expect(faithAt([], 900)).toBeNull();
   });
 });

@@ -1,20 +1,40 @@
-import type { Category } from '@way/shared';
+import type { Category, Theme } from '@way/shared';
+
+/** One hue per theme: its categories are shades of it, so the map reads by family. */
+export const THEME_COLORS: Record<Theme, string> = {
+  geography: '#63b86c',
+  settlement: '#e8c468',
+  state: '#b18be0',
+  war: '#e0594a',
+  religion: '#7fb3e0',
+  culture: '#dd7fd4',
+  knowledge: '#6fa0ff',
+  trade: '#5cc8b8',
+  exploration: '#c3d96b',
+  disaster: '#ff8a3d',
+  society: '#eeeae0',
+};
+
+/** People cross themes: their own color. */
+export const PEOPLE_COLOR = '#e07fb0';
 
 export const CATEGORY_COLORS: Record<Category, string> = {
-  battle: '#e0594a',
-  city: '#e8c468',
-  polity: '#b18be0',
-  monument: '#d9905a',
-  religion: '#7fb3e0',
-  person: '#e07fb0',
-  event: '#eeeae0',
-  discovery: '#a3cc6b',
-  disaster: '#ff8a3d',
-  trade: '#5cc8b8',
-  art: '#dd7fd4',
-  science: '#6fa0ff',
-  nature: '#63b86c',
+  battle: THEME_COLORS.war,
+  fortification: '#b9695c',
+  city: THEME_COLORS.settlement,
   place: '#a9a39a',
+  polity: THEME_COLORS.state,
+  monument: '#e8a6dc',
+  religion: THEME_COLORS.religion,
+  person: PEOPLE_COLOR,
+  event: THEME_COLORS.society,
+  discovery: '#9dbbff',
+  science: THEME_COLORS.knowledge,
+  disaster: THEME_COLORS.disaster,
+  trade: THEME_COLORS.trade,
+  exploration: THEME_COLORS.exploration,
+  art: THEME_COLORS.culture,
+  nature: THEME_COLORS.geography,
 };
 
 /** Canvases are drawn at the screen's pixel density so markers stay crisp. */
@@ -23,7 +43,7 @@ const cache = new Map<string, HTMLCanvasElement>();
 
 type Shape = 'shield' | 'hex' | 'diamond' | 'circle';
 const SHAPES: Partial<Record<Category, Shape>> = {
-  battle: 'shield', disaster: 'diamond', city: 'hex', polity: 'hex', monument: 'hex', trade: 'hex',
+  battle: 'shield', fortification: 'shield', disaster: 'diamond', city: 'hex', polity: 'hex', monument: 'hex', trade: 'hex',
 };
 
 // ---------- color helpers ----------
@@ -161,8 +181,39 @@ const GLYPHS: Record<Category, Draw> = {
     poly(g, [-0.48, -0.85, 0.85, -0.6, 0.35, -0.3, 0.85, 0.0, -0.48, 0.1]);
   },
   discovery: (g) => {
+    // Amphora, as dug up.
+    g.fillRect(-0.2, -0.95, 0.4, 0.14);
+    g.fillRect(-0.12, -0.85, 0.24, 0.25);
+    g.beginPath();
+    g.moveTo(-0.12, -0.6);
+    g.bezierCurveTo(-0.75, -0.45, -0.7, 0.4, 0, 0.95);
+    g.bezierCurveTo(0.7, 0.4, 0.75, -0.45, 0.12, -0.6);
+    g.closePath();
+    g.fill();
+    g.lineWidth = 0.1;
+    for (const s of [-1, 1]) {
+      g.beginPath();
+      g.moveTo(s * 0.12, -0.75);
+      g.quadraticCurveTo(s * 0.55, -0.75, s * 0.4, -0.35);
+      g.stroke();
+    }
+  },
+  exploration: (g) => {
     // Compass rose.
     poly(g, [0, -0.95, 0.2, -0.2, 0.95, 0, 0.2, 0.2, 0, 0.95, -0.2, 0.2, -0.95, 0, -0.2, -0.2]);
+  },
+  fortification: (g) => {
+    // Tower with battlements.
+    poly(g, [-0.55, 0.85, -0.45, -0.45, -0.7, -0.45, -0.7, -0.9, -0.42, -0.9, -0.42, -0.7, -0.14, -0.7, -0.14, -0.9,
+      0.14, -0.9, 0.14, -0.7, 0.42, -0.7, 0.42, -0.9, 0.7, -0.9, 0.7, -0.45, 0.45, -0.45, 0.55, 0.85]);
+    g.globalCompositeOperation = 'destination-out';
+    g.fillRect(-0.07, -0.25, 0.14, 0.32);
+    g.beginPath();
+    g.arc(0, 0.62, 0.2, Math.PI, 0);
+    g.lineTo(0.2, 0.85);
+    g.lineTo(-0.2, 0.85);
+    g.fill();
+    g.globalCompositeOperation = 'source-over';
   },
   disaster: (g) => {
     // Lightning bolt.

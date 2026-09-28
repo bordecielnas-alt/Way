@@ -3,21 +3,23 @@ import {
   DistanceDisplayCondition, Entity, HeadingPitchRange, HorizontalOrigin, LabelStyle, Math as CesiumMath,
   VerticalOrigin, type Viewer,
 } from 'cesium';
-import { poiInWindow, type Category, type PoiLite } from '@way/shared';
+import { poiInWindow, type PoiLite } from '@way/shared';
 import { clusterIcon, markerGeometry, markerIcon, sizeFor } from './icons.ts';
 
 const POP_MS = 650;
 
 /**
  * POI markers on the globe: clustering, time filtering, "light up" animation.
- * Only POIs of the current window and filters get an entity: Cesium updates
- * every entity each frame, so hidden ones would still cost time.
+ * Every POI received is kept in memory (points loaded around the view wait
+ * there for the viewer to come); only those of the current window and
+ * filters get an entity: Cesium updates every entity each frame, so hidden
+ * ones would still cost time.
  */
 export class PoiLayer {
   readonly source = new CustomDataSource('pois');
   private pois = new Map<string, PoiLite>();
   private window = { tStart: -500, tEnd: -300 };
-  private hidden = new Set<Category>();
+  private shown: (p: PoiLite) => boolean = () => true;
   private minImportance = 0;
   private selected: string | null = null;
   private syncQueued = false;
@@ -48,16 +50,18 @@ export class PoiLayer {
     return this.pois.get(id);
   }
 
-  /** Counts per category among POIs of the current window (for the filter panel). */
-  countsInWindow(): Map<Category, number> {
-    const m = new Map<Category, number>();
-    for (const p of this.pois.values()) {
-      if (poiInWindow(p, this.window.tStart, this.window.tEnd)) m.set(p.category, (m.get(p.category) ?? 0) + 1);
-    }
-    return m;
+  /** Number of points kept in memory. */
+  get size(): number {
+    return this.pois.size;
   }
 
-  upsert(pois: PoiLite[]): void {
+  /** POIs of the current window, whatever the filters (for the counts in the filter panel). */
+  inWindow(): PoiLite[] {
+    return [...this.pois.values()].filter((p) => poiInWindow(p, this.window.tStart, this.window.tEnd));
+  }
+
+  /** New points light up; `quiet` ones (loaded in the background) just appear. */
+  upsert(pois: PoiLite[], { quiet = false } = {}): void {
     const ents = this.source.entities;
     ents.suspendEvents();
     let popped = false;
@@ -65,7 +69,7 @@ export class PoiLayer {
       if (this.pois.has(p.id)) continue;
       this.pois.set(p.id, p);
       if (this.isVisible(p)) {
-        this.addEntity(p, true);
+        this.addEntity(p, !quiet);
         popped = true;
       }
     }
@@ -78,8 +82,9 @@ export class PoiLayer {
     this.queueSync();
   }
 
-  setHidden(hidden: Set<Category>): void {
-    this.hidden = hidden;
+  /** Filters: which points are shown (themes, categories, people). */
+  setFilter(shown: (p: PoiLite) => boolean): void {
+    this.shown = shown;
     this.queueSync();
   }
 
@@ -129,7 +134,7 @@ export class PoiLayer {
   }
 
   private isVisible(p: PoiLite): boolean {
-    if (this.hidden.has(p.category) || !poiInWindow(p, this.window.tStart, this.window.tEnd)) return false;
+    if (!this.shown(p) || !poiInWindow(p, this.window.tStart, this.window.tEnd)) return false;
     // The selected point (e.g. a door destination) stays visible at any altitude.
     return p.importance >= this.minImportance || p.id === this.selected;
   }

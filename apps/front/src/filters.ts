@@ -1,11 +1,10 @@
-import { Category, CATEGORY_LABELS } from '@way/shared';
+import {
+  ALL_THEMES, BACKDROP_LABELS, CATEGORY_LABELS, CATEGORY_THEME, FAITH_LABELS, FAITHS, LENSES, makeShown, THEME_CATEGORIES, THEME_LABELS, THEMES,
+  themesOf, type Backdrop, type Category, type Lens, type PoiLite, type Theme, type ThemeFilter,
+} from '@way/shared';
+import { FAITH_COLORS } from './borders.ts';
 import { GEOGRAPHY, type Geography } from './geography.ts';
-import { CATEGORY_COLORS } from './icons.ts';
-
-const ORDER: Category[] = [
-  'battle', 'polity', 'city', 'monument', 'religion', 'discovery', 'event',
-  'disaster', 'trade', 'science', 'art', 'nature', 'person', 'place',
-];
+import { CATEGORY_COLORS, PEOPLE_COLOR, THEME_COLORS } from './icons.ts';
 
 /** Impact scale (brief §4.7): how many minor points show at a given zoom. */
 export type Scale = 'major' | 'selection' | 'all';
@@ -31,60 +30,128 @@ const HERALDRY: { key: keyof Heraldry; label: string; title: string }[] = [
   { key: 'armies', label: 'Armées', title: 'Drapeau et couleurs de leur camp sur les armées' },
 ];
 
-/** Category toggles (they double as the map legend), the impact scale and the coats of arms. */
+function lensFilter(l: Lens): ThemeFilter {
+  const on = l.themes === 'all' ? THEMES : l.themes;
+  return { hiddenThemes: THEMES.filter((t) => !on.includes(t)), hiddenCats: [], people: l.people };
+}
+
+/**
+ * The left panel: lenses (ready-made views), the backdrop of the territories,
+ * the impact scale, the themes (with their finer categories on demand, they
+ * double as the map legend), the geography layers and the coats of arms.
+ */
 export class Filters {
-  private hidden: Set<Category>;
-  private buttons = new Map<Category, HTMLButtonElement>();
+  private themeButtons = new Map<Theme, HTMLButtonElement>();
+  private catButtons = new Map<Category, HTMLButtonElement>();
+  private lensButtons = new Map<string, HTMLButtonElement>();
+  private backdropButtons = new Map<Backdrop, HTMLButtonElement>();
   private scaleButtons = new Map<Scale, HTMLButtonElement>();
+  private peopleButton: HTMLButtonElement;
+  private toggleAll: HTMLButtonElement;
+  private legend: HTMLElement;
 
   constructor(
-    root: HTMLElement,
-    initialHidden: Category[],
-    private onChange: (hidden: Set<Category>) => void,
+    private root: HTMLElement,
+    public themes: ThemeFilter,
+    private onThemes: (f: ThemeFilter) => void,
+    public backdrop: Backdrop,
+    private onBackdrop: (b: Backdrop) => void,
     public scale: Scale,
     private onScale: (scale: Scale) => void,
     public heraldry: Heraldry,
     private onHeraldry: (h: Heraldry) => void,
     public geography: Geography,
     private onGeography: (g: Geography) => void,
+    detailed: boolean,
+    private onDetailed: (on: boolean) => void,
   ) {
-    this.hidden = new Set(initialHidden.filter((c) => Category.safeParse(c).success));
     root.innerHTML = `
-      <div class="filters-head">
-        <span class="filters-title">Échelle</span>
-      </div>
+      <div class="filters-head"><span class="filters-title">Lentilles</span></div>
+      <div class="lenses" role="group" aria-label="Lentilles">${LENSES.map(
+        (l) => `<button type="button" data-lens="${l.id}" title="${l.title}">${l.label}</button>`,
+      ).join('')}</div>
+      <div class="filters-head"><span class="filters-title">Fond des territoires</span></div>
+      <div class="scale" role="group" aria-label="Fond des territoires">${(Object.keys(BACKDROP_LABELS) as Backdrop[]).map(
+        (b) => `<button type="button" data-backdrop="${b}" title="${BACKDROP_LABELS[b].title}">${BACKDROP_LABELS[b].label}</button>`,
+      ).join('')}</div>
+      <div class="faith-legend" hidden>${FAITHS.map(
+        (f) => `<span class="faith"><span class="chip-dot" style="background:${FAITH_COLORS[f]}"></span>${FAITH_LABELS[f]}</span>`,
+      ).join('')}<span class="faith"><span class="chip-dot unknown"></span>Inconnue</span></div>
+      <div class="filters-head"><span class="filters-title">Échelle</span></div>
       <div class="scale" role="group" aria-label="Échelle d’impact">${SCALES.map(
         (s) => `<button type="button" data-scale="${s.value}" title="${s.title}">${s.label}</button>`,
       ).join('')}</div>
       <div class="filters-head">
-        <span class="filters-title">Blasons</span>
+        <span class="filters-title">Thèmes</span>
+        <span>
+          <button class="filters-toggle filters-detail" type="button" title="Afficher les catégories de chaque thème">Détail</button>
+          <button class="filters-toggle filters-all" type="button">Tout afficher</button>
+        </span>
       </div>
-      <div class="scale heraldry" role="group" aria-label="Blasons et drapeaux">${HERALDRY.map(
-        (h) => `<button type="button" data-heraldry="${h.key}" title="${h.title}">${h.label}</button>`,
-      ).join('')}</div>
-      <div class="filters-head">
-        <span class="filters-title">Géographie</span>
-      </div>
+      <div class="themes"></div>
+      <div class="filters-head"><span class="filters-title">Géographie</span></div>
       <div class="geo-chips" role="group" aria-label="Géographie">${GEOGRAPHY.map(
         (g) => `<button type="button" class="chip" data-geo="${g.key}" title="${g.title}"><span class="chip-dot" style="background:${g.color}"></span>${g.label}</button>`,
       ).join('')}</div>
-      <div class="filters-head">
-        <span class="filters-title">Thèmes</span>
-        <button class="filters-toggle" type="button">Tout afficher</button>
-      </div>`;
-    for (const c of ORDER) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'chip';
-      b.innerHTML = `<span class="chip-dot" style="background:${CATEGORY_COLORS[c]}"></span>${CATEGORY_LABELS[c]}<span class="chip-count"></span>`;
-      b.addEventListener('click', () => {
-        if (this.hidden.has(c)) this.hidden.delete(c);
-        else this.hidden.add(c);
-        this.sync();
-      });
-      root.appendChild(b);
-      this.buttons.set(c, b);
+      <div class="filters-head"><span class="filters-title">Blasons</span></div>
+      <div class="scale heraldry" role="group" aria-label="Blasons et drapeaux">${HERALDRY.map(
+        (h) => `<button type="button" data-heraldry="${h.key}" title="${h.title}">${h.label}</button>`,
+      ).join('')}</div>`;
+
+    // ---------- themes, and their categories in detail ----------
+    const box = root.querySelector<HTMLElement>('.themes')!;
+    box.classList.toggle('detailed', detailed);
+    for (const t of THEMES) {
+      const b = chip(THEME_COLORS[t], THEME_LABELS[t]);
+      b.classList.add('theme-chip');
+      b.addEventListener('click', () => this.toggleTheme(t));
+      box.appendChild(b);
+      this.themeButtons.set(t, b);
+      const cats = THEME_CATEGORIES[t];
+      if (cats.length < 2) continue;
+      const sub = document.createElement('div');
+      sub.className = 'subcats';
+      for (const c of cats) {
+        const cb = chip(CATEGORY_COLORS[c], CATEGORY_LABELS[c]);
+        cb.addEventListener('click', () => this.toggleCategory(c));
+        sub.appendChild(cb);
+        this.catButtons.set(c, cb);
+      }
+      box.appendChild(sub);
     }
+    this.peopleButton = chip(PEOPLE_COLOR, 'Personnages');
+    this.peopleButton.classList.add('theme-chip', 'people-chip');
+    this.peopleButton.title = 'Rattachés aux thèmes de leurs rôles : un roi au pouvoir, un saint à la religion…';
+    this.peopleButton.addEventListener('click', () => this.setThemes({ ...this.themes, people: !this.themes.people }));
+    box.appendChild(this.peopleButton);
+    root.querySelector('.filters-detail')!.addEventListener('click', () => {
+      const on = !box.classList.contains('detailed');
+      box.classList.toggle('detailed', on);
+      this.onDetailed(on);
+    });
+    this.toggleAll = root.querySelector('.filters-all')!;
+    this.toggleAll.addEventListener('click', () => {
+      const allOn = this.themes.hiddenThemes.length === 0 && this.themes.hiddenCats.length === 0 && this.themes.people;
+      this.setThemes(allOn ? { hiddenThemes: [...THEMES], hiddenCats: [], people: false } : ALL_THEMES);
+    });
+
+    // ---------- lenses ----------
+    root.querySelectorAll<HTMLButtonElement>('[data-lens]').forEach((b) => {
+      const lens = LENSES.find((l) => l.id === b.dataset.lens)!;
+      this.lensButtons.set(lens.id, b);
+      b.addEventListener('click', () => {
+        this.setBackdrop(lens.backdrop);
+        this.setThemes(lensFilter(lens));
+      });
+    });
+
+    // ---------- backdrop, scale, layers ----------
+    this.legend = root.querySelector('.faith-legend')!;
+    root.querySelectorAll<HTMLButtonElement>('[data-backdrop]').forEach((b) => {
+      const v = b.dataset.backdrop as Backdrop;
+      this.backdropButtons.set(v, b);
+      b.addEventListener('click', () => this.setBackdrop(v));
+    });
     root.querySelectorAll<HTMLButtonElement>('[data-scale]').forEach((b) => {
       const v = b.dataset.scale as Scale;
       this.scaleButtons.set(v, b);
@@ -115,33 +182,118 @@ export class Filters {
       });
     });
     if (!this.scaleButtons.has(this.scale)) this.scale = 'selection';
+    if (!this.backdropButtons.has(this.backdrop)) this.backdrop = 'political';
     this.syncScale();
-    root.querySelector('.filters-toggle')!.addEventListener('click', () => {
-      this.hidden = this.hidden.size === 0 ? new Set(ORDER) : new Set();
-      this.sync();
-    });
-    this.sync(false);
+    this.syncBackdrop();
+    this.syncThemes();
   }
 
-  get hiddenSet(): Set<Category> {
-    return this.hidden;
+  get shown(): (p: PoiLite) => boolean {
+    return makeShown(this.themes);
   }
 
-  setCounts(counts: Map<Category, number>): void {
-    for (const [c, b] of this.buttons) {
-      const n = counts.get(c) ?? 0;
-      b.querySelector('.chip-count')!.textContent = n ? String(n) : '';
+  /** Counts among the points of the window: per theme (people counted in their roles' themes), per category. */
+  setCounts(pois: PoiLite[]): void {
+    const themes = new Map<Theme, number>();
+    const cats = new Map<Category, number>();
+    let people = 0;
+    for (const p of pois) {
+      cats.set(p.category, (cats.get(p.category) ?? 0) + 1);
+      if (p.category === 'person') people++;
+      for (const t of themesOf(p)) themes.set(t, (themes.get(t) ?? 0) + 1);
     }
+    const set = (b: HTMLButtonElement, n: number) => (b.querySelector('.chip-count')!.textContent = n ? String(n) : '');
+    for (const [t, b] of this.themeButtons) set(b, themes.get(t) ?? 0);
+    for (const [c, b] of this.catButtons) set(b, cats.get(c) ?? 0);
+    set(this.peopleButton, people);
+  }
+
+  private toggleTheme(t: Theme): void {
+    const hidden = new Set(this.themes.hiddenThemes);
+    if (hidden.has(t)) {
+      hidden.delete(t);
+      // Turning a theme back on shows all of it.
+      this.setThemes({ ...this.themes, hiddenThemes: [...hidden], hiddenCats: this.themes.hiddenCats.filter((c) => !THEME_CATEGORIES[t].includes(c)) });
+    } else this.setThemes({ ...this.themes, hiddenThemes: [...hidden, t] });
+  }
+
+  private toggleCategory(c: Category): void {
+    const theme = CATEGORY_THEME[c as Exclude<Category, 'person'>];
+    const cats = new Set(this.themes.hiddenCats);
+    let themes = this.themes.hiddenThemes;
+    if (themes.includes(theme)) {
+      // From a hidden theme, a category turns on alone.
+      themes = themes.filter((t) => t !== theme);
+      for (const x of THEME_CATEGORIES[theme]) if (x !== c) cats.add(x);
+      cats.delete(c);
+    } else if (cats.has(c)) cats.delete(c);
+    else cats.add(c);
+    // All of a theme's categories off: the theme is off.
+    if (THEME_CATEGORIES[theme].every((x) => cats.has(x))) {
+      for (const x of THEME_CATEGORIES[theme]) cats.delete(x);
+      themes = [...themes, theme];
+    }
+    this.setThemes({ ...this.themes, hiddenThemes: themes, hiddenCats: [...cats] });
+  }
+
+  private setThemes(f: ThemeFilter): void {
+    this.themes = f;
+    this.syncThemes();
+    this.onThemes(f);
+  }
+
+  private setBackdrop(b: Backdrop): void {
+    if (b === this.backdrop) return;
+    this.backdrop = b;
+    this.syncBackdrop();
+    this.onBackdrop(b);
   }
 
   private syncScale(): void {
     for (const [v, b] of this.scaleButtons) b.setAttribute('aria-pressed', String(v === this.scale));
   }
 
-  private sync(notify = true): void {
-    for (const [c, b] of this.buttons) b.setAttribute('aria-pressed', String(!this.hidden.has(c)));
-    const toggle = this.buttons.values().next().value?.parentElement?.querySelector('.filters-toggle');
-    if (toggle) toggle.textContent = this.hidden.size === 0 ? 'Tout masquer' : 'Tout afficher';
-    if (notify) this.onChange(this.hidden);
+  private syncBackdrop(): void {
+    for (const [v, b] of this.backdropButtons) b.setAttribute('aria-pressed', String(v === this.backdrop));
+    this.legend.hidden = this.backdrop !== 'religion';
+    this.syncLenses();
   }
+
+  private syncThemes(): void {
+    const f = this.themes;
+    for (const [t, b] of this.themeButtons) {
+      const off = f.hiddenThemes.includes(t);
+      const partial = !off && THEME_CATEGORIES[t].some((c) => f.hiddenCats.includes(c));
+      b.setAttribute('aria-pressed', String(!off));
+      b.classList.toggle('partial', partial);
+    }
+    for (const [c, b] of this.catButtons) {
+      const theme = CATEGORY_THEME[c as Exclude<Category, 'person'>];
+      b.setAttribute('aria-pressed', String(!f.hiddenThemes.includes(theme) && !f.hiddenCats.includes(c)));
+    }
+    this.peopleButton.setAttribute('aria-pressed', String(f.people));
+    const allOn = f.hiddenThemes.length === 0 && f.hiddenCats.length === 0 && f.people;
+    this.toggleAll.textContent = allOn ? 'Tout masquer' : 'Tout afficher';
+    this.syncLenses();
+  }
+
+  /** A lens is lit while the filters are exactly its own. */
+  private syncLenses(): void {
+    const f = this.themes;
+    for (const l of LENSES) {
+      const want = lensFilter(l);
+      const same = l.backdrop === this.backdrop && f.people === want.people && f.hiddenCats.length === 0
+        && f.hiddenThemes.length === want.hiddenThemes.length && want.hiddenThemes.every((t) => f.hiddenThemes.includes(t));
+      this.lensButtons.get(l.id)!.setAttribute('aria-pressed', String(same));
+    }
+  }
+}
+
+function chip(color: string, label: string): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'chip';
+  b.innerHTML = `<span class="chip-dot" style="background:${color}"></span><span class="chip-label"></span><span class="chip-count"></span>`;
+  b.querySelector('.chip-label')!.textContent = label;
+  return b;
 }

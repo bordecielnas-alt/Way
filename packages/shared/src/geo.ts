@@ -1,4 +1,4 @@
-import { cellToLatLng, getHexagonEdgeLengthAvg, latLngToCell, polygonToCells, UNITS } from 'h3-js';
+import { cellToLatLng, getHexagonEdgeLengthAvg, gridDisk, latLngToCell, polygonToCells, UNITS } from 'h3-js';
 
 /** Resolutions stored on each POI (h3_cells). */
 export const POI_RESOLUTIONS = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const;
@@ -83,4 +83,17 @@ export function cellsForRect(r: Rect, res: number): string[] {
     return (la - cLat) ** 2 + d ** 2;
   };
   return [...set].sort((a, b) => dist(a) - dist(b));
+}
+
+/**
+ * Cells exactly `k` steps outside a set of cells: the k-th ring around a
+ * view, in the order of the cells it grows from (nearest to the center first).
+ */
+export function ringAround(cells: string[], k: number): string[] {
+  if (k <= 0) return [...cells];
+  const inner = new Set<string>();
+  for (const c of cells) for (const x of gridDisk(c, k - 1)) inner.add(x);
+  const out = new Set<string>();
+  for (const c of cells) for (const x of gridDisk(c, k)) if (!inner.has(x)) out.add(x);
+  return [...out];
 }

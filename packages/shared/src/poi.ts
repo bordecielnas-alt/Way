@@ -2,12 +2,12 @@ import { z } from 'zod';
 
 export const Category = z.enum([
   'battle', 'city', 'polity', 'monument', 'religion', 'person', 'event', 'discovery',
-  'disaster', 'trade', 'art', 'science', 'nature', 'place',
+  'disaster', 'trade', 'art', 'science', 'nature', 'place', 'fortification', 'exploration',
 ]);
 export type Category = z.infer<typeof Category>;
 
 export const CATEGORY_LABELS: Record<Category, string> = {
-  battle: 'Guerre et bataille',
+  battle: 'Bataille',
   city: 'Ville',
   polity: 'État et empire',
   monument: 'Monument',
@@ -18,9 +18,11 @@ export const CATEGORY_LABELS: Record<Category, string> = {
   disaster: 'Catastrophe',
   trade: 'Commerce et routes',
   art: 'Art',
-  science: 'Science et techniques',
+  science: 'Science et technique',
   nature: 'Site naturel',
   place: 'Lieu',
+  fortification: 'Fortification',
+  exploration: 'Expédition',
 };
 
 export const DatePrecision = z.enum(['exact_year', 'decade', 'century', 'millennium', 'approximate']);
@@ -67,11 +69,14 @@ export type Poi = z.infer<typeof Poi>;
 export type PoiLite = Pick<
   Poi,
   'id' | 'title' | 'category' | 'date_start' | 'date_end' | 'date_precision' | 'lat' | 'lon' | 'importance' | 'confidence'
->;
+> & {
+  /** A person's roles (`role:<theme>`); absent from older caches. */
+  tags?: string[];
+};
 
 export function toLite(p: Poi): PoiLite {
-  const { id, title, category, date_start, date_end, date_precision, lat, lon, importance, confidence } = p;
-  return { id, title, category, date_start, date_end, date_precision, lat, lon, importance, confidence };
+  const { id, title, category, date_start, date_end, date_precision, lat, lon, importance, confidence, tags } = p;
+  return { id, title, category, date_start, date_end, date_precision, lat, lon, importance, confidence, tags };
 }
 
 /** Does the POI's date span intersect the inclusive window [t0, t1]? */

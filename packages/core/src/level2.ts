@@ -52,7 +52,7 @@ Rules, all mandatory:
 - sources: the numbers of the sources that state the fact.
 - sources_disagree: true if the sources contradict each other on this fact.
 - importance: 0 to 1, historical significance at world scale (a local event is below 0.2).
-- category: one of battle, city, polity, monument, religion, person, event, discovery, disaster, trade, art, science, nature, place.
+- category: one of battle, fortification, city, polity, monument, religion, person, event, discovery, exploration, disaster, trade, art, science, nature, place.
 - date_precision: one of exact_year, decade, century, millennium, approximate.
 Answer with a single JSON object: {"events": [...]}, at most ${MAX_EVENTS} events.`;
 

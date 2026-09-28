@@ -2,10 +2,47 @@ import {
   Event as CesiumEvent, GeographicTilingScheme, ImageryLayer, Math as CesiumMath, Rectangle,
   type ImageryProvider, type Viewer,
 } from 'cesium';
-import { formatYear, type BordersIndex, type BordersPeriod, type Emblem, type EmblemsResponse, type PolityLabels } from '@way/shared';
+import {
+  formatYear, type Backdrop, type BordersIndex, type BordersPeriod, type Emblem, type EmblemsResponse, type Faith, type FaithsResponse, type PolityLabels,
+} from '@way/shared';
 import { bounds, type Area, type Region, type Ring } from './divisions.ts';
 import { letter, nameRoots, shortName, type Lettering } from './lettering.ts';
 import { commonsImage, loadImage } from './media.ts';
+import { dominantColor, lighter, withAlpha } from './tint.ts';
+
+/**
+ * Dominant colors of emblem files, kept by the browser: known colors show at
+ * once next time. Versioned: a change in how colors are measured measures them again.
+ */
+const TINTS_KEY = 'orbis:tints:v2';
+function loadTints(): Map<string, string | null> {
+  try {
+    return new Map(Object.entries(JSON.parse(localStorage.getItem(TINTS_KEY) ?? '{}') as Record<string, string | null>));
+  } catch {
+    return new Map();
+  }
+}
+function saveTints(tints: Map<string, string | null>): void {
+  try {
+    // The most recent ones, should the list grow very long.
+    localStorage.setItem(TINTS_KEY, JSON.stringify(Object.fromEntries([...tints].slice(-3000))));
+  } catch {
+    /* not remembered: computed again next time */
+  }
+}
+
+/** Dominant color of an image, read from a small copy. */
+function tintOf(img: HTMLImageElement): string | null {
+  const c = document.createElement('canvas');
+  c.width = c.height = 40;
+  const g = c.getContext('2d', { willReadFrequently: true })!;
+  g.drawImage(img, 0, 0, 40, 40);
+  try {
+    return dominantColor(g.getImageData(0, 0, 40, 40).data);
+  } catch {
+    return null; // a cross-origin image taints the canvas
+  }
+}
 
 /** A realm, or a member drawn inside a composite realm, for the period shown. */
 export interface BorderShape extends Area {
@@ -40,6 +77,10 @@ interface Mark extends Area { img: HTMLCanvasElement; lon: number; lat: number; 
 const TILE = 256;
 type Style = 'normal' | 'highlight' | 'regions';
 const FADE_MS = 700;
+/** Fade between periods when they follow each other quickly (play mode). */
+const QUICK_FADE_MS = 220;
+/** Longest wait for new border tiles to be painted before the old ones go anyway. */
+const SETTLE_MAX_MS = 1500;
 /** Main-thread time spent drawing border tiles per frame, so panning stays smooth. */
 const FRAME_BUDGET_MS = 6;
 const PERIOD_CACHE = 24;
@@ -51,6 +92,22 @@ function hue(key: string): number {
   for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619);
   return (h >>> 0) % 360;
 }
+
+/** Religious backdrop: one color per faith family. */
+export const FAITH_COLORS: Record<Faith, string> = {
+  christianity: '#5b8fd9',
+  islam: '#3fae6a',
+  judaism: '#8fd0f0',
+  zoroastrianism: '#e0a040',
+  hinduism: '#e8733a',
+  buddhism: '#f0cf50',
+  jainism: '#c9a0e8',
+  sikhism: '#e05a8a',
+  chinese: '#d24a3c',
+  shinto: '#f09a9a',
+  ancient: '#a08466',
+  other: '#9a9a9a',
+};
 
 /** Realms are recognized across periods by their Wikidata item, else by name. */
 export const realmKey = (s: { qid: string | null; name: string }) => s.qid ?? `n:${s.name}`;
@@ -376,7 +433,15 @@ export class BordersLayer {
   private cache = new Map<number, Promise<Period>>();
   private alpha = 0.85;
   private fading = false;
+  private fadeToken = 0;
+  private lastFade = 0;
+  /** The last borders layer fully painted: it stays under a replacement until that one is drawn. */
+  private base: ImageryLayer | null = null;
+  private settleWaiters: (() => void)[] = [];
   private wanted: number | null = null;
+  private loadingPeriod = false;
+  /** Names (or emblems to measure) that came while periods were being chained: drawn once the chain stops. */
+  private namesDirty = false;
   private visible = true;
   private highlightLayer: ImageryLayer | null = null;
   private highlighted: string | null = null;
@@ -388,6 +453,14 @@ export class BordersLayer {
   private letterings = new Map<string, Lettering | null>();
   /** Coats of arms in watermark (Blasons → Territoires). */
   private heraldry = false;
+  private backdrop: Backdrop = 'political';
+  /** Emblem file -> its dominant color (null: no real color). */
+  private tints = loadTints();
+  private tintTimer: number | undefined;
+  private tintsSaveTimer: number | undefined;
+  private faiths: Record<string, Faith> = {};
+  private faithsFrom: number | null = null;
+  private faithsTimer: number | undefined;
   private emblems: Record<string, Emblem> = {};
   private emblemsFrom: number | null = null;
   private emblemImages = new Map<string, HTMLImageElement | null>();
@@ -454,24 +527,51 @@ export class BordersLayer {
     return p;
   }
 
+  /**
+   * Shows the borders of a year. While the timeline plays, loads are chained:
+   * each period loaded is shown on the way (the map keeps up instead of
+   * waiting for time to stop), then the latest one asked for is loaded.
+   */
   async setYear(year: number): Promise<void> {
     this.wanted = year;
-    const from = this.periodStart(year);
-    if (from === null || from === this.current?.from) return;
+    if (this.loadingPeriod) return; // the load under way goes on to the latest year after
+    this.loadingPeriod = true;
+    try {
+      for (;;) {
+        const from = this.periodStart(this.wanted);
+        if (from === null || from === this.current?.from) break;
+        if (!(await this.showPeriod(from))) break; // unreachable: tried again at the next year asked
+        // The next period waits for this one to be painted: the map follows as fast as it can draw.
+        await this.settled();
+      }
+    } finally {
+      this.loadingPeriod = false;
+    }
+    if (this.namesDirty) {
+      this.namesDirty = false;
+      this.show();
+      this.onPeriod();
+    }
+  }
+
+  private async showPeriod(from: number): Promise<boolean> {
     try {
       const period = await this.load(from);
-      if (this.periodStart(this.wanted) !== from) return; // superseded
       this.current = period;
       this.show();
       this.onPeriod();
       void this.loadNames(from);
-      if (this.heraldry) void this.loadEmblems(from);
+      // Emblems give the realms their colors: asked for whatever the watermarks setting.
+      void this.loadEmblems(from);
+      if (this.backdrop === 'religion') void this.loadFaiths(from);
       this.onNote(`Frontières de ${formatYear(period.from)}${period.to > period.from ? ` à ${formatYear(period.to)}` : ''}`);
-      // Playing forward: the next period is fetched ahead.
-      const next = this.index!.events.find((y) => y > period.to);
-      if (next !== undefined) void this.load(next).catch(() => undefined);
+      // Playing forward: the next periods are fetched ahead.
+      const ahead = this.index!.events.filter((y) => y > period.to).slice(0, 3);
+      for (const y of ahead) void this.load(y).catch(() => undefined);
+      return true;
     } catch (e) {
       console.warn('borders failed', e);
+      return false;
     }
   }
 
@@ -514,7 +614,7 @@ export class BordersLayer {
         .sort((a, b) => b.km2 - a.km2)[0];
     }
     const root = shape ? (this.shapes.find((s) => s.id === shape.root) ?? shape) : null;
-    const color = realmColor(hue(root ? realmKey(root) : (qid ?? `n:${name}`)));
+    const color = this.tintOf(root?.qid ?? qid) ?? realmColor(hue(root ? realmKey(root) : (qid ?? `n:${name}`)));
     this.colors.set(memo, color);
     return color;
   }
@@ -578,7 +678,8 @@ export class BordersLayer {
     if (regions?.length) {
       const drawn: Drawn[] = regions.map((r) => ({
         ...r,
-        fill: `hsla(${hue(r.qid)}, 45%, 60%, 0.24)`,
+        // A vassal with a coat of arms of its own wears its color too.
+        fill: ((t) => (t ? withAlpha(t, 0.3) : `hsla(${hue(r.qid)}, 45%, 60%, 0.24)`))(this.tintOf(r.qid)),
         stroke: r.estimated ? 'rgba(255, 240, 214, 0.8)' : 'rgba(255, 240, 214, 0.95)',
         dashed: r.estimated,
       }));
@@ -622,15 +723,24 @@ export class BordersLayer {
     // Big realms first: small ones inside or across them stay visible.
     const byId = new Map(period.shapes.map((s) => [s.id, s]));
     const ordered = [...period.shapes].sort((a, b) => (a.parent === null ? 0 : 1) - (b.parent === null ? 0 : 1) || b.km2 - a.km2);
-    for (const s of ordered) {
+    const religious = this.backdrop === 'religion';
+    // No backdrop: the bare relief (a click still finds the realm under it).
+    for (const s of this.backdrop === 'none' ? [] : ordered) {
       const root = byId.get(s.root) ?? s;
       const h = hue(realmKey(root));
       const named = !!s.name;
+      // The realm wears the dominant color of its coat of arms (else of its flag), else a hue of its own.
+      const tint = religious ? null : this.tintOf(root.qid);
       if (s.parent === null) {
+        const faith = religious && s.qid ? this.faiths[s.qid] : undefined;
         drawn.push({
           ...s,
-          fill: named ? `hsla(${h}, 48%, 58%, 0.30)` : 'rgba(150, 150, 150, 0.08)',
-          stroke: named ? `hsla(${h}, 55%, 80%, 0.85)` : 'rgba(200, 200, 200, 0.25)',
+          fill: religious
+            ? (faith ? `${FAITH_COLORS[faith]}66` : 'rgba(150, 150, 150, 0.10)')
+            : tint ? withAlpha(tint, 0.34) : named ? `hsla(${h}, 48%, 58%, 0.30)` : 'rgba(150, 150, 150, 0.08)',
+          stroke: religious
+            ? 'rgba(236, 228, 210, 0.45)'
+            : tint ? lighter(tint, 0.5) : named ? `hsla(${h}, 55%, 80%, 0.85)` : 'rgba(200, 200, 200, 0.25)',
         });
         if (named && s.main && realmKey(s) !== this.quietRealm) {
           const label = this.displayName(s.name);
@@ -645,7 +755,7 @@ export class BordersLayer {
         }
       } else {
         // A vassal inside its realm: a faint line, as on a strategy map.
-        drawn.push({ ...s, fill: '', stroke: `hsla(${h}, 40%, 88%, 0.35)`, inner: true });
+        drawn.push({ ...s, fill: '', stroke: tint ? withAlpha(lighter(tint, 0.7), 0.35) : `hsla(${h}, 40%, 88%, 0.35)`, inner: true });
       }
     }
     const layer = new ImageryLayer(new BordersTiles(drawn, 'normal', names) as unknown as ImageryProvider, { alpha: 0 });
@@ -668,7 +778,9 @@ export class BordersLayer {
       if (this.current?.from !== from) return;
       const changed = JSON.stringify(res.labels) !== JSON.stringify(this.frNames);
       this.frNames = res.labels;
-      if (changed) {
+      // Playing: the next period, drawn soon, takes the names along (no extra redraw).
+      if (changed && this.loadingPeriod) this.namesDirty = true;
+      else if (changed) {
         this.show();
         this.onPeriod(); // French names can match more armies to their country
       }
@@ -680,11 +792,39 @@ export class BordersLayer {
     }
   }
 
+  /** What colors the territories: realms, faiths, or nothing. */
+  setBackdrop(b: Backdrop): void {
+    if (b === this.backdrop) return;
+    this.backdrop = b;
+    // Asked again each time: faiths looked up since then show up.
+    if (b === 'religion' && this.current) void this.loadFaiths(this.current.from);
+    this.show();
+  }
+
+  /** Faiths of the realms come from the server progressively, like the names. */
+  private async loadFaiths(from: number, attempt = 0): Promise<void> {
+    clearTimeout(this.faithsTimer);
+    try {
+      const r = await fetch(`/api/polity/faiths?year=${from}`);
+      const res = (await r.json()) as FaithsResponse;
+      if (this.current?.from !== from || this.backdrop !== 'religion') return;
+      const changed = this.faithsFrom !== from || JSON.stringify(res.faiths) !== JSON.stringify(this.faiths);
+      this.faiths = res.faiths;
+      this.faithsFrom = from;
+      if (changed) this.show();
+      // The server looks them up between other chores: keep asking, less and less often.
+      if (res.pending > 0 && attempt < 40) {
+        this.faithsTimer = window.setTimeout(() => void this.loadFaiths(from, attempt + 1), Math.min(20_000, 4_000 + attempt * 1_000));
+      }
+    } catch {
+      /* realms stay grey */
+    }
+  }
+
   /** Shows or hides the coats of arms in watermark. */
   setHeraldry(on: boolean): void {
     if (on === this.heraldry) return;
     this.heraldry = on;
-    if (on && this.current && this.emblemsFrom !== this.current.from) void this.loadEmblems(this.current.from);
     this.showMarks();
   }
 
@@ -697,11 +837,46 @@ export class BordersLayer {
       this.emblemImages.set(file, null);
       void loadImage(commonsImage(file, 500)).then((img) => {
         this.emblemImages.set(file, img);
-        if (img) this.redrawSoon();
+        if (img && !this.tints.has(file)) {
+          this.tints.set(file, tintOf(img));
+          this.saveTintsSoon();
+          this.recolorSoon();
+        }
+        if (img && this.heraldry) this.redrawSoon();
         else window.setTimeout(() => this.emblemImages.delete(file), 60_000);
       });
     }
     return this.emblemImages.get(file) ?? null;
+  }
+
+  /**
+   * Dominant color of a realm's emblem at the period shown, if known. An
+   * emblem not measured yet is loaded (the map is recolored once it is).
+   */
+  private tintOf(qid: string | null): string | null {
+    const e = qid ? this.emblems[qid] : undefined;
+    const file = e ? (e.coa ?? e.flag) : null;
+    if (!file) return null;
+    if (this.tints.has(file)) return this.tints.get(file) ?? null;
+    // Periods chaining (play): no new images now, the connections go to the borders.
+    if (this.loadingPeriod) this.namesDirty = true;
+    else this.emblemImage(qid);
+    return null;
+  }
+
+  /** Colors arrive one emblem at a time: the map (and the armies) recolored once for a batch. */
+  private recolorSoon(): void {
+    clearTimeout(this.tintTimer);
+    this.tintTimer = window.setTimeout(() => {
+      if (this.backdrop !== 'political') return;
+      this.show();
+      this.onPeriod();
+    }, 900);
+  }
+
+  private saveTintsSoon(): void {
+    clearTimeout(this.tintsSaveTimer);
+    this.tintsSaveTimer = window.setTimeout(() => saveTints(this.tints), 3_000);
   }
 
   /** Images arrive one by one: one redraw for a batch of them. */
@@ -751,31 +926,65 @@ export class BordersLayer {
     try {
       const r = await fetch(`/api/polity/emblems?year=${from}`);
       const res = (await r.json()) as EmblemsResponse;
-      if (this.current?.from !== from || !this.heraldry) return;
+      if (this.current?.from !== from) return;
       const changed = JSON.stringify(res.emblems) !== JSON.stringify(this.emblems);
       this.emblems = res.emblems;
       this.emblemsFrom = from;
-      if (changed) this.showMarks();
-      if (res.pending > 0 && attempt < 12) {
-        this.emblemsTimer = window.setTimeout(() => void this.loadEmblems(from, attempt + 1), 6_000);
+      if (changed) {
+        this.showMarks();
+        this.recolorSoon();
       }
+      // Still being looked up: asked again, less and less often. Found: asked again from time to
+      // time anyway, the server completes the emblems in the background.
+      const wait = res.pending > 0 && attempt < 40 ? Math.min(20_000, 5_000 + attempt * 1_000) : 180_000;
+      this.emblemsTimer = window.setTimeout(() => {
+        if (document.visibilityState === 'visible') void this.loadEmblems(from, res.pending > 0 ? attempt + 1 : 0);
+        else this.emblemsTimer = window.setTimeout(() => void this.loadEmblems(from), 180_000);
+      }, wait);
     } catch {
       /* no watermarks */
     }
   }
 
+  /**
+   * The new borders appear over the last ones fully painted, which stay
+   * until the new tiles are drawn: never a blank map between two periods.
+   * When periods follow each other quickly (the timeline plays), the fade is
+   * quicker, and a replacement not painted yet gives way to the newer one.
+   */
   private crossFade(from: ImageryLayer | null, to: ImageryLayer): void {
-    const start = performance.now();
+    const token = ++this.fadeToken;
+    // The painted base stays; an unfinished replacement (never fully drawn) goes.
+    if (!this.base) this.base = from;
+    else if (from && from !== this.base) drop(this.viewer, from);
+    const base = this.base;
+    const now = performance.now();
+    const ms = now - this.lastFade < 1200 ? QUICK_FADE_MS : FADE_MS;
+    this.lastFade = now;
     const step = () => {
-      const t = Math.min(1, (performance.now() - start) / FADE_MS);
+      if (token !== this.fadeToken) return; // a newer fade took over
+      const elapsed = performance.now() - now;
+      const t = Math.min(1, elapsed / ms);
       this.fading = t < 1;
       to.alpha = this.alpha * t;
-      if (from) from.alpha = this.alpha * (1 - t);
+      if (base) base.alpha = this.alpha;
       this.viewer.scene.requestRender();
-      if (t < 1) requestAnimationFrame(step);
-      else if (from) drop(this.viewer, from);
+      // The old borders stay until the new tiles are painted (or a while has passed).
+      const painted = queue.length === 0 && this.viewer.scene.globe.tilesLoaded;
+      if (t < 1 || (!painted && elapsed < SETTLE_MAX_MS)) requestAnimationFrame(step);
+      else {
+        if (base) drop(this.viewer, base);
+        this.base = to;
+        for (const w of this.settleWaiters.splice(0)) w();
+      }
     };
     requestAnimationFrame(step);
+  }
+
+  /** Resolves once the borders shown are painted (at most SETTLE_MAX_MS after the last were asked). */
+  private settled(): Promise<void> {
+    if (this.base === this.layer) return Promise.resolve();
+    return new Promise((r) => this.settleWaiters.push(r));
   }
 
   /** Borders matter at empire scale; fade them out as the camera gets close to the ground. */

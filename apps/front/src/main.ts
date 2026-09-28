@@ -8,8 +8,8 @@ import './style.css';
 
 import { ScreenSpaceEventType, Cartesian2, BoundingSphere, Cartesian3, Cartographic, Math as CesiumMath, type Entity } from 'cesium';
 import {
-  cellsForRect, formatPoiDate, rectAreaKm2, resolutionForArea, CATEGORY_LABELS,
-  type Category, type Door, type SubdivisionsResponse, type ViewMessage,
+  cellsForRect, formatPoiDate, isGlobalSearchRes, MAX_YEAR, MIN_YEAR, rectAreaKm2, resolutionForArea, ringAround, CATEGORY_LABELS,
+  ALL_THEMES, type Backdrop, type Category, type Door, type SubdivisionsResponse, type ThemeFilter, type ViewMessage,
 } from '@way/shared';
 import { BordersLayer, realmKey, type BorderShape } from './borders.ts';
 import { Card } from './card.ts';
@@ -26,12 +26,17 @@ import { Timeline, type TimeWindow } from './timeline.ts';
 
 // ---------- persisted per-viewer preferences ----------
 interface Saved {
-  camera?: CameraState; window?: TimeWindow; hidden?: Category[]; basemap?: Basemap; scale?: Scale; heraldry?: Heraldry; geography?: Geography;
+  camera?: CameraState; window?: TimeWindow; basemap?: Basemap; scale?: Scale; heraldry?: Heraldry; geography?: Geography;
+  themes?: ThemeFilter; backdrop?: Backdrop; detailed?: boolean;
+  /** Hidden categories, before themes (read once, then replaced by `themes`). */
+  hidden?: Category[];
 }
-const STORAGE_KEY = 'way:state';
+const STORAGE_KEY = 'orbis:state';
+/** The app was called Way: its preferences are taken over. */
+const OLD_STORAGE_KEY = 'way:state';
 function load(): Saved {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Saved;
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(OLD_STORAGE_KEY) ?? '{}') as Saved;
   } catch {
     return {};
   }
@@ -61,21 +66,40 @@ const people = new PeopleLayer(viewer, document.getElementById('people')!);
 // ---------- timeline & borders ----------
 const timelineEl = document.getElementById('timeline')!;
 let bordersTimer: number | undefined;
+let bordersAt = 0;
+/**
+ * Borders follow the timeline live, while it plays or is dragged: at most
+ * one period change every BORDERS_EVERY_MS, and always the last one.
+ */
+const BORDERS_EVERY_MS = 200;
+function followBorders(): void {
+  clearTimeout(bordersTimer);
+  const apply = () => {
+    bordersAt = performance.now();
+    const { tStart, tEnd } = timeline.window;
+    void borders.setYear(Math.round((tStart + tEnd) / 2));
+  };
+  const wait = BORDERS_EVERY_MS - (performance.now() - bordersAt);
+  if (wait <= 0) apply();
+  else bordersTimer = window.setTimeout(apply, wait);
+}
 const timeline = new Timeline(timelineEl, saved.window ?? { tStart: -500, tEnd: -300 }, (w, moment) => {
   pois.setWindow(w.tStart, w.tEnd);
   people.setWindow(moment.tStart, moment.tEnd);
-  filters.setCounts(pois.countsInWindow());
-  clearTimeout(bordersTimer);
-  bordersTimer = window.setTimeout(() => borders.setYear(Math.round((w.tStart + w.tEnd) / 2)), 250);
-  // Regions are those of a year: moving in time folds them back into the territory.
-  if (divisions.length) backToTerritory();
+  filters.setCounts(pois.inWindow());
+  followBorders();
   save({ window: moment });
+  stopIdle();
   scheduleSearch();
 });
 const borders = new BordersLayer(viewer, (t) => timeline.setBordersNote(t));
 // Armies wear the colors of their country on the map.
 people.colorOf = (qid, name) => borders.colorOf(qid, name);
-borders.onPeriod = () => people.refresh();
+// A new period: armies take their colors again, the selected territory and its regions follow.
+borders.onPeriod = () => {
+  people.refresh();
+  followTerritory();
+};
 pois.setWindow(timeline.window.tStart, timeline.window.tEnd);
 people.setWindow(timeline.moment.tStart, timeline.moment.tEnd);
 
@@ -110,12 +134,22 @@ function openFigure(f: Picked): void {
 }
 
 // ---------- filters ----------
+const savedThemes: ThemeFilter = saved.themes
+  ?? (saved.hidden
+    ? { hiddenThemes: [], hiddenCats: saved.hidden.filter((c) => c !== 'person'), people: !saved.hidden.includes('person') }
+    : ALL_THEMES);
 const filters = new Filters(
   document.getElementById('filters')!,
-  saved.hidden ?? [],
-  (hidden) => {
-    pois.setHidden(hidden);
-    save({ hidden: [...hidden] });
+  savedThemes,
+  (themes) => {
+    pois.setFilter(filters.shown);
+    filters.setCounts(pois.inWindow());
+    save({ themes, hidden: undefined });
+  },
+  saved.backdrop ?? 'political',
+  (backdrop) => {
+    save({ backdrop });
+    borders.setBackdrop(backdrop);
   },
   saved.scale ?? 'selection',
   (scale) => {
@@ -133,11 +167,14 @@ const filters = new Filters(
     save({ geography: g });
     geography.set(g);
   },
+  saved.detailed ?? false,
+  (detailed) => save({ detailed }),
 );
 geography.set(filters.geography);
+borders.setBackdrop(filters.backdrop);
 borders.setHeraldry(filters.heraldry.territories);
 people.setHeraldry(filters.heraldry.armies);
-pois.setHidden(filters.hiddenSet);
+pois.setFilter(filters.shown);
 
 /** Semantic zoom: the camera height and the impact scale set the importance floor. */
 function applyZoom(): void {
@@ -192,10 +229,13 @@ function travel(door: Door): void {
 // ---------- live search over WebSocket ----------
 let online = false;
 let pending = 0;
+let ai = 0;
+/** Discreet: nothing when idle, a dot while points arrive, an hourglass while the AI searches. */
 function renderStatus(): void {
   if (!online) timeline.setStatus('offline', 'Hors ligne, reconnexion…');
-  else if (pending > 0) timeline.setStatus('busy', `Exploration de ${pending} zone${pending > 1 ? 's' : ''}…`);
-  else timeline.setStatus('idle', 'Zone explorée');
+  else if (ai > 0) timeline.setStatus('ai', '', 'L’IA cherche d’autres faits sur cette zone');
+  else if (pending > 0) timeline.setStatus('busy', '', 'Recherche de points sur cette zone');
+  else timeline.setStatus('idle', '', '');
 }
 const conn = new Connection({
   onState: (s) => {
@@ -204,10 +244,11 @@ const conn = new Connection({
   },
   onMessage: (msg) => {
     if (msg.type === 'pois') {
-      pois.upsert(msg.pois);
-      filters.setCounts(pois.countsInWindow());
+      pois.upsert(msg.pois, { quiet: msg.background });
+      filters.setCounts(pois.inWindow());
     } else if (msg.type === 'status') {
       pending = msg.pending;
+      ai = msg.ai ?? 0;
       renderStatus();
     }
   },
@@ -216,8 +257,19 @@ const conn = new Connection({
 // Searches start once the camera and timeline have been still for a moment (brief §5.2).
 let searchTimer: number | undefined;
 function scheduleSearch(): void {
+  // Playing: the timeline never stops, so points are asked for along the way (once a second).
+  if (timeline.playing) {
+    if (searchTimer === undefined) searchTimer = window.setTimeout(() => {
+      searchTimer = undefined;
+      sendView();
+    }, 1_000);
+    return;
+  }
   clearTimeout(searchTimer);
-  searchTimer = window.setTimeout(sendView, 450);
+  searchTimer = window.setTimeout(() => {
+    searchTimer = undefined;
+    sendView();
+  }, 450);
 }
 function sendView(): void {
   const rect = viewRect(viewer);
@@ -226,7 +278,61 @@ function sendView(): void {
   const { tStart, tEnd } = timeline.window;
   const view: ViewMessage = { type: 'view', res, cells, tStart, tEnd, filter: 'all' };
   conn.sendView(view);
+  startIdle(view);
 }
+
+// ---------- while the viewer stays still: loading around, enriching here ----------
+// Step 0 asks for the view to be enriched (web + AI, in the background);
+// then rings of places around it (close views), or periods before and
+// after it (far views), farther at each step. Points found are kept in
+// memory, ready when the viewer goes there. Any move starts over.
+const IDLE_START_MS = 2_500;
+const IDLE_STEP_MS = 4_000;
+const MAX_RING = 8;
+/** Far views search the whole world per period: fewer steps, they are costly. */
+const MAX_RING_GLOBAL = 4;
+let idleTimer: number | undefined;
+let idleView: ViewMessage | null = null;
+let ring = 0;
+function startIdle(view: ViewMessage): void {
+  clearTimeout(idleTimer);
+  idleView = view;
+  ring = 0;
+  idleTimer = window.setTimeout(idleStep, IDLE_START_MS);
+}
+function stopIdle(): void {
+  clearTimeout(idleTimer);
+  idleView = null;
+}
+function idleStep(): void {
+  const v = idleView;
+  if (!v) return;
+  // Hidden tab or offline: wait, without losing the ring reached.
+  if (document.hidden || !online) {
+    idleTimer = window.setTimeout(idleStep, IDLE_STEP_MS);
+    return;
+  }
+  let next: Omit<ViewMessage, 'type'> | null = { res: v.res, cells: v.cells, tStart: v.tStart, tEnd: v.tEnd, filter: v.filter };
+  if (ring > 0 && isGlobalSearchRes(v.res)) {
+    // Far view: the periods on each side, one window further at each step.
+    const width = v.tEnd - v.tStart + 1;
+    const k = Math.ceil(ring / 2);
+    const tStart = ring % 2 ? v.tEnd + 1 + (k - 1) * width : v.tStart - k * width;
+    const t0 = Math.max(MIN_YEAR, tStart);
+    const t1 = Math.min(MAX_YEAR, tStart + width - 1);
+    next = t0 <= t1 ? { ...next, tStart: t0, tEnd: t1 } : null;
+  } else if (ring > 0) {
+    const cells = ringAround(v.cells, ring).slice(0, 64);
+    next = cells.length ? { ...next, cells } : null;
+  }
+  if (next && !conn.sendPrefetch({ type: 'prefetch', ring, ...next })) {
+    idleTimer = window.setTimeout(idleStep, IDLE_STEP_MS);
+    return;
+  }
+  ring++;
+  if (ring <= (isGlobalSearchRes(v.res) ? MAX_RING_GLOBAL : MAX_RING)) idleTimer = window.setTimeout(idleStep, IDLE_STEP_MS);
+}
+viewer.camera.moveStart.addEventListener(stopIdle);
 viewer.camera.changed.addEventListener(() => {
   borders.setCameraHeight(viewer.camera.positionCartographic.height);
   applyZoom();
@@ -372,6 +478,36 @@ function clearTerritory(): void {
   divisions = [];
   borders.showRegions(null);
   borders.highlight(null);
+}
+
+/**
+ * The period shown changed (the timeline plays, or was moved): the selected
+ * territory keeps its outline with its new borders, its vassals and
+ * provinces are drawn again as they are now. Estimated regions (from the
+ * seats of a year) fold back; a realm that no longer exists lets go.
+ */
+function followTerritory(): void {
+  const top = path[0];
+  if (!top) return;
+  const realm = borders.realmByKey(top.key);
+  if (!realm) {
+    if (divisions.length) backToTerritory();
+    return;
+  }
+  top.featureId = realm.id;
+  top.area = borders.territoryArea(top.key) ?? top.area;
+  if (!divisions.length) return;
+  const real = divisions[0]!.every((r) => !r.estimated && r.featureId != null);
+  const members = real ? memberRegions(realm.id) : [];
+  if (members.length < 2) {
+    backToTerritory();
+    return;
+  }
+  dividing++;
+  divisions = [members];
+  path = path.slice(0, 1);
+  borders.showRegions(members, top.key);
+  borders.highlight(top.key);
 }
 
 /** Folds the regions back: only the territory stays outlined. */

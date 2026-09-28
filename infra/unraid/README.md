@@ -1,4 +1,4 @@
-# Way sur Unraid
+# Orbis sur Unraid
 
 Un seul conteneur.
 
@@ -18,11 +18,11 @@ Un seul conteneur.
 
 ### Recherche approfondie par IA (facultatif)
 
-Sans clé, Way utilise Wikidata et Wikipédia. Avec au moins une clé d'IA gratuite, les zones pauvres
+Sans clé, Orbis utilise Wikidata et Wikipédia. Avec au moins une clé d'IA gratuite, les zones pauvres
 sont complétées par une recherche web analysée par IA (fiches marquées « rédigée par IA », sources
 toujours affichées).
 
-Le plus simple : ouvrir Way, roue dentée ⚙ en haut à gauche → **Réglages**. Compte `admin`, mot de
+Le plus simple : ouvrir Orbis, roue dentée ⚙ en haut à gauche → **Réglages**. Compte `admin`, mot de
 passe `way` (à changer tout de suite dans l'onglet **Compte**). Coller une clé, **Tester**, c'est actif
 sans redémarrer. Mot de passe oublié : supprimer `/mnt/user/appdata/way/auth.json` et redémarrer le
 conteneur (retour à `admin` / `way`).

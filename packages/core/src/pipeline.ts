@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import {
   bucketEnd, cellCenter, cellsForPoint, GLOBAL_SPACE, makeKey, parseKey, Poi, cellRadiusKm,
-  type Category, type DatePrecisionName,
+  roleTags, type Category, type DatePrecisionName,
 } from '@way/shared';
 import { wikidata, wikipedia, type DatedRow } from '@way/providers';
 import { cellToParent, getResolution } from 'h3-js';
-import { categoryFor, classifyClasses } from './categories.ts';
+import { categoryFor, classifyClasses, personRoles } from './categories.ts';
 import type { Config } from './config.ts';
 import { runDeepJob, type DeepJob } from './level2.ts';
 import type { ProviderRouter } from './router.ts';
@@ -149,6 +149,14 @@ export async function buildPois(rows: DatedRow[], store: Store): Promise<Poi[]> 
     const parsed = Poi.safeParse(candidate);
     if (parsed.success) pois.push(parsed.data);
     else console.warn(`[pipeline] invalid POI ${r.qid}:`, parsed.error.issues[0]?.message);
+  }
+  // People cross themes: a king belongs to the state, a saint to religion.
+  const people = pois.filter((p) => p.category === 'person' && p.wikidata_qid);
+  try {
+    const roles = await personRoles(people.map((p) => p.wikidata_qid!));
+    for (const p of people) p.tags = roleTags(roles.get(p.wikidata_qid!) ?? []);
+  } catch (e) {
+    console.warn('[pipeline] roles lookup failed:', (e as Error).message);
   }
   return pois;
 }

@@ -244,7 +244,7 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
   humains, commandants en qualificatif P4791), qui marche de bataille en bataille (~3 000 km/an).
   Affichées pour une fenêtre de 120 ans au plus.
 - **Sons importés** : Réglages → Interface, un fichier audio par type (mp3, ogg, wav, m4a, flac ; 3 Mo),
-  gardé dans `/data/sounds`, joué à la place du son synthétisé. Way n'embarque aucun son de jeu
+  gardé dans `/data/sounds`, joué à la place du son synthétisé. Orbis n'embarque aucun son de jeu
   commercial (droits d'auteur) ; chacun peut importer les fichiers qu'il possède.
 
 ## Blasons, lecture au jour, cache configurable
@@ -310,10 +310,52 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
   glaces. Cultures et villes laissées de côté (d'aujourd'hui). 2001, la plus ancienne année, pour le moins de
   défrichements récents. Tuiles de NASA passées par le serveur et gardées avec les images (`/api/geo/landcover`).
 
+## Thèmes, fonds, lentilles et recherche continue
+
+- **Nom** : l'application s'appelle **Orbis** (UI, titres, User-Agent). Paquets `@way/*`, image Docker,
+  dossier de données et variable `WAY_CONTACT` gardent leur nom, pour ne pas casser les installations.
+- **Thèmes ≠ catégories** : une catégorie dit ce qu'est un point (un château), un thème de quoi il parle
+  (la guerre). Onze thèmes (`packages/shared/src/themes.ts`) regroupent les catégories ; deux catégories
+  nouvelles : fortification (sortie de « monument ») et expédition. Cache des classes versionné (`v2:`) pour
+  reclasser.
+- **Personnages transversaux** : leurs thèmes viennent de leurs métiers (P106) et fonctions (P39), remontés
+  par P279* vers des racines (monarque → pouvoir, clerc → religion…), gardés dans `tags` (`role:<thème>`).
+  Un personnage s'affiche si l'un de ses rôles est visible (ou s'il n'en a aucun connu).
+- **Fond des territoires**, exclusif : politique, religieux, aucun. Religion d'un État : P3075 (officielle,
+  poids ×2) et P140, rang préféré ×3, datées par qualificatifs ; familles par P279*/P361/P140. Les cultes
+  « antiques et traditionnels » ne s'additionnent pas (ce sont des religions distinctes).
+- **Lentilles** : filtres tout prêts (Stratège, Pèlerin, Marchand, Savant, Voyageur, Bâtisseur).
+- **Recherche continue** : tant que la vue ne bouge pas, le front demande toutes les 4 s un anneau de
+  cellules H3 de plus autour d'elle (8 au plus ; en vue lointaine, les périodes voisines, 4 au plus). Les
+  points trouvés sont gardés en mémoire et apparaissent sans animation. L'étape 0 enrichit la vue par le
+  niveau 2 (web + IA) même si elle n'est pas pauvre, 2 zones à la fois, puis de nouveau après 30 jours.
+- **Statut discret** : plus de « Zone explorée » ; un point qui pulse pendant la recherche, un sablier
+  quand l'IA cherche (clés `partial`).
+
+## Couleurs des blasons, affinage en fond, frontières en lecture
+
+- **Couleur d'un royaume** : la couleur dominante de son blason (sinon de son drapeau), mesurée dans le
+  navigateur sur une copie 40×40 (plus grande surface d'une même teinte ; argent, sable, blanc et gris écartés,
+  car ce sont le champ et les contours de la plupart des armes). Teinte fixe par royaume en l'absence de blason.
+  Même couleur pour son territoire, ses armées et ses vassaux blasonnés. Couleurs gardées par le navigateur
+  (`orbis:tints:v2`).
+- **Blasons manquants** : nouvelles sources (image de l'élément « blason » P237 ou « drapeau » P163, sceau
+  P158) ; un royaume trouvé sans blason est recherché à nouveau après 3 jours.
+- **Affinage en arrière-plan** : toutes les 90 s, si personne ne clique et que peu de travail attend, le serveur
+  passe en revue *tous* les royaumes de Cliopatria (les plus durables d'abord), 50 noms, 50 blasons et
+  50 religions à la fois, avec les pauses déjà en place entre deux requêtes Wikidata. L'avancement est
+  affiché dans la page Réglages.
+- **Frontières pendant la lecture** : les périodes s'enchaînent sans attendre l'arrêt de la frise ; la
+  suivante attend que la précédente soit peinte (ou 1,5 s), donc la carte suit aussi vite que la machine
+  dessine, sans jamais passer par un écran vide. Le territoire sélectionné garde son contour, et ses vassaux
+  sont redessinés à chaque période. Pendant la lecture, les armées ne prennent que 2 connexions et les
+  nouvelles images de blasons attendent l'arrêt : les frontières passent devant.
+
 ## Hors V1 (prévu)
 
 Histogramme de densité, carnet de voyage, brouillard de connaissance, fils rouges,
-préchargement nocturne.
+préchargement nocturne, couche des langues, fronts de diffusion (épidémies, religions, techniques),
+rivages anciens.
 
 ## Limites connues
 
@@ -328,6 +370,10 @@ préchargement nocturne.
 - Lecture au jour : points et frontières restent à l'année ; un événement daté à l'année seulement tombe le 1er janvier.
 - Régions : tracé approximatif ; couverture Wikidata inégale (bonne pour l'Empire ottoman, le Saint-Empire, la France ; faible pour les niveaux fins : aucun comté rattaché au duché de Bourgogne).
 - Sons : vérifiés sans erreur, pas à l'oreille.
+- Rôles des personnages et nouvelles catégories : seulement pour les points trouvés après cette version ;
+  les anciens gardent leur catégorie (un château reste « monument ») jusqu'à éviction du cache.
+- Fond religieux : seulement pour les années couvertes par Cliopatria, et aussi juste que Wikidata (beaucoup
+  d'États sans religion renseignée, en gris).
 - Wikimedia limite le débit : premier clic sur un territoire parfois lent (jusqu'à une minute) si le serveur vient de beaucoup interroger Wikidata ; ensuite en cache.
 - Le mode multi-services (Redis/BullMQ) n'a pas été exécuté ; le mode conteneur unique est testé.
 - Niveau 2 : testé avec des fournisseurs simulés (tests) et les adaptateurs sans clé en réel ; pas encore

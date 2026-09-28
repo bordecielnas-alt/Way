@@ -1,4 +1,4 @@
-# Way — one container. Usage: docker compose up -d, then open http://localhost:8080
+# Orbis — one container. Usage: docker compose up -d, then open http://localhost:8080
 services:
   way:
     image: ghcr.io/bordecielnas-alt/way:latest

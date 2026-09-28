@@ -92,7 +92,7 @@ function polygons(g: Feature['geometry']): Ring[][] {
 }
 
 console.log('downloading Cliopatria…');
-const res = await fetch(URL_ZIP, { headers: { 'User-Agent': 'Way/0.1 (personal history globe)' } });
+const res = await fetch(URL_ZIP, { headers: { 'User-Agent': 'Orbis/0.1 (personal history globe)' } });
 if (!res.ok) throw new Error(`download failed: ${res.status}`);
 const geo = JSON.parse(unzipGeojson(Buffer.from(await res.arrayBuffer()))) as { features: Feature[] };
 

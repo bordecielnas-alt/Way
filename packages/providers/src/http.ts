@@ -23,7 +23,7 @@ const POLICIES: Record<string, HostPolicy> = {
   'gibs.earthdata.nasa.gov': { concurrency: 4, minIntervalMs: 20 },
 };
 
-let userAgent = 'Way/0.1 (https://github.com/bordecielnas-alt/Way; personal history globe)';
+let userAgent = 'Orbis/0.1 (https://github.com/bordecielnas-alt/Way; personal history globe)';
 
 export function setUserAgent(ua: string): void {
   userAgent = ua;
