@@ -16,10 +16,12 @@ const settings = createSettings(cfg);
 const router = createRouter(cfg, settings);
 const auth = new Auth(join(cfg.dataDir ?? devDir, 'auth.json'));
 const bus: JobBus = cfg.redisUrl ? new RedisBus(cfg.redisUrl) : new InlineBus(store, cfg, router);
-const views = new ViewService(store, bus, cfg);
+const views = new ViewService(store, bus, cfg, () => router.hasProvider('extract'));
 const doors = new DoorService(store, () => normalizeUi(settings.get().ui).meanwhileMaxSpan);
 const { clio, borders } = createBorders(cfg);
 const polities = createPolities(cfg, clio, settings);
+// Names, coats of arms and faiths of every realm, completed little by little in the background.
+polities.startRefining();
 const people = createPeople(cfg, settings);
 const media = createMedia(cfg, settings);
 const soundFiles = createSoundFiles(cfg);
@@ -241,6 +243,13 @@ app.get<{ Querystring: { year?: string } }>('/api/polity/emblems', async (req, r
   return polities.emblems(year);
 });
 
+// Religions of the realms shown at a year (the religious backdrop).
+app.get<{ Querystring: { year?: string } }>('/api/polity/faiths', async (req, reply) => {
+  const year = Number(req.query.year);
+  if (!Number.isFinite(year)) return reply.code(400).send({ error: 'année manquante' });
+  return polities.faiths(year);
+});
+
 // Coats of arms and flags of given items (the sides of the armies shown).
 app.get('/api/emblems', async (req, reply) => {
   const q = z.object({
@@ -382,6 +391,7 @@ app.get('/api/admin/providers', async () => ({
   queue: await bus.stats(),
   keys: await store.keyStats(),
   pois: await store.poiCount(),
+  realms: polities.refineStats(),
   cache: {
     bytes: await store.cacheBytes(),
     maxBytes: cacheBudget(cfg, settings),
@@ -412,8 +422,13 @@ app.get('/ws', { websocket: true }, (socket) => {
       return; // ignore malformed messages
     }
     try {
-      const { type: _t, ...view } = msg;
-      await session.setView(view as View);
+      if (msg.type === 'prefetch') {
+        const { type: _t, ring, ...view } = msg;
+        await session.prefetch(view as View, ring);
+      } else {
+        const { type: _t, ...view } = msg;
+        await session.setView(view as View);
+      }
     } catch (e) {
       app.log.error(e, 'view resolution failed');
     }
@@ -451,4 +466,4 @@ setTimeout(checkCache, 60_000).unref();
 setInterval(checkCache, 3_600_000).unref();
 
 if (!clio.available) app.log.warn('yearly borders missing: run npm run borders:fetch');
-app.log.info(`Way API ready (store=${mode.store}, queue=${mode.queue})`);
+app.log.info(`Orbis API ready (store=${mode.store}, queue=${mode.queue})`);

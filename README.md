@@ -1,4 +1,4 @@
-# Way — globe historique explorable
+# Orbis — globe historique explorable
 
 Un globe où l'on voyage dans 7 000 ans d'histoire. Voir [docs/BRIEF.md](docs/BRIEF.md) pour la vision
 et [docs/DECISIONS.md](docs/DECISIONS.md) pour les choix techniques.

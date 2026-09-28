@@ -1,4 +1,4 @@
-import type { ServerMessage, ViewMessage } from '@way/shared';
+import type { PrefetchMessage, ServerMessage, ViewMessage } from '@way/shared';
 
 export interface ConnectionHandlers {
   onMessage(msg: ServerMessage): void;
@@ -18,6 +18,13 @@ export class Connection {
   sendView(view: ViewMessage): void {
     this.lastView = view;
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(view));
+  }
+
+  /** Background loads are not replayed: the idle loop sends them again. Returns whether it was sent. */
+  sendPrefetch(msg: PrefetchMessage): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    this.ws.send(JSON.stringify(msg));
+    return true;
   }
 
   private connect(): void {

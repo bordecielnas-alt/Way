@@ -3,8 +3,8 @@ import { dirname } from 'node:path';
 import {
   background, coolingUntil, interactive, polity, wikipedia, type PolityCandidate, type PolityDetails, type SubdivisionRow,
 } from '@way/providers';
-import type { EmblemsResponse, PolityInfo, PolityLabels, PolityRulerInfo, SubdivisionItem, SubdivisionsResponse } from '@way/shared';
-import type { DatedFile, ItemEmblems } from '@way/providers';
+import type { EmblemsResponse, Faith, FaithsResponse, PolityInfo, PolityLabels, PolityRulerInfo, SubdivisionItem, SubdivisionsResponse } from '@way/shared';
+import type { DatedFaith, DatedFile, ItemEmblems } from '@way/providers';
 import { listSnapshots, snapshotFor, SNAPSHOTS_BEFORE } from './borders.ts';
 import type { Cliopatria } from './cliopatria.ts';
 
@@ -36,6 +36,12 @@ const DEFAULT_REFRESH_MS = 180 * 86_400_000;
 const MISS_RETRY_MS = 30 * 86_400_000;
 /** Realms whose card is prepared in the background when a period is shown (the largest ones). */
 const WARM_CARDS = 10;
+/** What was looked up and not found (no emblem, no French name, no faith) is asked again after this. */
+const MISSING_RETRY_MS = 3 * 86_400_000;
+/** The refining sweep wakes up this often, and does something only when nothing else waits. */
+const REFINE_EVERY_MS = 90_000;
+/** Items handed to each queue per sweep: small, so a click never waits long behind it. */
+const REFINE_BATCH = 50;
 /** Pause between background lookups: map names are a nicety, Wikimedia's patience is not. */
 const BACKGROUND_GAP_MS = 1500;
 const HOSTS = ['www.wikidata.org', 'query.wikidata.org', 'en.wikipedia.org', 'fr.wikipedia.org'];
@@ -50,7 +56,8 @@ interface CachedDetails extends PolityDetails {
 }
 interface CachedSubdivisions { at: number; rows: SubdivisionRow[] }
 interface CachedLabel { fr: string | null; en: string | null; start?: number | null; end?: number | null; at: number }
-interface CachedEmblems extends ItemEmblems { at: number }
+interface CachedEmblems extends ItemEmblems { at: number; v?: number }
+interface CachedFaiths { list: DatedFaith[]; at: number; v?: number }
 /** Slack on an item's dates: borders and Wikidata rarely agree to the year. */
 const ERA_SLACK = 50;
 /** Whether an item's lifetime covers a year (undated items are trusted). */
@@ -65,6 +72,8 @@ interface CacheFile {
   labels: Record<string, CachedLabel>;
   /** Coats of arms and flags of those items. */
   emblems: Record<string, CachedEmblems>;
+  /** Religions of those items (the religious backdrop). */
+  faiths: Record<string, CachedFaiths>;
 }
 
 /** Invented or reconstructed emblems: not shown as the real thing. */
@@ -254,12 +263,35 @@ export function rulersAt(rulers: PolityDetails['rulers'], year: number): PolityR
   return [...(before ? [out(before, 'before')] : []), ...(after ? [out(after, 'after')] : [])];
 }
 
+/**
+ * The faith in force at a year: among statements dated around it (else the
+ * undated ones), the known family with the most weight (preferred rank,
+ * official religion, number of statements); "other" only when nothing else.
+ */
+export function faithAt(list: DatedFaith[], year: number): Faith | null {
+  const fits = (f: DatedFaith) => (f.start === null || f.start <= year) && (f.end === null || f.end >= year);
+  const dated = list.filter((f) => (f.start !== null || f.end !== null) && fits(f));
+  const pool = dated.length ? dated : list.filter((f) => f.start === null && f.end === null);
+  if (!pool.length) return null;
+  const score = new Map<string, number>();
+  for (const f of pool) {
+    if (f.faith === 'other') continue;
+    const w = f.weight ?? 1;
+    // "Ancient" gathers distinct cults (Greek, Babylonian, Egyptian…), not one faith: they do not add up.
+    score.set(f.faith, f.faith === 'ancient' ? Math.max(score.get(f.faith) ?? 0, w) : (score.get(f.faith) ?? 0) + w);
+  }
+  let best: string | null = null;
+  for (const [f, n] of score) if (best === null || n > score.get(best)!) best = f;
+  return (best ?? 'other') as Faith;
+}
+
 const KIND_WORD = /empire|royaume|république|sultanat|califat|khanat|émirat|cité|principauté|duché|confédération|dynastie|état/i;
 
 export class PolityService {
-  private cache: CacheFile = { resolutions: {}, details: {}, subdivisions: {}, labels: {}, emblems: {} };
+  private cache: CacheFile = { resolutions: {}, details: {}, subdivisions: {}, labels: {}, emblems: {}, faiths: {} };
   private labelQueue = new Set<string>();
   private emblemQueue = new Set<string>();
+  private faithQueue = new Set<string>();
   /** Background refreshes of stale entries, run after the map names. */
   private chores = new Map<string, () => Promise<unknown>>();
   private inflight = new Map<string, Promise<Resolution | null>>();
@@ -283,7 +315,7 @@ export class PolityService {
         const raw = JSON.parse(readFileSync(file, 'utf8')) as Partial<CacheFile>;
         this.cache = {
           resolutions: raw.resolutions ?? {}, details: raw.details ?? {}, subdivisions: raw.subdivisions ?? {}, labels: raw.labels ?? {},
-          emblems: raw.emblems ?? {},
+          emblems: raw.emblems ?? {}, faiths: raw.faiths ?? {},
         };
       } catch {
         /* corrupt cache: rebuilt on demand */
@@ -455,7 +487,7 @@ export class PolityService {
     for (const qid of new Set(qids)) {
       const hit = this.cache.emblems[qid];
       // Entries from before lifespans were kept are asked again.
-      if (!hit || !('end' in hit) || Date.now() - hit.at > this.refreshMs()) this.emblemQueue.add(qid);
+      if (this.emblemStale(hit)) this.emblemQueue.add(qid);
       if (!hit) continue;
       const life = { start: hit.start ?? null, end: hit.end ?? null };
       const coa = fileAt(hit.coa, year, life);
@@ -466,12 +498,116 @@ export class PolityService {
     return { emblems, pending: this.emblemQueue.size };
   }
 
+  /**
+   * Faith of each realm shown at a year (official religion, else the
+   * religion Wikidata gives it), for the religious backdrop. Unknown ones
+   * are looked up in the background.
+   */
+  faiths(year: number): FaithsResponse {
+    const period = year >= SNAPSHOTS_BEFORE ? this.clio?.period(year) : null;
+    if (!period) return { faiths: {}, pending: 0 };
+    const faiths: FaithsResponse['faiths'] = {};
+    for (const qid of new Set(period.features.filter((f) => f.qid && this.itemFits(f, period.from)).map((f) => f.qid!))) {
+      const hit = this.cache.faiths[qid];
+      if (!hit || hit.v !== polity.FAITHS_VERSION || Date.now() - hit.at > this.refreshMs()) this.faithQueue.add(qid);
+      const f = hit ? faithAt(hit.list, period.from) : null;
+      if (f) faiths[qid] = f;
+    }
+    const unnamed = period.features.some((f) => f.qid && !this.cache.labels[f.qid]);
+    if (this.faithQueue.size) this.chore('faiths', () => this.fetchFaiths());
+    return { faiths, pending: this.faithQueue.size + (unnamed ? 1 : 0) };
+  }
+
+  private async fetchFaiths(): Promise<void> {
+    const ids = [...this.faithQueue].slice(0, 200);
+    const got = await polity.itemFaiths(ids);
+    const at = Date.now();
+    for (const id of ids) {
+      this.cache.faiths[id] = { list: got.get(id) ?? [], at, v: polity.FAITHS_VERSION };
+      this.faithQueue.delete(id);
+    }
+    this.scheduleSave();
+    if (this.faithQueue.size) this.chore('faiths', () => this.fetchFaiths());
+  }
+
+  /** Unknown, too old, or found empty a while ago (new sources, or Wikidata filled in since). */
+  private emblemStale(hit: CachedEmblems | undefined): boolean {
+    if (!hit || !('end' in hit)) return true;
+    const age = Date.now() - hit.at;
+    if (!hit.coa.length && !hit.flag.length) return hit.v !== polity.EMBLEMS_VERSION || age > MISSING_RETRY_MS;
+    return age > this.refreshMs();
+  }
+
+  /**
+   * Refining sweep, in the background: goes over every realm of the yearly
+   * borders (not only the periods viewed) and hands small batches to the
+   * lookup queues: names first (emblems and faiths need them to check the
+   * item), then missing emblems and faiths, then what was found empty a
+   * while ago. It only runs when no lookup waits and nobody is clicking, so
+   * the map completes itself without the viewer feeling it.
+   */
+  startRefining(): void {
+    const timer = setInterval(() => this.refine(), REFINE_EVERY_MS);
+    timer.unref?.();
+  }
+
+  /** One sweep step; returns how many items were queued (0: nothing left, or busy). */
+  refine(): number {
+    // A few chores waiting is fine (they come and go while someone browses); a click or a name to match is not.
+    if (!this.clio || this.interactive > 0 || this.queue.length || this.chores.size > 2) return 0;
+    if (Math.max(...HOSTS.map(coolingUntil)) > Date.now()) return 0;
+    const all = this.clio.allQids();
+    const now = Date.now();
+    const pick = (stale: (q: string) => boolean) => {
+      const out: string[] = [];
+      for (const q of all) {
+        if (out.length >= REFINE_BATCH) break;
+        if (stale(q)) out.push(q);
+      }
+      return out;
+    };
+    const labels = pick((q) => {
+      const l = this.cache.labels[q];
+      return !l || l.start === undefined || (!l.fr && now - l.at > MISSING_RETRY_MS);
+    });
+    const emblems = pick((q) => !!this.cache.labels[q] && this.emblemStale(this.cache.emblems[q]));
+    const faiths = pick((q) => {
+      const f = this.cache.faiths[q];
+      if (!this.cache.labels[q]) return false;
+      return !f || f.v !== polity.FAITHS_VERSION || (!f.list.length && now - f.at > MISSING_RETRY_MS);
+    });
+    for (const q of labels) this.labelQueue.add(q);
+    for (const q of emblems) this.emblemQueue.add(q);
+    for (const q of faiths) this.faithQueue.add(q);
+    if (labels.length) this.chore('labels', () => this.fetchLabels());
+    if (emblems.length) this.chore('emblems', () => this.fetchEmblems());
+    if (faiths.length) this.chore('faiths', () => this.fetchFaiths());
+    const n = labels.length + emblems.length + faiths.length;
+    if (n) console.log(`[polity] refining: ${labels.length} names, ${emblems.length} emblems, ${faiths.length} faiths`);
+    return n;
+  }
+
+  /** How complete the background knowledge of the realms is (Réglages page). */
+  refineStats(): { realms: number; named: number; emblems: number; faiths: number } {
+    const all = this.clio?.allQids() ?? [];
+    let named = 0;
+    let emblems = 0;
+    let faiths = 0;
+    for (const q of all) {
+      if (this.cache.labels[q]?.fr) named++;
+      const e = this.cache.emblems[q];
+      if (e && (e.coa.length || e.flag.length)) emblems++;
+      if (this.cache.faiths[q]?.list.length) faiths++;
+    }
+    return { realms: all.length, named, emblems, faiths };
+  }
+
   private async fetchEmblems(): Promise<void> {
     const ids = [...this.emblemQueue].slice(0, 200);
     const got = await polity.itemEmblems(ids);
     const at = Date.now();
     for (const id of ids) {
-      this.cache.emblems[id] = { ...(got.get(id) ?? { coa: [], flag: [], start: null, end: null }), at };
+      this.cache.emblems[id] = { ...(got.get(id) ?? { coa: [], flag: [], start: null, end: null }), at, v: polity.EMBLEMS_VERSION };
       this.emblemQueue.delete(id);
     }
     this.scheduleSave();

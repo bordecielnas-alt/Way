@@ -8,3 +8,4 @@ export * from './doors.ts';
 export * from './polity.ts';
 export * from './borders.ts';
 export * from './people.ts';
+export * from './themes.ts';

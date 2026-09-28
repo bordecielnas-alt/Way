@@ -317,6 +317,9 @@ export function commonsFile(uri: string): string {
   return decodeURIComponent(uri.slice(uri.lastIndexOf('/') + 1)).replace(/_/g, ' ');
 }
 
+/** Bumped when emblem sources change: items found without any are looked up again. */
+export const EMBLEMS_VERSION = 2;
+
 /** Coats of arms (P94) and flags (P41) of items, deprecated ones left out, 50 per query. */
 export async function itemEmblems(qids: string[]): Promise<Map<string, ItemEmblems>> {
   const out = new Map<string, ItemEmblems>();
@@ -348,7 +351,40 @@ SELECT ?item ?kind ?file ?s ?e ?is ?ie WHERE {
       out.set(id, cur);
     }
   }
+  const bare = qids.filter((q) => !out.get(q)?.coa.length && !out.get(q)?.flag.length);
+  if (bare.length) await emblemFallbacks(bare, out);
   return out;
+}
+
+/**
+ * For items without an emblem of their own: the image of their "coat of
+ * arms" item (P237) or "flag" item (P163), else their seal (P158). Undated:
+ * they only show within the item's lifetime.
+ */
+async function emblemFallbacks(qids: string[], out: Map<string, ItemEmblems>): Promise<void> {
+  for (let i = 0; i < qids.length; i += 50) {
+    const q = `
+SELECT ?item ?kind ?file ?is ?ie WHERE {
+  VALUES ?item { ${qids.slice(i, i + 50).map((x) => `wd:${x}`).join(' ')} }
+  { ?item wdt:P237 ?x . ?x wdt:P18|wdt:P94 ?file . BIND("coa" AS ?kind) }
+  UNION { ?item wdt:P163 ?x . ?x wdt:P18|wdt:P41 ?file . BIND("flag" AS ?kind) }
+  UNION { ?item wdt:P158 ?file . BIND("coa" AS ?kind) }
+  OPTIONAL { ?item wdt:P571 ?is }
+  OPTIONAL { ?item wdt:P576 ?ie }
+}`;
+    for (const b of await sparql(q, 30_000)) {
+      const id = qidOf(b.item!.value);
+      const kind = b.kind?.value === 'coa' ? 'coa' : 'flag';
+      const cur = out.get(id) ?? { coa: [], flag: [], start: null, end: null };
+      const is = b.is?.value ? parseYear(b.is.value) : null;
+      const ie = b.ie?.value ? parseYear(b.ie.value) : null;
+      if (is !== null && (cur.start === null || is < cur.start)) cur.start = is;
+      if (ie !== null && (cur.end === null || ie > cur.end)) cur.end = ie;
+      const file = commonsFile(b.file!.value);
+      if (!cur[kind].some((x) => x.file === file)) cur[kind].push({ file, start: null, end: null });
+      out.set(id, cur);
+    }
+  }
 }
 
 export interface ItemLabel { fr: string | null; en: string | null; start: number | null; end: number | null }
@@ -380,6 +416,98 @@ SELECT ?item ?lf ?le ?s ?e WHERE {
         end: en !== null && (cur.end === null || en > cur.end) ? en : cur.end,
       });
     }
+  }
+  return out;
+}
+
+/** A realm's religion statement (P140 religion, P3075 official religion), with its years. */
+export interface DatedFaith {
+  faith: string;
+  start: number | null;
+  end: number | null;
+  /** How much the statement counts: preferred rank and official religion weigh more. */
+  weight: number;
+}
+
+/** Root religions, by family key: a statement matches the root it descends from. */
+const FAITH_ROOTS: [string, string[]][] = [
+  ['christianity', ['Q5043']],
+  ['islam', ['Q432']],
+  ['judaism', ['Q9268']],
+  ['zoroastrianism', ['Q9601']],
+  // The Vedic religion is counted with its heir.
+  ['hinduism', ['Q9089', 'Q194497']],
+  ['buddhism', ['Q748']],
+  ['jainism', ['Q9232']],
+  ['sikhism', ['Q9316']],
+  ['chinese', ['Q9581', 'Q9598', 'Q1074275', 'Q5694834']],
+  ['shinto', ['Q812767']],
+  // Polytheisms of antiquity and traditional religions (Greek, Roman, Etruscan, Scythian, Thracian…).
+  ['ancient', ['Q29536', 'Q9134', 'Q855270', 'Q337547', 'Q478186', 'Q12153518', 'Q4492323']],
+];
+
+/** Bumped when FAITH_ROOTS change: cached answers are then looked up again. */
+export const FAITHS_VERSION = 3;
+
+/** Religion item -> family, for the life of the process (a few hundred at most). */
+const faithFamilies = new Map<string, string>();
+
+/** Family of each religion item: itself or what it is part of / follows, up its subclasses. */
+async function faithFamiliesOf(rels: string[]): Promise<void> {
+  const roots = new Map<string, string>();
+  for (const [family, ids] of FAITH_ROOTS) for (const id of ids) roots.set(id, family);
+  const missing = rels.filter((r) => !faithFamilies.has(r));
+  for (let i = 0; i < missing.length; i += 60) {
+    const chunk = missing.slice(i, i + 60);
+    const q = `
+SELECT ?rel ?root WHERE {
+  VALUES ?rel { ${chunk.map((x) => `wd:${x}`).join(' ')} }
+  VALUES ?root { ${[...roots.keys()].map((r) => `wd:${r}`).join(' ')} }
+  { ?rel wdt:P279* ?root } UNION { ?rel wdt:P140|wdt:P361 ?x . ?x wdt:P279* ?root }
+}`;
+    // A religion under several roots takes the first family listed (Zoroastrianism is not "ancient").
+    const rank = (f: string) => FAITH_ROOTS.findIndex(([x]) => x === f);
+    const found = new Map<string, string>();
+    for (const b of await sparql(q, 30_000)) {
+      const rel = qidOf(b.rel!.value);
+      const family = roots.get(qidOf(b.root!.value))!;
+      const cur = found.get(rel);
+      if (cur === undefined || rank(family) < rank(cur)) found.set(rel, family);
+    }
+    for (const r of chunk) faithFamilies.set(r, found.get(r) ?? 'other');
+  }
+}
+
+/**
+ * Religions of realms (their family: christianity, islam…), deprecated
+ * statements left out, 50 per query. A religion with no known family
+ * counts as `other`.
+ */
+export async function itemFaiths(qids: string[]): Promise<Map<string, DatedFaith[]>> {
+  const rows: { item: string; rel: string; start: number | null; end: number | null; weight: number }[] = [];
+  for (let i = 0; i < qids.length; i += 50) {
+    const q = `
+SELECT ?item ?rel ?s ?e ?official ?rank WHERE {
+  VALUES ?item { ${qids.slice(i, i + 50).map((x) => `wd:${x}`).join(' ')} }
+  VALUES (?p ?ps ?official) { (p:P140 ps:P140 false) (p:P3075 ps:P3075 true) }
+  ?item ?p ?st . ?st ?ps ?rel ; wikibase:rank ?rank .
+  FILTER(?rank != wikibase:DeprecatedRank)
+  OPTIONAL { ?st pq:P580 ?s }
+  OPTIONAL { ?st pq:P582 ?e }
+}`;
+    for (const b of await sparql(q, 30_000)) {
+      if (!b.rel?.value.includes('/entity/Q')) continue;
+      rows.push({
+        item: qidOf(b.item!.value), rel: qidOf(b.rel.value),
+        start: b.s?.value ? parseYear(b.s.value) : null, end: b.e?.value ? parseYear(b.e.value) : null,
+        weight: (b.official?.value === 'true' ? 2 : 1) * (b.rank?.value.endsWith('PreferredRank') ? 3 : 1),
+      });
+    }
+  }
+  await faithFamiliesOf([...new Set(rows.map((r) => r.rel))]);
+  const out = new Map<string, DatedFaith[]>();
+  for (const { item, rel, ...r } of rows) {
+    (out.get(item) ?? out.set(item, []).get(item)!).push({ faith: faithFamilies.get(rel) ?? 'other', ...r });
   }
   return out;
 }

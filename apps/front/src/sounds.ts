@@ -295,6 +295,18 @@ const SOUNDS: Record<SoundKind, (r: Rig, t: number) => void> = {
     tone(r, t + 0.42, { freq: 120, to: 48, dur: 0.6, gain: 0.7, space: 0.4 });
     noise(r, t + 0.42, { dur: 0.45, gain: 0.3, filter: 'lowpass', freq: 400, space: 0.4 });
   },
+  fortification: (r, t) => {
+    // A heavy gate: chains running, then the portcullis falling.
+    for (let i = 0; i < 7; i++) metal(r, t + i * 0.06, 2400 + ((i * 211) % 500), [[1, 0.05], [1.6, 0.03]], 0.12, 0.25);
+    tone(r, t + 0.5, { freq: 90, to: 40, dur: 0.7, gain: 0.7, space: 0.5 });
+    noise(r, t + 0.5, { dur: 0.5, gain: 0.3, filter: 'lowpass', freq: 500, space: 0.5 });
+  },
+  exploration: (r, t) => {
+    // Wind in the sails and a ship's bell.
+    noise(r, t, { dur: 1.4, gain: 0.14, filter: 'bandpass', freq: 700, to: 1100, q: 0.4, attack: 0.5, space: 0.3 });
+    metal(r, t + 0.3, 880, [[1, 0.1], [2.76, 0.04], [5.4, 0.02]], 1.3, 0.6);
+    metal(r, t + 0.62, 880, [[1, 0.07], [2.76, 0.03]], 1.1, 0.6);
+  },
   religion: (r, t) => {
     // A choir chord under a temple bell.
     choir(r, t, [semis(220, 0), semis(220, 7), semis(220, 12), semis(220, 16)], 1.8);

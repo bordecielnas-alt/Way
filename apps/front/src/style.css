@@ -76,6 +76,22 @@ button { font: inherit; color: inherit; }
 .scale { display: flex; gap: 2px; padding: 3px; margin-bottom: 12px; background: rgba(255, 255, 255, 0.03); border-radius: 8px; }
 .scale button { flex: 1; background: none; border: 0; padding: 5px 6px; border-radius: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
 .scale button[aria-pressed='true'] { background: var(--gold-soft); color: var(--ink); }
+.lenses { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin-bottom: 12px; }
+.lenses button { background: rgba(255, 255, 255, 0.03); border: 1px solid transparent; padding: 5px 6px; border-radius: 7px; font-size: 12px; color: var(--ink-soft); cursor: pointer; text-align: left; }
+.lenses button:hover { background: rgba(255, 255, 255, 0.06); }
+.lenses button[aria-pressed='true'] { background: var(--gold-soft); border-color: rgba(217, 164, 65, 0.45); color: var(--ink); }
+.faith-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 6px; margin: -6px 4px 12px; font-size: 11px; color: var(--ink-soft); }
+.faith { display: flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.faith .chip-dot { width: 8px; height: 8px; }
+.chip-dot.unknown { background: rgba(150, 150, 150, 0.35); }
+.themes { margin-bottom: 12px; }
+.themes .subcats { display: none; padding-left: 14px; }
+.themes.detailed .subcats { display: block; }
+.themes .subcats .chip { font-size: 12px; padding-top: 3px; padding-bottom: 3px; }
+.themes .subcats .chip-dot { width: 8px; height: 8px; }
+.theme-chip.partial .chip-dot { background-image: linear-gradient(90deg, transparent 50%, rgba(0, 0, 0, 0.55) 50%); }
+.people-chip { margin-top: 4px; border-top: 1px solid var(--panel-border); border-radius: 0 0 6px 6px; }
+.filters-head .filters-toggle + .filters-toggle { margin-left: 2px; }
 
 /* ---------- basemap switch ---------- */
 .basemap { right: 16px; bottom: 150px; padding: 3px; display: flex; gap: 2px; }
@@ -124,6 +140,14 @@ body.card-open .basemap { right: 452px; }
 .tl-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .tl-status.busy .tl-status-dot { background: var(--gold); animation: pulse 1.1s ease-in-out infinite; }
 .tl-status.offline .tl-status-dot { background: #d05a4a; }
+.tl-status.idle .tl-status-dot { display: none; }
+.tl-hourglass { display: none; color: var(--gold); }
+.tl-status.ai .tl-status-dot { display: none; }
+.tl-status.ai .tl-hourglass { display: block; animation: hourglass 2.4s ease-in-out infinite; }
+.tl-hourglass .sand { animation: sand 2.4s linear infinite; transform-origin: 12px 18px; }
+@keyframes hourglass { 0%, 70% { transform: rotate(0); } 85%, 100% { transform: rotate(180deg); } }
+@keyframes sand { 0% { transform: scaleY(0.2); } 70%, 100% { transform: scaleY(1); } }
+@media (prefers-reduced-motion: reduce) { .tl-status.ai .tl-hourglass, .tl-hourglass .sand { animation: none; } }
 @keyframes pulse { 50% { opacity: 0.25; transform: scale(0.7); } }
 
 .tl-track { position: relative; height: 54px; cursor: crosshair; touch-action: none; }

@@ -1,4 +1,4 @@
-# Way — single-container image: web app + API + search + embedded Postgres.
+# Orbis — single-container image: web app + API + search + embedded Postgres.
 # Run: docker run -d -p 8080:8080 -v /path/to/data:/data ghcr.io/bordecielnas-alt/way
 
 FROM node:22-alpine AS build

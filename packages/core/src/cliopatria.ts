@@ -24,6 +24,7 @@ export class Cliopatria {
   private periods = new Map<number, BordersPeriod>();
   /** Names used by each Wikidata item across the dataset (Song, Northern Song…). */
   private namesByQid = new Map<string, Set<string>>();
+  private everyQid: string[] | null = null;
 
   constructor(private file: string) {}
 
@@ -111,6 +112,18 @@ export class Cliopatria {
   ambiguous(qid: string): boolean {
     this.load();
     return (this.namesByQid.get(qid)?.size ?? 0) > 1;
+  }
+
+  /** Every Wikidata item of the dataset, the longest-lived realms first (they show up the most). */
+  allQids(): string[] {
+    const d = this.load();
+    if (!d) return [];
+    if (!this.everyQid) {
+      const span = new Map<string, number>();
+      for (const f of d.features) if (f.q) span.set(f.q, (span.get(f.q) ?? 0) + (f.t - f.f + 1));
+      this.everyQid = [...span.keys()].sort((a, b) => span.get(b)! - span.get(a)!);
+    }
+    return this.everyQid;
   }
 
   /** Wikidata items of the realms shown at a year. */

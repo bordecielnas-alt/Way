@@ -140,9 +140,9 @@ export class MemoryStore implements Store {
     return out;
   }
 
-  async setKeys(keys: string[], status: KeyStatus): Promise<void> {
+  async setKeys(keys: string[], status: KeyStatus, providers: string[] = []): Promise<void> {
     const now = Date.now();
-    for (const k of keys) this.keys.set(k, { status, updatedAt: now });
+    for (const k of keys) this.keys.set(k, { status, updatedAt: now, providers });
     this.scheduleSave();
   }
 

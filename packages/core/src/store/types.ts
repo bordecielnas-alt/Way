@@ -5,6 +5,8 @@ export type KeyStatus = 'pending' | 'done' | 'partial' | 'failed';
 export interface KeyRecord {
   status: KeyStatus;
   updatedAt: number; // epoch ms
+  /** Who searched it: level 2 adds `web` (or `degraded` when no provider could run). */
+  providers?: string[];
 }
 
 /** Doors cached on a POI (`related` column): destinations by id, and kinds searched without result. */
