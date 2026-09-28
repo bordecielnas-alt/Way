@@ -351,6 +351,21 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
   sont redessinés à chaque période. Pendant la lecture, les armées ne prennent que 2 connexions et les
   nouvelles images de blasons attendent l'arrêt : les frontières passent devant.
 
+## Royaumes suivis de près
+
+- **Intérêt** : chaque clic sur un royaume compte 1 (ouvrir ses régions, 0,5) ; le score est divisé par deux
+  toutes les deux semaines et gardé dans le cache des territoires.
+- **Fraîcheur selon l'intérêt** : ce qu'on sait d'un royaume (nom, blason, religion, fiche politique —
+  gouvernement, souverains —, régions) est revérifié après le délai des Réglages divisé par 1 + 4 × intérêt,
+  jamais plus d'une fois par jour. Ce qui manque (pas de blason, pas de religion, fiche sans gouvernement ni
+  souverain, pas de régions) est recherché à nouveau après 3 jours divisés par 1 + 2 × intérêt, au plus
+  toutes les 6 h. C'est la mécanique des blasons, étendue à la religion et à la politique.
+- **Au clic** : ce qui est périmé pour ce royaume est mis en tête du travail de fond, juste après la réponse
+  (la fiche s'affiche d'abord depuis le cache). Le navigateur redemande blasons et religions 20 s plus tard,
+  puis toutes les 3 min, pour montrer le changement.
+- **Balayage** : les royaumes suivis passent avant les autres ; leur fiche et leurs régions sont revérifiées
+  (3 royaumes par passage). La page Réglages indique combien de royaumes sont suivis de près.
+
 ## Hors V1 (prévu)
 
 Histogramme de densité, carnet de voyage, brouillard de connaissance, fils rouges,

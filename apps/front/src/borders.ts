@@ -801,6 +801,22 @@ export class BordersLayer {
     this.show();
   }
 
+  /**
+   * A realm was clicked: the server refreshes it first. Its emblem and faith
+   * are asked again shortly, so a change shows without waiting for the next
+   * round.
+   */
+  freshenSoon(): void {
+    const from = this.current?.from;
+    if (from === undefined) return;
+    clearTimeout(this.emblemsTimer);
+    this.emblemsTimer = window.setTimeout(() => void this.loadEmblems(from), 20_000);
+    if (this.backdrop === 'religion') {
+      clearTimeout(this.faithsTimer);
+      this.faithsTimer = window.setTimeout(() => void this.loadFaiths(from), 20_000);
+    }
+  }
+
   /** Faiths of the realms come from the server progressively, like the names. */
   private async loadFaiths(from: number, attempt = 0): Promise<void> {
     clearTimeout(this.faithsTimer);
@@ -812,10 +828,13 @@ export class BordersLayer {
       this.faiths = res.faiths;
       this.faithsFrom = from;
       if (changed) this.show();
-      // The server looks them up between other chores: keep asking, less and less often.
-      if (res.pending > 0 && attempt < 40) {
-        this.faithsTimer = window.setTimeout(() => void this.loadFaiths(from, attempt + 1), Math.min(20_000, 4_000 + attempt * 1_000));
-      }
+      // Still being looked up: asked again, less and less often. Found: asked again from time to
+      // time anyway, the server keeps checking them in the background (like the emblems).
+      const wait = res.pending > 0 && attempt < 40 ? Math.min(20_000, 4_000 + attempt * 1_000) : 180_000;
+      this.faithsTimer = window.setTimeout(() => {
+        if (document.visibilityState === 'visible') void this.loadFaiths(from, res.pending > 0 ? attempt + 1 : 0);
+        else this.faithsTimer = window.setTimeout(() => void this.loadFaiths(from), 180_000);
+      }, wait);
     } catch {
       /* realms stay grey */
     }
