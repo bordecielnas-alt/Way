@@ -16,6 +16,7 @@ import { Card } from './card.ts';
 import { Connection } from './connection.ts';
 import { bounds, contains, divide, type Area, type Region } from './divisions.ts';
 import { Filters, importanceFloor, type Heraldry, type Scale } from './filters.ts';
+import { GeographyLayer, NO_GEOGRAPHY, type Geography } from './geography.ts';
 import { cameraState, createGlobe, restoreCamera, setBasemap, viewRect, type Basemap, type CameraState } from './globe.ts';
 import { PoiLayer } from './markers.ts';
 import { PeopleLayer, type Picked } from './people.ts';
@@ -24,7 +25,9 @@ import { loadUiSettings, playSound } from './sounds.ts';
 import { Timeline, type TimeWindow } from './timeline.ts';
 
 // ---------- persisted per-viewer preferences ----------
-interface Saved { camera?: CameraState; window?: TimeWindow; hidden?: Category[]; basemap?: Basemap; scale?: Scale; heraldry?: Heraldry }
+interface Saved {
+  camera?: CameraState; window?: TimeWindow; hidden?: Category[]; basemap?: Basemap; scale?: Scale; heraldry?: Heraldry; geography?: Geography;
+}
 const STORAGE_KEY = 'way:state';
 function load(): Saved {
   try {
@@ -51,6 +54,7 @@ else viewer.camera.setView({ destination: Cartesian3.fromDegrees(20, 30, 9_000_0
 
 if (import.meta.env.DEV) (window as unknown as { __viewer: unknown }).__viewer = viewer; // debugging aid
 
+const geography = new GeographyLayer(viewer);
 const pois = new PoiLayer(viewer);
 const people = new PeopleLayer(viewer, document.getElementById('people')!);
 
@@ -69,6 +73,9 @@ const timeline = new Timeline(timelineEl, saved.window ?? { tStart: -500, tEnd: 
   scheduleSearch();
 });
 const borders = new BordersLayer(viewer, (t) => timeline.setBordersNote(t));
+// Armies wear the colors of their country on the map.
+people.colorOf = (qid, name) => borders.colorOf(qid, name);
+borders.onPeriod = () => people.refresh();
 pois.setWindow(timeline.window.tStart, timeline.window.tEnd);
 people.setWindow(timeline.moment.tStart, timeline.moment.tEnd);
 
@@ -121,7 +128,13 @@ const filters = new Filters(
     borders.setHeraldry(heraldry.territories);
     people.setHeraldry(heraldry.armies);
   },
+  { ...NO_GEOGRAPHY, ...saved.geography },
+  (g) => {
+    save({ geography: g });
+    geography.set(g);
+  },
 );
+geography.set(filters.geography);
 borders.setHeraldry(filters.heraldry.territories);
 people.setHeraldry(filters.heraldry.armies);
 pois.setHidden(filters.hiddenSet);

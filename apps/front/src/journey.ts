@@ -3,6 +3,10 @@
 // (battle, coronation) holds them there for a while. Pure, for tests.
 
 import type { ActivityKind, Army, JourneyStop, PersonJourney } from '@way/shared';
+import { pointOn, type Pt, type Route } from './routes.ts';
+
+/** The way between two places (round the seas, by ship when needed), when known: straight otherwise. */
+export type Way = (a: Pt, b: Pt) => Route | null;
 
 export interface Presence {
   lat: number;
@@ -71,7 +75,7 @@ function describe(s: JourneyStop): string {
  * (a fraction of the window shown, so yearly steps still catch battles).
  * Null before birth and after death.
  */
-export function presenceAt(j: PersonJourney, t: number, tol: number): Presence | null {
+export function presenceAt(j: PersonJourney, t: number, tol: number, way?: Way): Presence | null {
   const born = j.born ?? j.stops[0]?.start ?? null;
   if (born === null || t < born - 0.01) return null;
   if (j.died !== null && t > j.died + tol) return null;
@@ -103,12 +107,14 @@ export function presenceAt(j: PersonJourney, t: number, tol: number): Presence |
     const a: [number, number] = [from.lat, from.lon];
     const b: [number, number] = [next.lat, next.lon];
     const dist = km(a, b);
+    const route = dist > 30 ? way?.(a, b) ?? null : null;
     const gap = next.start - Math.max(endOf(from), from.start);
-    const travel = Math.min(Math.max(gap, 0.001), Math.max(0.02, dist / PERSON_KM_PER_YEAR));
+    const travel = Math.min(Math.max(gap, 0.001), Math.max(0.02, (route?.effort ?? dist) / PERSON_KM_PER_YEAR));
     if (dist > 30 && t >= next.start - travel) {
       const f = Math.min(1, Math.max(0, (t - (next.start - travel)) / travel));
-      const [lat, lon] = along(a, b, f);
-      return { lat, lon, kind: 'travel', text: `En route vers ${placeName(next)}`, trail: [...trail, [lat, lon]] };
+      const m = moving(a, b, f, route);
+      const text = m.water ? `En bateau vers ${placeName(next)}` : `En route vers ${placeName(next)}`;
+      return { lat: m.p[0], lon: m.p[1], kind: m.water ? 'sail' : 'travel', text, trail: [...trail, ...m.passed] };
     }
   }
   if (stay) return { lat: stay.lat, lon: stay.lon, kind: stay.kind, text: status && stay.kind === 'stay' ? status.label : describe(stay), trail };
@@ -117,18 +123,35 @@ export function presenceAt(j: PersonJourney, t: number, tol: number): Presence |
   return { lat: here.lat, lon: here.lon, kind: status?.kind === 'reign' ? 'reign' : 'wait', text, trail: trail.length ? trail : [[here.lat, here.lon]] };
 }
 
+/** A share of the way: along the route when there is one, else the great circle. */
+function moving(a: Pt, b: Pt, f: number, route: Route | null): { p: Pt; water: boolean; passed: Pt[] } {
+  if (route) {
+    const on = pointOn(route, f);
+    return { ...on, passed: on.passed.slice(1) };
+  }
+  const p = along(a, b, f);
+  return { p, water: false, passed: [p] };
+}
+
 function placeName(s: JourneyStop): string {
   return s.kind === 'birth' || s.kind === 'death' || s.kind === 'stay' ? s.label : s.label.replace(/^(bataille|siège) d(e |')/i, '');
 }
 
 /** An army at `t`: gathering before its first battle, marching between them, fighting at them. */
-export function armyAt(army: Army, t: number, tol: number): Presence | null {
+export function armyAt(army: Army, t: number, tol: number, way?: Way): Presence | null {
   const b = army.battles;
   if (!b.length) return null;
   const first = b[0]!;
   const last = b[b.length - 1]!;
   if (t < first.t - Math.max(0.4, tol) || t > last.t + Math.max(0.25, tol)) return null;
-  const trail = b.filter((x) => x.t <= t).map((x): [number, number] => [x.lat, x.lon]);
+  // The trail follows the ways already taken.
+  const trail: [number, number][] = [];
+  for (const x of b.filter((y) => y.t <= t)) {
+    const prev = trail[trail.length - 1];
+    const r = prev && way ? way(prev, [x.lat, x.lon]) : null;
+    if (r) trail.push(...r.pts.slice(1));
+    else trail.push([x.lat, x.lon]);
+  }
   const fight = b.filter((x) => Math.abs(t - x.t) <= tol).sort((x, y) => Math.abs(t - x.t) - Math.abs(t - y.t))[0];
   if (fight) {
     const who = fight.commanders.length ? ` (${fight.commanders.join(', ')})` : '';
@@ -141,8 +164,10 @@ export function armyAt(army: Army, t: number, tol: number): Presence | null {
   const next = b[i]!;
   const a: [number, number] = [prev.lat, prev.lon];
   const z: [number, number] = [next.lat, next.lon];
-  const travel = Math.min(next.t - prev.t, Math.max(0.03, km(a, z) / ARMY_KM_PER_YEAR));
+  const route = way?.(a, z) ?? null;
+  const travel = Math.min(next.t - prev.t, Math.max(0.03, (route?.effort ?? km(a, z)) / ARMY_KM_PER_YEAR));
   if (t < next.t - travel) return { lat: prev.lat, lon: prev.lon, kind: 'wait', text: `Campement après ${prev.label}`, trail };
-  const [lat, lon] = along(a, z, (t - (next.t - travel)) / travel);
-  return { lat, lon, kind: 'travel', text: `En marche vers ${next.label}`, trail: [...trail, [lat, lon]] };
+  const m = moving(a, z, (t - (next.t - travel)) / travel, route);
+  const text = m.water ? `Embarquée vers ${next.label}` : `En marche vers ${next.label}`;
+  return { lat: m.p[0], lon: m.p[1], kind: m.water ? 'sail' : 'travel', text, trail: [...trail, ...m.passed] };
 }

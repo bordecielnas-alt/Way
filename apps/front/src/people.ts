@@ -5,9 +5,10 @@ import {
 } from 'cesium';
 import { formatYear, type ArmiesResponse, type Army, type EmblemsResponse, type PersonHit, type PersonJourney } from '@way/shared';
 import { armyFigure, clashFigure, FIGURE_STYLES, figureId, PALETTE, personFigure, type FigureStyle } from './figures.ts';
-import { armyAt, presenceAt, type Presence } from './journey.ts';
+import { armyAt, presenceAt, type Presence, type Way } from './journey.ts';
 import { fetchCached } from './localcache.ts';
-import { commonsImage, dominantColor, loadImage, viaServer } from './media.ts';
+import { commonsImage, loadImage, viaServer } from './media.ts';
+import { findRoute, straightRoute, WaterGrid, type Route } from './routes.ts';
 
 // People followed on the map (chosen by the viewer, remembered in the
 // browser) and the armies of the wars under way, moving with the timeline.
@@ -19,6 +20,9 @@ const TWEEN_MS = 800;
 /** Armies are shown for windows up to this many years (beyond, too many wars at once). */
 const ARMIES_MAX_SPAN = 120;
 const ARMIES_MAX_DECADES = 12;
+/** Time spent searching new ways in one update; the rest are searched right after. */
+const WAY_BUDGET_MS = 25;
+const WAYS_KEPT = 6000;
 
 function loadPrefs(): Prefs {
   const d: Prefs = { followed: [], style: 'figurine', armies: true, trails: true, open: false };
@@ -37,11 +41,6 @@ function loadPrefs(): Prefs {
 }
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-const hashIndex = (s: string, n: number) => {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return h % n;
-};
 const lifespan = (b: number | null, d: number | null) =>
   b === null && d === null ? '' : `${b !== null ? formatYear(Math.floor(b)) : '?'} – ${d !== null ? formatYear(Math.floor(d)) : ''}`;
 
@@ -75,11 +74,17 @@ export class PeopleLayer {
   private clashBoards: BillboardCollection;
   /** Blasons → Armées: each side under its flag and in its colors. */
   private heraldry = false;
-  /** Side at a decade -> its flag and main color (null: none known). */
-  private sideFlags = new Map<string, { img: HTMLImageElement; color: string | null } | null>();
+  /** Side at a decade -> its flag (null: none known). */
+  private sideFlags = new Map<string, HTMLImageElement | null>();
   private flagQueue = new Map<string, { qid: string; year: number }>();
   private flagTimer: number | undefined;
   private flagTries = 0;
+  /** Land, rivers and seas of the world, for the ways between places (loaded with the page). */
+  private grid: WaterGrid | null = null;
+  private ways = new Map<string, Route | null>();
+  private wayQueue = new Map<string, [[number, number], [number, number]]>();
+  private wayDeadline = 0;
+  private wayTimer: number | undefined;
   private window = { tStart: 0, tEnd: 0 };
   private tween = 0;
   private searchTimer: number | undefined;
@@ -165,6 +170,61 @@ export class PeopleLayer {
     this.trails.show = this.prefs.trails;
     this.renderList();
     for (const f of this.prefs.followed) void this.loadJourney(f.qid);
+    void fetch('/geo/water.bin')
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))
+      .then((buf) => {
+        this.grid = WaterGrid.decode(buf);
+        this.ways.clear();
+        this.update(false);
+      })
+      .catch(() => undefined); // straight lines, as before
+  }
+
+  /** Set by the app: an army's color, the one of its country on the map. */
+  colorOf: (qid: string | null, name: string) => string = () => PALETTE[0]!;
+
+  /** Redraws the armies (the map's colors changed with the period). */
+  refresh(): void {
+    this.update(true);
+  }
+
+  /**
+   * The way between two places, searched once: a search takes a few
+   * milliseconds, so an update does what it can and leaves the rest for right after.
+   */
+  private way: Way = (a, b) => {
+    if (!this.grid) return null;
+    const key = `${a[0].toFixed(3)},${a[1].toFixed(3)}>${b[0].toFixed(3)},${b[1].toFixed(3)}`;
+    const hit = this.ways.get(key);
+    if (hit !== undefined) return hit;
+    if (performance.now() > this.wayDeadline) {
+      this.wayQueue.set(key, [a, b]);
+      if (this.wayTimer === undefined) this.wayTimer = window.setTimeout(() => this.searchWays(), 0);
+      return null;
+    }
+    return this.searchWay(key, a, b);
+  };
+
+  private searchWay(key: string, a: [number, number], b: [number, number]): Route | null {
+    // No way found (the other side of the world): straight, aboard over the sea.
+    const r = findRoute(this.grid!, a, b) ?? straightRoute(this.grid!, a, b);
+    this.ways.set(key, r);
+    if (this.ways.size > WAYS_KEPT) this.ways.delete(this.ways.keys().next().value!);
+    return r;
+  }
+
+  private searchWays(): void {
+    const end = performance.now() + 30;
+    for (const [key, [a, b]] of this.wayQueue) {
+      if (performance.now() > end) break;
+      this.wayQueue.delete(key);
+      if (!this.ways.has(key)) this.searchWay(key, a, b);
+    }
+    if (this.wayQueue.size) this.wayTimer = window.setTimeout(() => this.searchWays(), 16);
+    else {
+      this.wayTimer = undefined;
+      this.update(false);
+    }
   }
 
   private save(): void {
@@ -341,7 +401,7 @@ export class PeopleLayer {
   }
 
   /** The side's flag once known and loaded; asks for it otherwise. */
-  private sideFlag(a: Army): { img: HTMLImageElement; color: string | null } | null {
+  private sideFlag(a: Army): HTMLImageElement | null {
     const key = this.flagKey(a);
     if (!key) return null;
     if (!this.sideFlags.has(key) && !this.flagQueue.has(key)) {
@@ -381,7 +441,7 @@ export class PeopleLayer {
               window.setTimeout(() => this.sideFlags.delete(key), 60_000);
               return;
             }
-            this.sideFlags.set(key, { img, color: dominantColor(img) });
+            this.sideFlags.set(key, img);
             if (this.heraldry) this.update(true);
           });
         }
@@ -402,10 +462,11 @@ export class PeopleLayer {
     // and day by day, a battle lasts a couple of days.
     const tol = Math.max(2 / 365, (tEnd - tStart) / 10);
     const seen = new Set<string>();
+    this.wayDeadline = performance.now() + WAY_BUDGET_MS;
     for (const f of this.prefs.followed) {
       const j = this.journeys.get(f.qid);
       if (!j) continue;
-      const p = presenceAt(j, t, tol);
+      const p = presenceAt(j, t, tol, this.way);
       const key = `p:${f.qid}`;
       if (!p) continue;
       seen.add(key);
@@ -425,7 +486,7 @@ export class PeopleLayer {
       }
       const here: { a: Army; p: Presence; spot: string }[] = [];
       for (const a of byId.values()) {
-        const p = armyAt(a, t, tol);
+        const p = armyAt(a, t, tol, this.way);
         if (p) here.push({ a, p, spot: p.ref ?? `${p.lat.toFixed(2)},${p.lon.toFixed(2)}` });
       }
       const bySpot = new Map<string, typeof here>();
@@ -435,10 +496,11 @@ export class PeopleLayer {
           const key = `a:${a.id}`;
           seen.add(key);
           const flag = this.heraldry ? this.sideFlag(a) : null;
-          const color = flag?.color ?? PALETTE[hashIndex(a.sideQid ?? a.side, PALETTE.length)]!;
+          // The color of its country on the map.
+          const color = this.colorOf(a.sideQid, a.side);
           // Sides at the same place stand apart, facing each other.
           const offset = (i - (group.length - 1) / 2) * 62;
-          this.place(key, p, armyFigure(color, p.kind, flag?.img ?? null), a.side, Color.fromCssColorString(color), true, redraw, offset);
+          this.place(key, p, armyFigure(color, p.kind, flag), a.side, Color.fromCssColorString(color), true, redraw, offset);
         });
         // Two armies at the same battle: they clash.
         const ref = group[0]!.p.ref;
@@ -521,7 +583,7 @@ export class PeopleLayer {
     a.presence = p;
     a.from = a.at;
     a.to = target;
-    const pts = p.trail.slice(-60).map(([lat, lon]) => Cartesian3.fromDegrees(lon, lat, 1200));
+    const pts = p.trail.slice(-400).map(([lat, lon]) => Cartesian3.fromDegrees(lon, lat, 1200));
     a.trail.positions = pts.length >= 2 ? pts : [pts[0] ?? a.bb.position, pts[0] ?? a.bb.position];
   }
 

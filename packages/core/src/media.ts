@@ -17,8 +17,15 @@ const TYPES: Record<string, string> = {
 const EXT_TYPE = Object.fromEntries(Object.entries(TYPES).map(([t, e]) => [e, t]));
 const DAY = 86_400_000;
 
-/** What to fetch: a Commons file at a width, or a file already on upload.wikimedia.org. */
-export type MediaRequest = { file: string; width: number } | { url: string };
+/**
+ * What to fetch: a Commons file at a width, a file already on
+ * upload.wikimedia.org, or a tile of the land cover map (NASA GIBS).
+ */
+export type MediaRequest = { file: string; width: number } | { url: string } | { tile: 'landcover'; z: number; x: number; y: number };
+
+/** Land cover (MODIS, IGBP classes) of 2001, the earliest year: the least changed by today's clearing. */
+const LANDCOVER = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Combined_L3_IGBP_Land_Cover_Type_Annual/default/2001-01-01/GoogleMapsCompatible_Level8';
+export const LANDCOVER_MAX_ZOOM = 8;
 
 /** Nearest standard width: fewer variants of one image, more cache hits. */
 export function snapWidth(w: number): number {
@@ -33,6 +40,11 @@ export function snapWidth(w: number): number {
  * thumbnail).
  */
 export function mediaSources(r: MediaRequest): string[] {
+  if ('tile' in r) {
+    const n = 2 ** r.z;
+    const ok = [r.z, r.x, r.y].every(Number.isInteger) && r.z >= 0 && r.z <= LANDCOVER_MAX_ZOOM && r.x >= 0 && r.x < n && r.y >= 0 && r.y < n;
+    return ok ? [`${LANDCOVER}/${r.z}/${r.y}/${r.x}.png`] : [];
+  }
   if ('file' in r) {
     if (!r.file || r.file.length > 240 || /[/\\#?<>[\]{}|]/.test(r.file)) return [];
     const name = r.file.trim().replace(/ /g, '_');

@@ -14,7 +14,7 @@ import type { Store, StoredDoors } from './store/types.ts';
 //  - surprise:  a lesser-known place nearby, of another kind.
 
 /** Bump when the choice logic changes: cached doors are recomputed. */
-const DOORS_VERSION = 5;
+const DOORS_VERSION = 6;
 /** "Here" means close: dense cities hold hundreds of dated entities within a few km. */
 const HERE_KM = 8;
 /** Wider "here" for empty surroundings (a naval battle, a remote site). */
@@ -125,10 +125,9 @@ export function spanYears(p: Pick<Poi, 'date_start' | 'date_end'>): number {
   return p.date_end === null ? 0 : astroDiff(p.date_start, p.date_end);
 }
 
-/** Window around a POI's start for "meanwhile": wider in antiquity, where dates are coarser. */
+/** Years around a POI's start for "meanwhile": within a year of it, whatever the era. */
 export function meanwhileRange(poi: Poi): [number, number] {
-  const span = Math.max(1, Math.round(bucketStep(poi.date_start) / 2));
-  return [Math.max(MIN_YEAR, poi.date_start - span), Math.min(MAX_YEAR, poi.date_start + span)];
+  return [Math.max(MIN_YEAR, poi.date_start - 1), Math.min(MAX_YEAR, poi.date_start + 1)];
 }
 
 // ---------- service ----------

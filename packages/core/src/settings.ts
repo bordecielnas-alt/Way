@@ -54,7 +54,7 @@ export interface UiSettings {
   meanwhileMaxSpan: number;
 }
 
-export const DEFAULT_UI: UiSettings = { sounds: true, volume: 0.6, hoverOpen: false, meanwhileMaxSpan: 20 };
+export const DEFAULT_UI: UiSettings = { sounds: true, volume: 0.6, hoverOpen: false, meanwhileMaxSpan: 1 };
 
 /** Fills missing or invalid fields with defaults (older settings files, partial updates). */
 export function normalizeUi(raw: Partial<UiSettings> | undefined): UiSettings {

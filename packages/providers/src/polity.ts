@@ -309,7 +309,8 @@ SELECT ?sub ?sl ?cl ?coord ?cap ?s ?e ?ls ?le ?up ?lf ?len WHERE {
 
 /** A coat of arms or flag, with the years it was used (from the statement's qualifiers). */
 export interface DatedFile { file: string; start: number | null; end: number | null }
-export interface ItemEmblems { coa: DatedFile[]; flag: DatedFile[] }
+/** An item's coats of arms and flags, and the years the item itself existed. */
+export interface ItemEmblems { coa: DatedFile[]; flag: DatedFile[]; start: number | null; end: number | null }
 
 /** Commons file name of a Special:FilePath URL. */
 export function commonsFile(uri: string): string {
@@ -321,18 +322,25 @@ export async function itemEmblems(qids: string[]): Promise<Map<string, ItemEmble
   const out = new Map<string, ItemEmblems>();
   for (let i = 0; i < qids.length; i += 50) {
     const q = `
-SELECT ?item ?kind ?file ?s ?e WHERE {
+SELECT ?item ?kind ?file ?s ?e ?is ?ie WHERE {
   VALUES ?item { ${qids.slice(i, i + 50).map((x) => `wd:${x}`).join(' ')} }
   VALUES (?p ?ps ?kind) { (p:P94 ps:P94 "coa") (p:P41 ps:P41 "flag") }
   ?item ?p ?st . ?st ?ps ?file .
   FILTER NOT EXISTS { ?st wikibase:rank wikibase:DeprecatedRank }
   OPTIONAL { ?st pq:P580 ?s }
   OPTIONAL { ?st pq:P582 ?e }
+  OPTIONAL { ?item wdt:P571 ?is }
+  OPTIONAL { ?item wdt:P576 ?ie }
 }`;
     for (const b of await sparql(q, 30_000)) {
       const id = qidOf(b.item!.value);
       const kind = b.kind?.value === 'coa' ? 'coa' : 'flag';
-      const cur = out.get(id) ?? { coa: [], flag: [] };
+      const cur = out.get(id) ?? { coa: [], flag: [], start: null, end: null };
+      // Earliest start, latest end: the whole life of the item.
+      const is = b.is?.value ? parseYear(b.is.value) : null;
+      const ie = b.ie?.value ? parseYear(b.ie.value) : null;
+      if (is !== null && (cur.start === null || is < cur.start)) cur.start = is;
+      if (ie !== null && (cur.end === null || ie > cur.end)) cur.end = ie;
       const file = commonsFile(b.file!.value);
       if (!cur[kind].some((x) => x.file === file)) {
         cur[kind].push({ file, start: b.s?.value ? parseYear(b.s.value) : null, end: b.e?.value ? parseYear(b.e.value) : null });

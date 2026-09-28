@@ -86,18 +86,33 @@ describe('coats of arms and flags', () => {
     { file: 'Tricolore.svg', start: 1794, end: null },
     { file: 'Undated.svg', start: null, end: null },
   ];
-  it('picks the one of the era, else an undated one', () => {
+  it('picks the one of the era, else an undated one only for a realm of the past alive then', () => {
     expect(fileAt(flags, 1500)).toBe('Royal flag.svg');
     expect(fileAt(flags, 1900)).toBe('Tricolore.svg');
-    expect(fileAt(flags, 1000)).toBe('Undated.svg');
-    expect(fileAt(flags.slice(0, 2), 1000)).toBeNull();
+    // Undated, on an item with no end (today's country): not sourced for that year.
+    expect(fileAt(flags, 1000)).toBeNull();
+    expect(fileAt(flags, 1000, { start: 987, end: 1328 })).toBe('Undated.svg');
+    expect(fileAt(flags, 1500, { start: 987, end: 1328 })).toBe('Royal flag.svg');
+    expect(fileAt(flags.slice(2), 1400, { start: 987, end: 1328 })).toBeNull();
+    expect(fileAt(flags.slice(0, 2), 1000, { start: 987, end: 1328 })).toBeNull();
   });
   it('leaves out invented emblems and names of another era', () => {
     const files = (...names: string[]) => names.map((file) => ({ file, start: null, end: null }));
     expect(fileAt(files('Fictitious Ottoman flag 3.svg'), 1806)).toBeNull();
-    expect(fileAt(files('Coat of arms of the United Kingdom (1901–1952).svg', 'Royal arms.svg'), 1806)).toBe('Royal arms.svg');
+    const uk = { start: 1801, end: null };
+    const gb = { start: 1707, end: 1801 };
+    expect(fileAt(files('Coat of arms of the United Kingdom (1901–1952).svg', 'Royal arms.svg'), 1806, uk)).toBeNull();
+    expect(fileAt(files('Coat of arms of the United Kingdom (1901–1952).svg', 'Royal arms.svg'), 1800, gb)).toBe('Royal arms.svg');
     expect(fileAt(files('Flag of Herat until 1842.svg'), 1806)).toBe('Flag of Herat until 1842.svg');
     expect(fileAt(files('Flag of Herat until 1842.svg'), 1900)).toBeNull();
+  });
+  it('trusts the name over dates that contradict it', () => {
+    const prussia = { start: 1701, end: 1918 };
+    const dated = (file: string) => ({ file, start: 1701, end: 1918 });
+    expect(fileAt([dated('Middle Arms of the Kingdom of Prussia 1873.svg')], 1806, prussia)).toBeNull();
+    expect(fileAt([dated('Middle Arms of the Kingdom of Prussia 1873.svg')], 1880, prussia)).toBe('Middle Arms of the Kingdom of Prussia 1873.svg');
+    expect(fileAt([{ file: 'Flag of Spain (1760–1785).svg', start: 1760, end: 1843 }], 1806)).toBeNull();
+    expect(fileAt([dated('Flag of the Kingdom of Prussia (1803-1892).svg')], 1806, prussia)).toBe('Flag of the Kingdom of Prussia (1803-1892).svg');
   });
 });
 

@@ -47,6 +47,11 @@ function basemapLayers(name: Basemap): ImageryLayer[] {
 
 const basemap = new Set<ImageryLayer>();
 
+/** Layers of the basemap, at the bottom: overlays go just above. */
+export function basemapCount(): number {
+  return basemap.size;
+}
+
 export function createGlobe(container: HTMLElement, name: Basemap): Viewer {
   const viewer = new Viewer(container, {
     baseLayer: false,

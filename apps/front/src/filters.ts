@@ -1,4 +1,5 @@
 import { Category, CATEGORY_LABELS } from '@way/shared';
+import { GEOGRAPHY, type Geography } from './geography.ts';
 import { CATEGORY_COLORS } from './icons.ts';
 
 const ORDER: Category[] = [
@@ -44,6 +45,8 @@ export class Filters {
     private onScale: (scale: Scale) => void,
     public heraldry: Heraldry,
     private onHeraldry: (h: Heraldry) => void,
+    public geography: Geography,
+    private onGeography: (g: Geography) => void,
   ) {
     this.hidden = new Set(initialHidden.filter((c) => Category.safeParse(c).success));
     root.innerHTML = `
@@ -58,6 +61,12 @@ export class Filters {
       </div>
       <div class="scale heraldry" role="group" aria-label="Blasons et drapeaux">${HERALDRY.map(
         (h) => `<button type="button" data-heraldry="${h.key}" title="${h.title}">${h.label}</button>`,
+      ).join('')}</div>
+      <div class="filters-head">
+        <span class="filters-title">Géographie</span>
+      </div>
+      <div class="geo-chips" role="group" aria-label="Géographie">${GEOGRAPHY.map(
+        (g) => `<button type="button" class="chip" data-geo="${g.key}" title="${g.title}"><span class="chip-dot" style="background:${g.color}"></span>${g.label}</button>`,
       ).join('')}</div>
       <div class="filters-head">
         <span class="filters-title">Thèmes</span>
@@ -93,6 +102,16 @@ export class Filters {
         this.heraldry = { ...this.heraldry, [k]: !this.heraldry[k] };
         sync();
         this.onHeraldry(this.heraldry);
+      });
+    });
+    root.querySelectorAll<HTMLButtonElement>('[data-geo]').forEach((b) => {
+      const k = b.dataset.geo as keyof Geography;
+      const sync = () => b.setAttribute('aria-pressed', String(this.geography[k]));
+      sync();
+      b.addEventListener('click', () => {
+        this.geography = { ...this.geography, [k]: !this.geography[k] };
+        sync();
+        this.onGeography(this.geography);
       });
     });
     if (!this.scaleButtons.has(this.scale)) this.scale = 'selection';

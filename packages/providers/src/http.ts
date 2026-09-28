@@ -19,6 +19,8 @@ const POLICIES: Record<string, HostPolicy> = {
   // Images: a steady trickle, they are kept once fetched.
   'commons.wikimedia.org': { concurrency: 2, minIntervalMs: 250 },
   'upload.wikimedia.org': { concurrency: 2, minIntervalMs: 150 },
+  // Land cover tiles (NASA GIBS): kept once fetched too.
+  'gibs.earthdata.nasa.gov': { concurrency: 4, minIntervalMs: 20 },
 };
 
 let userAgent = 'Way/0.1 (https://github.com/bordecielnas-alt/Way; personal history globe)';

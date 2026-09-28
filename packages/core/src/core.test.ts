@@ -178,8 +178,8 @@ describe('doors', () => {
     expect(c.map((x) => x.row.qid)).toEqual(['Q12']);
   });
 
-  it('"meanwhile" window follows the time resolution of the era', () => {
-    expect(meanwhileRange(battle)).toEqual([-358, -308]);
+  it('"meanwhile" looks within a year, whatever the era', () => {
+    expect(meanwhileRange(battle)).toEqual([-334, -332]);
     expect(meanwhileRange(poi({ wikidata_qid: 'Q14', date_start: 1914 }))).toEqual([1913, 1915]);
   });
 });

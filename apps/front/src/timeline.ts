@@ -26,6 +26,27 @@ const PLAY_STEPS: { id: string; years: number; label: string }[] = [
 ];
 const PLAY_DELAYS = [0.5, 1, 2, 3, 5, 10];
 const PLAY_KEY = 'way:play';
+/** Transport: back (−3..−1), pause (0), forward (1..3); each notch goes 3 times faster. */
+const SPEEDS = [-3, -2, -1, 0, 1, 2, 3] as const;
+const SPEED_RATE = [1, 1, 3, 9];
+const SPEED_TITLES: Record<number, string> = {
+  [-3]: 'Recul très rapide', [-2]: 'Recul rapide', [-1]: 'Recul (←)', 0: 'Pause (↓)',
+  1: 'Lecture (→)', 2: 'Avance rapide', 3: 'Avance très rapide',
+};
+/** Fewer steps than this apart, steps get longer instead (the map keeps up). */
+const MIN_INTERVAL_MS = 150;
+
+/** Transport glyphs: triangles pointing the way, as many as the speed. */
+function speedIcon(v: number): string {
+  if (v === 0) return '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="2.5" width="3" height="11" rx="1"/><rect x="9.5" y="2.5" width="3" height="11" rx="1"/></svg>';
+  const n = Math.abs(v);
+  const w = 7 + (n - 1) * 5;
+  const tri = Array.from({ length: n }, (_, i) => {
+    const x = i * 5;
+    return v > 0 ? `<path d="M${x} 2.5v11l7-5.5z"/>` : `<path d="M${x + 7} 2.5v11l-7-5.5z"/>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} 16" style="width:${(w / 16) * 13}px" aria-hidden="true">${tri}</svg>`;
+}
 interface PlayPrefs { step: string; delay: number }
 
 function loadPlay(): PlayPrefs {
@@ -45,6 +66,20 @@ function loadPlay(): PlayPrefs {
 /** The window can shrink to a day. */
 const MIN_YEARS = DAY;
 const MAX_WIDTH = 0.45;
+/** Drawn width of a window of a few days. */
+const THIN_PX = 14;
+/** Narrower than this on screen, dragging the window moves it finely. */
+const FINE_PX = 24;
+
+/**
+ * Fine drag: how far a window of `years` moves for a drag of `dx` pixels:
+ * slowly near where it was grabbed (a day for a few pixels), faster further
+ * (a year for about 300 pixels with a one-day window).
+ */
+export function fineShift(dx: number, years: number): number {
+  const n = Math.abs(dx) / 8;
+  return Math.sign(dx) * years * (n <= 1 ? n : n ** 1.6);
+}
 
 /** Width on the scale of `years` around a decimal year. */
 function widthAt(center: number, years: number): number {
@@ -73,7 +108,10 @@ export class Timeline {
   private glide = 0;
   private playTimer: number | undefined;
   private play = loadPlay();
-  private playBtn: HTMLButtonElement;
+  /** −3..3: which way time runs, and how fast (0: paused). */
+  private speed = 0;
+  private lastSpeed = 1;
+  private speedBtns = new Map<number, HTMLButtonElement>();
 
   /** `onChange` gets the whole years shown and the same window to the day. */
   constructor(root: HTMLElement, initial: TimeWindow, private onChange: (w: TimeWindow, moment: TimeWindow) => void) {
@@ -82,7 +120,9 @@ export class Timeline {
     root.innerHTML = `
       <div class="tl-head">
         <div class="tl-play">
-          <button type="button" class="tl-play-btn" aria-label="Lecture" title="Faire défiler le temps (Espace)"></button>
+          <div class="tl-transport" role="group" aria-label="Défilement du temps">${SPEEDS.map((v) =>
+            `<button type="button" class="tl-speed${v === 0 ? ' pause' : ''}" data-speed="${v}" aria-label="${SPEED_TITLES[v]}" title="${SPEED_TITLES[v]}">${speedIcon(v)}</button>`,
+          ).join('')}</div>
           <select class="tl-play-step" aria-label="Pas de temps" title="Avance à chaque pas">
             ${PLAY_STEPS.map((x) => `<option value="${x.id}">${x.label}</option>`).join('')}
           </select>
@@ -111,7 +151,6 @@ export class Timeline {
     this.bordersEl = root.querySelector('.tl-borders')!;
     this.statusEl = root.querySelector('.tl-status')!;
     this.statusText = root.querySelector('.tl-status-text')!;
-    this.playBtn = root.querySelector('.tl-play-btn')!;
     this.bindPlay(root);
     this.bind();
     this.render();
@@ -172,13 +211,16 @@ export class Timeline {
   }
 
   get playing(): boolean {
-    return this.playTimer !== undefined;
+    return this.speed !== 0;
   }
 
   /** Years the window moves per step: the chosen value, or the era's unit (1 year today, 100 in antiquity). */
   private stepYears(): number {
     const fixed = PLAY_STEPS.find((x) => x.id === this.play.step)?.years ?? 0;
     if (fixed > 0) return fixed;
+    // A window of days or months goes forward by its own length.
+    const m = this.moment;
+    if (m.tEnd - m.tStart < 1) return m.tEnd - m.tStart;
     const { tStart, tEnd } = this.window;
     return Math.max(1, Math.round(bucketStep(Math.round((tStart + tEnd) / 2)) / 2));
   }
@@ -198,37 +240,50 @@ export class Timeline {
     this.setRange(a, b);
   }
 
+  /** Play (the last speed chosen) or pause. */
   setPlaying(on: boolean): void {
-    clearInterval(this.playTimer);
-    this.playTimer = undefined;
-    if (on) {
-      this.fitToStep();
-      this.advance();
-      this.playTimer = window.setInterval(() => this.advance(), this.play.delay * 1000);
-    }
-    this.playBtn.classList.toggle('on', on);
-    this.playBtn.setAttribute('aria-label', on ? 'Pause' : 'Lecture');
-    this.playBtn.innerHTML = on
-      ? '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="2.5" width="3" height="11" rx="1"/><rect x="9.5" y="2.5" width="3" height="11" rx="1"/></svg>'
-      : '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z"/></svg>';
+    this.setSpeed(on ? this.lastSpeed : 0);
   }
 
-  /** One play step: the window slides forward by the same number of years, with a short glide. */
-  private advance(): void {
+  /**
+   * Runs time at a speed: forward or back, each notch 3 times faster; under
+   * a step every 150 ms, steps get longer instead.
+   */
+  setSpeed(v: number): void {
+    v = Math.max(-3, Math.min(3, Math.round(v)));
+    const was = this.speed;
+    clearInterval(this.playTimer);
+    this.playTimer = undefined;
+    this.speed = v;
+    if (v !== 0) {
+      this.lastSpeed = v;
+      if (was === 0) this.fitToStep();
+      const every = (this.play.delay * 1000) / SPEED_RATE[Math.abs(v)]!;
+      const interval = Math.max(MIN_INTERVAL_MS, every);
+      const mul = interval / every;
+      const dir = Math.sign(v);
+      this.advance(dir * mul, interval);
+      this.playTimer = window.setInterval(() => this.advance(dir * mul, interval), interval);
+    }
+    for (const [s, b] of this.speedBtns) b.setAttribute('aria-pressed', String(s === v));
+  }
+
+  /** One play step (`k` steps, negative going back), with a short glide. */
+  private advance(k: number, interval: number): void {
     const { tStart, tEnd } = this.moment;
-    const step = this.stepYears();
-    if (tEnd >= MAX_YEAR) {
-      this.setPlaying(false);
+    const step = this.stepYears() * k;
+    if ((k > 0 && tEnd >= MAX_YEAR) || (k < 0 && tStart <= MIN_YEAR)) {
+      this.setSpeed(0);
       return;
     }
-    const d = Math.min(step, MAX_YEAR - tEnd);
+    const d = k > 0 ? Math.min(step, MAX_YEAR - tEnd) : Math.max(step, MIN_YEAR - tStart);
     const fromA = this.a;
     const fromB = this.b;
     const toA = yearToPos(tStart + d);
     const toB = yearToPos(tEnd + d);
     const start = performance.now();
     const token = ++this.glide;
-    const ms = Math.min(600, this.play.delay * 400);
+    const ms = Math.min(600, interval * 0.4);
     const tick = () => {
       if (token !== this.glide) return;
       const t = Math.min(1, (performance.now() - start) / ms);
@@ -255,18 +310,30 @@ export class Timeline {
         /* not remembered */
       }
       if (stepChanged) this.fitToStep();
-      if (this.playing) this.setPlaying(true); // new cadence right away
+      if (this.playing) this.setSpeed(this.speed); // new cadence right away
     };
     stepSel.addEventListener('change', persist);
     delaySel.addEventListener('change', persist);
-    this.playBtn.addEventListener('click', () => this.setPlaying(!this.playing));
+    root.querySelectorAll<HTMLButtonElement>('[data-speed]').forEach((b) => {
+      const v = Number(b.dataset.speed);
+      this.speedBtns.set(v, b);
+      b.addEventListener('click', () => this.setSpeed(v));
+    });
+    // Space: play / pause; ← back, faster at each press; → forward, likewise; ↓ pause.
     document.addEventListener('keydown', (e) => {
       const t = e.target as HTMLElement;
-      if (e.code !== 'Space' || /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(t.tagName) || t.isContentEditable) return;
+      if (/^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) || t.isContentEditable || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.code === 'Space') {
+        if (t.tagName === 'BUTTON') return;
+        this.setPlaying(!this.playing);
+      } else if (t === this.track) return; // the window has its own arrows
+      else if (e.key === 'ArrowRight') this.setSpeed(this.speed > 0 ? this.speed + 1 : 1);
+      else if (e.key === 'ArrowLeft') this.setSpeed(this.speed < 0 ? this.speed - 1 : -1);
+      else if (e.key === 'ArrowDown') this.setSpeed(0);
+      else return;
       e.preventDefault();
-      this.setPlaying(!this.playing);
     });
-    this.setPlaying(false);
+    this.setSpeed(0);
   }
 
   setBordersNote(text: string): void {
@@ -281,9 +348,11 @@ export class Timeline {
   private render(): void {
     this.win.style.left = `${this.a * 100}%`;
     this.win.style.width = `${(this.b - this.a) * 100}%`;
-    // A window of a few days is thinner than its drawn minimum: keep it centered on its date.
+    // A window of a few days is thinner than its drawn minimum: keep it centered on its date,
+    // without handles (grabbing it moves it finely).
     const px = (this.b - this.a) * this.track.clientWidth;
-    this.win.style.marginLeft = px < 6 ? `${-(6 - px) / 2}px` : '';
+    this.win.style.marginLeft = px < THIN_PX ? `${-(THIN_PX - px) / 2}px` : '';
+    this.win.classList.toggle('thin', px < FINE_PX);
     const m = this.moment;
     const days = Math.round((m.tEnd - m.tStart) * 365);
     let text: string;
@@ -328,23 +397,25 @@ export class Timeline {
   }
 
   private bind(): void {
-    type Mode = 'move' | 'start' | 'end';
-    let drag: { mode: Mode; origin: number; a: number; b: number } | null = null;
+    type Mode = 'move' | 'start' | 'end' | 'fine';
+    let drag: { mode: Mode; origin: number; x: number; a: number; b: number; t0: number; years: number } | null = null;
 
     this.track.addEventListener('pointerdown', (e) => {
       const target = e.target as HTMLElement;
       const p = this.posFromEvent(e);
+      const thin = this.win.classList.contains('thin');
       let mode: Mode = 'move';
-      if (target.classList.contains('start')) mode = 'start';
-      else if (target.classList.contains('end')) mode = 'end';
+      if (target.classList.contains('start') && !thin) mode = 'start';
+      else if (target.classList.contains('end') && !thin) mode = 'end';
       else if (!this.win.contains(target)) {
         // Click on the track: center the window there, then keep dragging it.
         const w = this.b - this.a;
         this.setRange(p - w / 2, p + w / 2);
-      }
+      } else if (thin) mode = 'fine';
       this.glide++; // the user takes over
-      this.setPlaying(false);
-      drag = { mode, origin: p, a: this.a, b: this.b };
+      this.setSpeed(0);
+      const m = this.moment;
+      drag = { mode, origin: p, x: e.clientX, a: this.a, b: this.b, t0: m.tStart, years: m.tEnd - m.tStart };
       this.track.setPointerCapture(e.pointerId);
       e.preventDefault();
     });
@@ -352,7 +423,15 @@ export class Timeline {
     this.track.addEventListener('pointermove', (e) => {
       if (!drag) return;
       const d = this.posFromEvent(e) - drag.origin;
-      if (drag.mode === 'move') this.setRange(drag.a + d, drag.b + d);
+      if (drag.mode === 'fine') {
+        // A few days wide: the window moves by days, then faster as the pointer goes further.
+        let t = drag.t0 + fineShift(e.clientX - drag.x, drag.years);
+        if (drag.years < 1) t = Math.round(t * 365) / 365; // from midnight to midnight
+        t = Math.max(MIN_YEAR, Math.min(MAX_YEAR - drag.years, t));
+        this.a = yearToPos(t);
+        this.b = yearToPos(t + drag.years);
+        this.commit();
+      } else if (drag.mode === 'move') this.setRange(drag.a + d, drag.b + d);
       else if (drag.mode === 'start') {
         const a = Math.max(0, Math.min(drag.b - this.minWidth(drag.b), drag.a + d));
         this.a = Math.max(a, drag.b - MAX_WIDTH);
@@ -379,12 +458,20 @@ export class Timeline {
     }, { passive: false });
 
     this.track.addEventListener('keydown', (e) => {
-      const w = this.b - this.a;
-      const step = e.shiftKey ? w : w / 4;
-      if (e.key === 'ArrowLeft') this.setRange(this.a - step, this.b - step);
-      else if (e.key === 'ArrowRight') this.setRange(this.a + step, this.b + step);
-      else return;
+      const dir = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+      if (!dir) return;
       e.preventDefault();
+      const m = this.moment;
+      const years = m.tEnd - m.tStart;
+      if (years < 1) {
+        // Under a year: a whole window at a time (a day, a week), ten with Shift.
+        const t = Math.round((m.tStart + dir * years * (e.shiftKey ? 10 : 1)) * 365) / 365;
+        this.setWindow({ tStart: t, tEnd: t + years });
+        return;
+      }
+      const w = this.b - this.a;
+      const step = (e.shiftKey ? w : w / 4) * dir;
+      this.setRange(this.a + step, this.b + step);
     });
   }
 }

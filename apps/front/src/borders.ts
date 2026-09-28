@@ -4,7 +4,7 @@ import {
 } from 'cesium';
 import { formatYear, type BordersIndex, type BordersPeriod, type Emblem, type EmblemsResponse, type PolityLabels } from '@way/shared';
 import { bounds, type Area, type Region, type Ring } from './divisions.ts';
-import { letter, shortName, type Lettering } from './lettering.ts';
+import { letter, nameRoots, shortName, type Lettering } from './lettering.ts';
 import { commonsImage, loadImage } from './media.ts';
 
 /** A realm, or a member drawn inside a composite realm, for the period shown. */
@@ -31,8 +31,11 @@ interface Drawn extends Area {
 
 interface Named { text: Lettering; style: 'realm' | 'region' }
 
-/** A coat of arms (or flag) in watermark: centered at lon/lat, `h` degrees of latitude high. */
-interface Mark { img: HTMLImageElement; lon: number; lat: number; h: number }
+/**
+ * A coat of arms (or flag) in watermark over a whole realm: centered at
+ * lon/lat, half its size in degrees of latitude, clipped to the realm's rings.
+ */
+interface Mark extends Area { img: HTMLCanvasElement; lon: number; lat: number; hw: number; hh: number; boxes: Area[] }
 
 const TILE = 256;
 type Style = 'normal' | 'highlight' | 'regions';
@@ -85,10 +88,46 @@ function measure(font: string, tracking: number) {
   };
 }
 
-/** Watermark strength by its height on screen (under the realm's color): gone when too small or filling the view. */
+/** Watermark strength by its height on screen (under the realm's color): gone when too small, fainter when blown up. */
 function markAlpha(px: number): number {
-  if (px < 22 || px > 1400) return 0;
-  return 0.3 * Math.min(1, (px - 22) / 30) * Math.min(1, (1400 - px) / 500);
+  if (px < 40) return 0;
+  return 0.28 * Math.min(1, (px - 40) / 60) * (px > 3000 ? Math.max(0.4, 1 - (px - 3000) / 6000) : 1);
+}
+
+/** Color of a realm on the map, solid (for its armies): same hue as its borders. */
+function realmColor(h: number): string {
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const v = 0.48 - 0.5 * 0.48 * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(v * 255).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+/** An emblem that fades out toward its edges, so it melts into the realm. */
+const fadedCache = new WeakMap<HTMLImageElement, HTMLCanvasElement>();
+function faded(img: HTMLImageElement): HTMLCanvasElement {
+  let c = fadedCache.get(img);
+  if (c) return c;
+  const w0 = img.naturalWidth || 256;
+  const h0 = img.naturalHeight || w0;
+  const k = 400 / Math.max(w0, h0);
+  c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w0 * k));
+  c.height = Math.max(1, Math.round(h0 * k));
+  const g = c.getContext('2d')!;
+  g.drawImage(img, 0, 0, c.width, c.height);
+  g.globalCompositeOperation = 'destination-in';
+  g.setTransform(c.width / 2, 0, 0, c.height / 2, c.width / 2, c.height / 2);
+  const grad = g.createRadialGradient(0, 0, 0, 0, 0, 1);
+  grad.addColorStop(0, 'rgba(0,0,0,1)');
+  grad.addColorStop(0.4, 'rgba(0,0,0,0.9)');
+  grad.addColorStop(0.75, 'rgba(0,0,0,0.4)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grad;
+  g.fillRect(-1, -1, 2, 2);
+  fadedCache.set(img, c);
+  return c;
 }
 
 /** Removes a layer, and drops the tiles it still had waiting to be drawn. */
@@ -215,20 +254,36 @@ class BordersTiles {
 
   private drawMarks(g: CanvasRenderingContext2D, west: number, south: number, east: number, north: number, sx: number, sy: number): void {
     for (const m of this.marks) {
-      const cos = Math.max(0.2, Math.cos((m.lat * Math.PI) / 180));
-      const hh = m.h / 2;
-      // A drawing without a size of its own is taken as square.
-      const hw = m.img.naturalWidth && m.img.naturalHeight ? (hh * m.img.naturalWidth) / m.img.naturalHeight : hh;
-      if (m.lon + hw / cos < west || m.lon - hw / cos > east || m.lat + hh < south || m.lat - hh > north) continue;
-      const alpha = markAlpha(m.h * sy);
+      if (m.east < west || m.west > east || m.north < south || m.south > north) continue;
+      const alpha = markAlpha(m.hh * 2 * sy);
       if (alpha <= 0.01) continue;
+      const cos = Math.max(0.2, Math.cos((m.lat * Math.PI) / 180));
+      if (m.lon + m.hw / cos < west || m.lon - m.hw / cos > east || m.lat + m.hh < south || m.lat - m.hh > north) continue;
+      // Inside the realm only: its pieces in this tile make the clip.
+      g.save();
+      g.beginPath();
+      m.rings.forEach((ring, k) => {
+        const b = m.boxes[k]!;
+        if (b.east < west || b.west > east || b.north < south || b.south > north) return;
+        let lx = NaN, ly = NaN;
+        for (let i = 0; i < ring.length; i++) {
+          const px = (ring[i]![0] - west) * sx;
+          const py = (north - ring[i]![1]) * sy;
+          if (i === 0) g.moveTo(px, py);
+          else if (Math.abs(px - lx) + Math.abs(py - ly) < 0.7) continue;
+          else g.lineTo(px, py);
+          lx = px;
+          ly = py;
+        }
+        g.closePath();
+      });
+      g.clip('evenodd');
       g.globalAlpha = alpha;
       // Degrees of latitude as the unit both ways, as for the names: the emblem keeps its shape.
       g.setTransform(sx / cos, 0, 0, sy, (m.lon - west) * sx, (north - m.lat) * sy);
-      g.drawImage(m.img, -hw, -hh, hw * 2, hh * 2);
+      g.drawImage(m.img, -m.hw, -m.hh, m.hw * 2, m.hh * 2);
+      g.restore();
     }
-    g.globalAlpha = 1;
-    g.setTransform(1, 0, 0, 1, 0, 0);
   }
 
   private drawNames(g: CanvasRenderingContext2D, west: number, south: number, east: number, north: number, sx: number, sy: number): void {
@@ -338,10 +393,15 @@ export class BordersLayer {
   private emblemImages = new Map<string, HTMLImageElement | null>();
   private emblemsTimer: number | undefined;
   private redrawTimer: number | undefined;
-  /** Where each realm's watermark goes (behind the middle of its name), from the last drawing. */
-  private anchors: { key: string; qid: string | null; lon: number; lat: number; h: number }[] = [];
+  /** Each realm's watermark: centered behind the middle of its name, over all of its pieces. */
+  private anchors: { key: string; qid: string | null; lon: number; lat: number; main: Area; area: Area }[] = [];
   /** Watermarks have their own layer, under the realms' colors: an emblem arriving redraws only them. */
   private marksLayer: ImageryLayer | null = null;
+
+  /** Armies' colors found in the period shown (names change it too). */
+  private colors = new Map<string, string>();
+  /** Set by the app: the period shown changed (its colors with it). */
+  onPeriod: () => void = () => undefined;
 
   constructor(private viewer: Viewer, private onNote: (text: string) => void) {
     onDrained = () => viewer.scene.requestRender();
@@ -403,6 +463,7 @@ export class BordersLayer {
       if (this.periodStart(this.wanted) !== from) return; // superseded
       this.current = period;
       this.show();
+      this.onPeriod();
       void this.loadNames(from);
       if (this.heraldry) void this.loadEmblems(from);
       this.onNote(`Frontières de ${formatYear(period.from)}${period.to > period.from ? ` à ${formatYear(period.to)}` : ''}`);
@@ -430,6 +491,32 @@ export class BordersLayer {
 
   realmByKey(key: string): BorderShape | null {
     return this.shapes.filter((s) => s.parent === null && realmKey(s) === key).sort((a, b) => b.km2 - a.km2)[0] ?? null;
+  }
+
+  /**
+   * The solid color of a country on the map (for its armies): the realm with
+   * that item, else that name, in the period shown; its own hue otherwise.
+   */
+  colorOf(qid: string | null, name: string): string {
+    const memo = `${qid}|${name}`;
+    const known = this.colors.get(memo);
+    if (known) return known;
+    let shape = qid ? this.shapes.find((s) => s.qid === qid) : undefined;
+    if (!shape && name) {
+      // By name: the same roots, in English or French ("France" and "Empire français"); the largest realm first.
+      const want = nameRoots(name);
+      const fits = (n: string) => {
+        const has = nameRoots(n);
+        return want.size > 0 && has.size > 0 && ([...want].every((w) => has.has(w)) || [...has].every((w) => want.has(w)));
+      };
+      shape = this.shapes
+        .filter((s) => s.parent === null && s.name && (fits(s.name) || fits(this.displayName(s.name))))
+        .sort((a, b) => b.km2 - a.km2)[0];
+    }
+    const root = shape ? (this.shapes.find((s) => s.id === shape.root) ?? shape) : null;
+    const color = realmColor(hue(root ? realmKey(root) : (qid ?? `n:${name}`)));
+    this.colors.set(memo, color);
+    return color;
   }
 
   /** Members drawn inside a composite realm (duchies, counties, the royal domain). */
@@ -527,6 +614,7 @@ export class BordersLayer {
   private show(): void {
     const period = this.current;
     if (!period) return;
+    this.colors.clear();
     const drawn: Drawn[] = [];
     const names: Named[] = [];
     const anchors: typeof this.anchors = [];
@@ -548,11 +636,11 @@ export class BordersLayer {
           const label = this.displayName(s.name);
           const text = this.lettering(`${s.id}:${label}`, s.main, label, 'realm');
           if (text) names.push({ text, style: 'realm' });
-          // One watermark per realm, on its largest piece, behind the middle of its name.
+          // One watermark per realm, over its largest piece, centered behind the middle of its name.
           if (text?.glyphs.length && !marked.has(realmKey(s))) {
             marked.add(realmKey(s));
             const mid = text.glyphs[Math.floor(text.glyphs.length / 2)]!;
-            anchors.push({ key: realmKey(s), qid: s.qid, lon: mid.lon, lat: mid.lat, h: Math.min(text.size * 4.5, (s.north - s.south) * 0.8) });
+            anchors.push({ key: realmKey(s), qid: s.qid, lon: mid.lon, lat: mid.lat, main: bounds([s.main]), area: s });
           }
         }
       } else {
@@ -580,7 +668,10 @@ export class BordersLayer {
       if (this.current?.from !== from) return;
       const changed = JSON.stringify(res.labels) !== JSON.stringify(this.frNames);
       this.frNames = res.labels;
-      if (changed) this.show();
+      if (changed) {
+        this.show();
+        this.onPeriod(); // French names can match more armies to their country
+      }
       if (res.pending > 0 && attempt < 12) {
         this.namesTimer = window.setTimeout(() => void this.loadNames(from, attempt + 1), 5_000);
       }
@@ -604,7 +695,7 @@ export class BordersLayer {
     if (!file) return null;
     if (!this.emblemImages.has(file)) {
       this.emblemImages.set(file, null);
-      void loadImage(commonsImage(file, 250)).then((img) => {
+      void loadImage(commonsImage(file, 500)).then((img) => {
         this.emblemImages.set(file, img);
         if (img) this.redrawSoon();
         else window.setTimeout(() => this.emblemImages.delete(file), 60_000);
@@ -626,7 +717,19 @@ export class BordersLayer {
       for (const a of this.anchors) {
         if (a.key === this.quietRealm) continue;
         const img = this.emblemImage(a.qid);
-        if (img) marks.push({ img, lon: a.lon, lat: a.lat, h: a.h });
+        if (!img) continue;
+        // Large enough to cover the realm's main piece from its center, keeping its shape.
+        const cos = Math.max(0.2, Math.cos((a.lat * Math.PI) / 180));
+        const aspect = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1;
+        const needH = Math.max(a.lat - a.main.south, a.main.north - a.lat);
+        const needW = Math.max(a.lon - a.main.west, a.main.east - a.lon) * cos;
+        const hh = Math.max(needH, needW / aspect) * 1.1;
+        const rings = a.area.rings;
+        marks.push({
+          img: faded(img), lon: a.lon, lat: a.lat, hh, hw: hh * aspect, rings,
+          west: a.area.west, south: a.area.south, east: a.area.east, north: a.area.north,
+          boxes: rings.map((r) => bounds([r])),
+        });
       }
     }
     const old = this.marksLayer;

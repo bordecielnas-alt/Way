@@ -268,6 +268,19 @@ app.get<{ Querystring: { f?: string; w?: string; u?: string } }>('/api/media', a
   }
 });
 
+// Land cover tiles for the Géographie layer, kept with the images.
+app.get<{ Params: { z: string; x: string; y: string } }>('/api/geo/landcover/:z/:x/:y', async (req, reply) => {
+  const [z, x, y] = [req.params.z, req.params.x, req.params.y].map((v) => Number(v.replace(/\.png$/, '')));
+  try {
+    const got = await media.get({ tile: 'landcover', z: z!, x: x!, y: y! });
+    if (!got) return reply.code(400).send({ error: 'tuile invalide' });
+    return reply.header('Content-Type', got.type).header('Cache-Control', 'public, max-age=2592000').send(got.data);
+  } catch (e) {
+    req.log.warn(`landcover ${z}/${x}/${y} failed: ${(e as Error).message}`);
+    return reply.code(502).send({ error: 'tuile indisponible' });
+  }
+});
+
 app.delete('/api/admin/media', async () => {
   media.clear();
   return { bytes: media.bytes, count: media.count };

@@ -3,12 +3,12 @@
 /** What someone is doing at a moment of their life. */
 export type ActivityKind =
   | 'birth' | 'death' | 'study' | 'stay' | 'work' | 'reign' | 'office'
-  | 'battle' | 'coronation' | 'marriage' | 'event' | 'travel' | 'wait';
+  | 'battle' | 'coronation' | 'marriage' | 'event' | 'travel' | 'sail' | 'wait';
 
 export const ACTIVITY_LABELS: Record<ActivityKind, string> = {
   birth: 'Naissance', death: 'Mort', study: 'Études', stay: 'Séjour', work: 'Travail', reign: 'Règne',
   office: 'Fonction', battle: 'Combat', coronation: 'Couronnement', marriage: 'Mariage', event: 'Événement',
-  travel: 'En route', wait: 'Attente',
+  travel: 'En route', sail: 'En bateau', wait: 'Attente',
 };
 
 /** A dated moment of a life, placed when Wikidata knows where. Years are decimal (1805.9 ≈ December 1805). */

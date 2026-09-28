@@ -188,10 +188,121 @@ function house(g: CanvasRenderingContext2D, cx: number, cy: number, s: number): 
   g.stroke();
 }
 
+function anchor(g: CanvasRenderingContext2D, cx: number, cy: number, s: number): void {
+  g.strokeStyle = '#e6dcc4';
+  g.lineWidth = 1.5;
+  g.lineCap = 'round';
+  g.beginPath();
+  g.arc(cx, cy - s * 0.75, s * 0.22, 0, Math.PI * 2);
+  g.moveTo(cx, cy - s * 0.5);
+  g.lineTo(cx, cy + s * 0.8);
+  g.moveTo(cx - s * 0.45, cy - s * 0.2);
+  g.lineTo(cx + s * 0.45, cy - s * 0.2);
+  g.moveTo(cx - s * 0.8, cy + s * 0.2);
+  g.quadraticCurveTo(cx - s * 0.6, cy + s * 0.85, cx, cy + s * 0.8);
+  g.quadraticCurveTo(cx + s * 0.6, cy + s * 0.85, cx + s * 0.8, cy + s * 0.2);
+  g.stroke();
+}
+
 const SIGNS: Record<ActivityKind, (g: CanvasRenderingContext2D, cx: number, cy: number, s: number) => void> = {
   birth: star, death: cross, study: book, stay: house, work: scroll, reign: crown, office: scroll,
-  battle: swords, coronation: crown, marriage: rings, event: scroll, travel: boot, wait: hourglass,
+  battle: swords, coronation: crown, marriage: rings, event: scroll, travel: boot, sail: anchor, wait: hourglass,
 };
+
+/** A wooden hull on a few waves, `w` wide, its deck at y. */
+function hull(g: CanvasRenderingContext2D, cx: number, y: number, w: number, color: string): void {
+  g.beginPath();
+  g.moveTo(cx - w / 2 - 4, y);
+  g.lineTo(cx + w / 2 + 6, y - 2);
+  g.quadraticCurveTo(cx + w / 2, y + 11, cx + w / 2 - 6, y + 12);
+  g.lineTo(cx - w / 2 + 4, y + 12);
+  g.quadraticCurveTo(cx - w / 2 - 2, y + 8, cx - w / 2 - 4, y);
+  g.closePath();
+  const grad = g.createLinearGradient(0, y, 0, y + 12);
+  grad.addColorStop(0, '#8a5a32');
+  grad.addColorStop(1, '#4a2e17');
+  g.fillStyle = grad;
+  g.fill();
+  g.strokeStyle = INK;
+  g.lineWidth = 1.2;
+  g.stroke();
+  // a stripe in the owner's color
+  g.beginPath();
+  g.moveTo(cx - w / 2 - 1, y + 3.5);
+  g.lineTo(cx + w / 2 + 3, y + 2);
+  g.strokeStyle = color;
+  g.lineWidth = 2;
+  g.stroke();
+  // waves
+  g.strokeStyle = 'rgba(210, 232, 245, 0.85)';
+  g.lineWidth = 1.4;
+  g.lineCap = 'round';
+  for (const [x0, dy] of [[-w / 2 - 8, 15], [-6, 17], [w / 2 - 4, 15]] as const) {
+    g.beginPath();
+    g.moveTo(cx + x0, y + dy);
+    g.quadraticCurveTo(cx + x0 + 4, y + dy - 3, cx + x0 + 8, y + dy);
+    g.quadraticCurveTo(cx + x0 + 12, y + dy + 3, cx + x0 + 16, y + dy);
+    g.stroke();
+  }
+}
+
+/** An army at sea or on a river: a ship under a square sail in its color (its flag at the masthead). */
+function ship(g: CanvasRenderingContext2D, color: string, flag: HTMLImageElement | null): void {
+  const cx = W / 2;
+  const deck = H - 26;
+  // mast
+  g.beginPath();
+  g.moveTo(cx, deck + 2);
+  g.lineTo(cx, 10);
+  g.strokeStyle = '#5b3f22';
+  g.lineWidth = 2.4;
+  g.stroke();
+  // sail, swollen by the wind
+  g.beginPath();
+  g.moveTo(cx - 17, 20);
+  g.lineTo(cx + 17, 20);
+  g.quadraticCurveTo(cx + 21, 34, cx + 17, deck - 8);
+  g.lineTo(cx - 17, deck - 8);
+  g.quadraticCurveTo(cx - 13, 34, cx - 17, 20);
+  g.closePath();
+  const grad = g.createLinearGradient(cx - 17, 0, cx + 17, 0);
+  grad.addColorStop(0, shade(color, -0.25));
+  grad.addColorStop(0.55, shade(color, 0.2));
+  grad.addColorStop(1, shade(color, -0.3));
+  g.fillStyle = grad;
+  g.fill();
+  g.strokeStyle = INK;
+  g.lineWidth = 1.2;
+  g.stroke();
+  // yard
+  g.beginPath();
+  g.moveTo(cx - 19, 19);
+  g.lineTo(cx + 19, 19);
+  g.strokeStyle = '#5b3f22';
+  g.lineWidth = 2;
+  g.stroke();
+  // pennant or flag at the masthead
+  if (flag) {
+    const h = 10;
+    const w = Math.min(18, Math.max(10, (h * flag.naturalWidth) / Math.max(1, flag.naturalHeight)));
+    g.drawImage(flag, cx + 1, 3, w, h);
+    g.strokeStyle = INK;
+    g.lineWidth = 0.8;
+    g.strokeRect(cx + 1, 3, w, h);
+  } else {
+    g.beginPath();
+    g.moveTo(cx + 1, 6);
+    g.lineTo(cx + 16, 9);
+    g.lineTo(cx + 1, 12);
+    g.closePath();
+    g.fillStyle = color;
+    g.fill();
+    g.strokeStyle = INK;
+    g.lineWidth = 0.9;
+    g.stroke();
+  }
+  hull(g, cx, deck, 40, color);
+}
 
 /** Round badge with the activity's sign. */
 function badge(g: CanvasRenderingContext2D, kind: ActivityKind, cx: number, cy: number): void {
@@ -225,15 +336,18 @@ function figurine(g: CanvasRenderingContext2D, color: string, kind: ActivityKind
   const cx = W / 2;
   const dead = kind === 'death';
   const body = dead ? '#8a857c' : color;
-  groundShadow(g);
-  // plinth
-  g.beginPath();
-  g.ellipse(cx, H - 9, 15, 5, 0, 0, Math.PI * 2);
-  g.fillStyle = '#3b2a1b';
-  g.fill();
-  g.strokeStyle = GOLD;
-  g.lineWidth = 1.2;
-  g.stroke();
+  const sail = kind === 'sail';
+  if (!sail) {
+    groundShadow(g);
+    // plinth
+    g.beginPath();
+    g.ellipse(cx, H - 9, 15, 5, 0, 0, Math.PI * 2);
+    g.fillStyle = '#3b2a1b';
+    g.fill();
+    g.strokeStyle = GOLD;
+    g.lineWidth = 1.2;
+    g.stroke();
+  }
   // robe
   const grad = g.createLinearGradient(cx - 14, 0, cx + 14, 0);
   grad.addColorStop(0, shade(body, -0.35));
@@ -280,6 +394,8 @@ function figurine(g: CanvasRenderingContext2D, color: string, kind: ActivityKind
     g.lineWidth = 1.5;
     g.stroke();
   }
+  // Aboard: standing in a boat.
+  if (sail) hull(g, cx, H - 24, 34, color);
   if (kind === 'study') book(g, cx, H - 30, 7);
   if (kind === 'travel') {
     g.beginPath();
@@ -412,6 +528,13 @@ export function armyFigure(color: string, kind: ActivityKind, flag: HTMLImageEle
   let c = cache.get(key);
   if (c) return c;
   const [cv, g] = canvas();
+  if (kind === 'sail') {
+    ship(g, color, flag);
+    badge(g, kind, W - 12, H - 36);
+    cache.set(key, cv);
+    ids.set(cv, key);
+    return cv;
+  }
   groundShadow(g);
   // banner behind
   g.beginPath();

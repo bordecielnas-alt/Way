@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fitParabola, letter, type Ring } from './lettering.ts';
+import { fitParabola, letter, nameRoots, type Ring } from './lettering.ts';
 
 const measure = () => 0.8;
 
@@ -40,5 +40,15 @@ describe('fitParabola', () => {
     expect(a).toBeCloseTo(2);
     expect(b).toBeCloseTo(0);
     expect(c).toBeCloseTo(1);
+  });
+});
+
+describe('armies and their country', () => {
+  it('finds the country by the roots of its name, in English or French', () => {
+    expect([...nameRoots('Première République française')]).toEqual(['fran']);
+    expect([...nameRoots('Empire français')]).toEqual(['fran']);
+    expect([...nameRoots('France')]).toEqual(['fran']);
+    expect([...nameRoots('Royaume de Grande-Bretagne')]).toEqual(['bret']);
+    expect([...nameRoots("Royaume d'Espagne")]).toEqual(['espa']);
   });
 });

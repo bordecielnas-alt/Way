@@ -186,3 +186,13 @@ export function shortName(name: string): string {
   const s = name.replace(TITLE, '').trim();
   return s.length >= 2 ? s.charAt(0).toUpperCase() + s.slice(1) : name;
 }
+
+const normName = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** Words saying what kind of state, not which one. */
+const STATE_WORDS = /^(kingdom|empire|republic|royaume|republique|premiere|first|second|deuxieme|third|troisieme|grand|grande?|duchy|duche|principality|principaute|electorate|electorat|sultanate|sultanat|khanate|khanat|of|the|de|du|des|la|le|l|d|et|and|saint|holy|state|etat|confederation|union|dynasty|dynastie)$/;
+
+/** Roots of the words naming a state ("Première République française" -> fran): France and the French Empire meet. */
+export function nameRoots(name: string): Set<string> {
+  return new Set(normName(name).split(' ').filter((w) => w.length > 2 && !STATE_WORDS.test(w)).map((w) => w.slice(0, 4)));
+}

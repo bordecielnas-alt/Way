@@ -77,8 +77,8 @@ describe('regions of a territory', () => {
 
 describe('settings and meanwhile', () => {
   it('fills interface defaults', () => {
-    expect(normalizeUi(undefined)).toEqual({ sounds: true, volume: 0.6, hoverOpen: false, meanwhileMaxSpan: 20 });
-    expect(normalizeUi({ volume: 3, meanwhileMaxSpan: -1 } as never)).toMatchObject({ volume: 1, meanwhileMaxSpan: 20 });
+    expect(normalizeUi(undefined)).toEqual({ sounds: true, volume: 0.6, hoverOpen: false, meanwhileMaxSpan: 1 });
+    expect(normalizeUi({ volume: 3, meanwhileMaxSpan: -1 } as never)).toMatchObject({ volume: 1, meanwhileMaxSpan: 1 });
   });
 
   it('measures event spans across year 0', () => {

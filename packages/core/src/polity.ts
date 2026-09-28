@@ -81,22 +81,43 @@ export function nameYears(file: string): { start: number | null; end: number | n
   return { start: null, end: null };
 }
 
+/** Years an item existed (a realm of the past has an end; today's country has none). */
+export interface Lifespan { start: number | null; end: number | null }
+
 /**
- * The file in use at a year: one dated for that year first, else an undated
- * one whose name does not say another era; never one of another era.
+ * The file in use at a year, only when a source dates it: a statement dated
+ * for that year first; else an undated one whose name gives years around it,
+ * or that belongs to a realm of the past alive then. Today's country without
+ * dates on its flag gets nothing (its current flag is not the one of 1806).
  */
-export function fileAt(files: DatedFile[], year: number): string | null {
-  const real = files.filter((f) => !FICTIONAL.test(f.file));
+export function fileAt(files: DatedFile[], year: number, life: Lifespan = { start: null, end: null }): string | null {
+  // Its name says another era: not that one, whatever the statement's dates.
+  const real = files.filter((f) => !FICTIONAL.test(f.file) && !laterDesign(f.file, year) && nameFits(f.file, year));
   const dated = real.filter((f) => f.start !== null || f.end !== null);
   const now = dated
     .filter((f) => (f.start ?? -Infinity) <= year && year <= (f.end ?? Infinity))
     .sort((a, b) => (b.start ?? -Infinity) - (a.start ?? -Infinity))[0];
   if (now) return now.file;
-  const fits = (f: DatedFile) => {
+  const bounded = life.end !== null && (life.start ?? -Infinity) - 5 <= year && year <= life.end + 5;
+  const sourced = (f: DatedFile) => {
     const n = nameYears(f.file);
-    return (n.start === null || n.start <= year + 5) && (n.end === null || n.end >= year - 5);
+    return bounded || n.start !== null || n.end !== null;
   };
-  return real.find((f) => f.start === null && f.end === null && fits(f))?.file ?? null;
+  return real.find((f) => f.start === null && f.end === null && sourced(f))?.file ?? null;
+}
+
+/** The years in a file's name (if any) take in the year, give or take five. */
+function nameFits(file: string, year: number): boolean {
+  const n = nameYears(file);
+  return (n.start === null || n.start <= year + 5) && (n.end === null || n.end >= year - 5);
+}
+
+/** A lone year in the name well after the year shown ("Arms of Prussia 1873" for 1806): a later design. */
+function laterDesign(file: string, year: number): boolean {
+  const n = nameYears(file);
+  if (n.start !== null || n.end !== null) return false;
+  const years = [...file.matchAll(/(?<![\d–-])(1[0-9]{3}|20[0-9]{2})(?![\d–-])/g)].map((m) => Number(m[1]));
+  return years.length === 1 && years[0]! > year + 25;
 }
 
 const range = (xs: number[], pick: (...v: number[]) => number) => (xs.length ? pick(...xs) : null);
@@ -433,10 +454,12 @@ export class PolityService {
     const emblems: EmblemsResponse['emblems'] = {};
     for (const qid of new Set(qids)) {
       const hit = this.cache.emblems[qid];
-      if (!hit || Date.now() - hit.at > this.refreshMs()) this.emblemQueue.add(qid);
+      // Entries from before lifespans were kept are asked again.
+      if (!hit || !('end' in hit) || Date.now() - hit.at > this.refreshMs()) this.emblemQueue.add(qid);
       if (!hit) continue;
-      const coa = fileAt(hit.coa, year);
-      const flag = fileAt(hit.flag, year);
+      const life = { start: hit.start ?? null, end: hit.end ?? null };
+      const coa = fileAt(hit.coa, year, life);
+      const flag = fileAt(hit.flag, year, life);
       if (coa || flag) emblems[qid] = { coa, flag };
     }
     if (this.emblemQueue.size) this.chore('emblems', () => this.fetchEmblems());
@@ -448,7 +471,7 @@ export class PolityService {
     const got = await polity.itemEmblems(ids);
     const at = Date.now();
     for (const id of ids) {
-      this.cache.emblems[id] = { ...(got.get(id) ?? { coa: [], flag: [] }), at };
+      this.cache.emblems[id] = { ...(got.get(id) ?? { coa: [], flag: [], start: null, end: null }), at };
       this.emblemQueue.delete(id);
     }
     this.scheduleSave();

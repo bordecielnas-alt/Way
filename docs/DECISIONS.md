@@ -86,7 +86,7 @@ Construites **sans IA**, à partir des relations Wikidata (`packages/core/src/do
 | Porte | Choix |
 |---|---|
 | 🕰️ Ici, plus tard (ou plus tôt) | entités datées à moins de 8 km (40 km si les environs sont vides), plus tard si possible ; célébrité pondérée, les entités après 1900 comptent moins |
-| 🌍 Pendant ce temps | même époque (± une demi-tranche), à plus de 1 500 km ; cache d'abord, sinon requête mondiale |
+| 🌍 Pendant ce temps | à un an près, à plus de 1 500 km ; cache d'abord, sinon requête mondiale |
 | 🔗 La suite | suite ou conséquence explicite (P156, P1542…), sinon la partie suivante du même ensemble (P361 : la bataille suivante d'une guerre), sinon un événement du même protagoniste ; « Avant cela » en dernier recours |
 | ❓ Surprise | voisin peu connu (2 à 40 langues), d'une autre catégorie |
 
@@ -198,7 +198,7 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
   prendre une place de plus auprès de Wikidata (3 au lieu de 2).
 - **Correspondance** : un État encore existant (France) ne gagne plus d'office avant 1800 : les variantes
   « Kingdom of X » / « X Empire » sont toujours essayées. Les anciennes correspondances sont recalculées.
-- **« Pendant ce temps »** ignore les événements de plus de 20 ans (réglable, Réglages → Interface).
+- **« Pendant ce temps »** ignore les événements de plus d'un an (20 ans avant ; réglable, Réglages → Interface).
 - **Lecture** : bouton ▶ sur la timeline (ou Espace). Pas automatique (l'unité de l'époque : 1 an au
   XXe siècle, bien plus dans l'Antiquité) ou fixe, toutes les 1 à 10 s. La fenêtre garde sa durée en
   années.
@@ -256,8 +256,8 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
   autre époque (« (1901–1952) ») ou une invention (« Fictitious ») est écarté. Dessinés en filigrane sous la
   couleur du royaume, derrière le milieu de son nom, sur un calque à part : un blason qui arrive ne
   redessine pas les frontières.
-- **Armées** (même rubrique) : bannière au drapeau du camp à la décennie de la guerre, soldats à la couleur
-  dominante du drapeau (la plus fréquente, les couleurs vives comptant triple face au blanc et au noir).
+- **Armées** (même rubrique) : bannière au drapeau du camp à la décennie de la guerre. Les soldats portent
+  la couleur de leur pays sur la carte (depuis la version suivante, voir plus bas).
 - **Affrontement** : deux armées ou plus à la même bataille (même élément Wikidata) au même moment :
   épées croisées sur un éclat, entre les camps écartés de part et d'autre.
 - **Lecture au jour** : pas de 1 jour, 1 semaine, 1 mois, puis 1 à 100 ans, cadence dès 0,5 s. Choisir un
@@ -275,6 +275,41 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
   noms, blasons, parcours et armées (1 mois à 5 ans, ou jamais ; 6 mois par défaut), images gardées ou non,
   bouton pour vider les images. Les armées de la décennie suivante sont préchargées pendant la lecture.
 
+## Trajets, défilement, géographie
+
+- **Blasons sourcés** : un fichier n'est montré que si une source le date pour l'année : qualificatifs P580 /
+  P582 ; ou années dans son nom autour de l'année ; ou royaume du passé (P576, dissous) vivant à cette date.
+  Le drapeau sans date d'un pays actuel n'est plus pris (Espagne de 1806). Un nom qui contredit les dates de la
+  déclaration l'emporte (« Flag of Spain (1760–1785) » écarté en 1806 malgré des dates plus larges ; une année
+  seule bien plus tardive, « Arms of Prussia 1873 », aussi). Sans blason sourcé : rien.
+- **Filigrane sur tout le territoire** : le blason couvre la plus grande pièce du royaume depuis le milieu de
+  son nom, découpé à ses frontières, estompé vers les bords (dégradé radial), à 28 % au plus sous la couleur.
+- **Couleur des armées** : celle du pays sur la carte, même teinte que ses frontières. Le camp est cherché par
+  son élément Wikidata, sinon par les racines de son nom en anglais ou en français (« Première République
+  française », « France » et « Empire français » se rejoignent sur « fran »), le plus grand royaume d'abord.
+- **Trajets réalistes et bateaux** : grille du monde à 0,25° tirée de Natural Earth (domaine public, 50 m :
+  terres, lacs, fleuves de rang 5 au plus ; Bosphore, Dardanelles, Øresund, Kertch, Messine, Gibraltar ouverts à
+  la main), 44 Ko, construite une fois par `scripts/build-geo.ts`. Recherche A* entre deux lieux, à pied (terre,
+  rives) ou à bord (mer, lacs, fleuves). Coûts par km : marche 1, fleuve 0,75, mer 0,8 ; embarquer en mer vaut
+  400 km (20 jours de marche pour réunir une flotte), sur un fleuve 80, débarquer 30. D'où : on contourne une
+  baie, on traverse la Méditerranée, on descend un grand fleuve seulement sur une longue distance. À bord, le
+  temps passe trois fois moins. Sans chemin trouvé (l'autre bout du monde) : ligne droite, à bord au-dessus de
+  l'eau. Recherches en quelques millisecondes (Paris–Moscou 6 ms, Toulon–Alexandrie 3 ms), gardées en
+  mémoire ; 25 ms au plus par image, le reste juste après. Les personnages suivent les mêmes chemins.
+- **Défilement** : ◂◂◂ ◂◂ ◂ ❚❚ ▸ ▸▸ ▸▸▸ ; chaque cran va trois fois plus vite ; sous 150 ms entre deux pas,
+  les pas s'allongent. Clavier : ← recule (plus vite à chaque appui), → avance, ↓ pause, Espace lecture / pause.
+  En pas auto, une fenêtre de moins d'un an avance de sa propre largeur.
+- **Curseur fin** : une fenêtre de moins de 24 px se saisit entière (sans poignées) et se déplace au jour près
+  près du point de saisie, puis de plus en plus vite (8 px = un jour, 300 px ≈ un an pour une fenêtre d'un
+  jour). Flèches sur la frise : une fenêtre à la fois (dix avec Maj).
+- **« Pendant ce temps »** : à un an près de l'événement, quelle que soit l'époque (avant : une demi-tranche,
+  25 ans dans l'Antiquité).
+- **Géographie** (panneau de gauche) : relief (ombrage Esri World Hillshade), fleuves et lacs (Natural Earth,
+  dessinés en tuiles, les petits apparaissant en descendant), et l'occupation du sol MODIS 2001 (NASA GIBS,
+  classes IGBP) repeinte classe par classe : forêts, savanes et maquis, prairies et steppes, déserts, marais,
+  glaces. Cultures et villes laissées de côté (d'aujourd'hui). 2001, la plus ancienne année, pour le moins de
+  défrichements récents. Tuiles de NASA passées par le serveur et gardées avec les images (`/api/geo/landcover`).
+
 ## Hors V1 (prévu)
 
 Histogramme de densité, carnet de voyage, brouillard de connaissance, fils rouges,
@@ -284,9 +319,12 @@ préchargement nocturne.
 
 - Noms des territoires : en anglais tant que la traduction n'est pas trouvée ou pas sûre ; titre traduit par motif sinon, le lieu restant en anglais (« duché d'Athens »).
 - Frontières Cliopatria : couverture des vassaux inégale selon les régions et les époques ; en dessous, régions estimées.
-- Personnages : aussi précis que Wikidata ; trajets supposés en ligne droite ; un personnage peu renseigné (naissance et mort seulement) attend puis traverse la carte.
+- Personnages : aussi précis que Wikidata ; un personnage peu renseigné (naissance et mort seulement) attend puis traverse la carte.
+- Trajets : grille de 28 km ; pas de montagnes ni de routes (on franchit les Alpes comme la plaine) ; côtes de 2020 ; les détroits fins ouverts à la main seulement.
+- Géographie : terres d'aujourd'hui (forêts de 2001, pas celles du Moyen Âge) ; couverture du sol détaillée au mieux à 600 m.
+- Couleur des armées : un camp dont ni l'élément ni le nom ne se retrouvent sur la carte garde une teinte à lui.
 - Armées : seules les batailles rattachées à une guerre (P361) et localisées ; les camps viennent des participants de chaque bataille. Austerlitz, par exemple, n'est rattachée à aucune guerre dans Wikidata : pas d'armées ni d'affrontement ce jour-là.
-- Blasons : aussi justes que Wikidata ; un élément sans dates sur ses armoiries peut montrer celles d'une autre époque (Espagne de 1806 sous le drapeau de 1873).
+- Blasons : aussi justes que Wikidata ; moins de royaumes en ont (67 en 1806 contre 83), faute de source qui date le fichier.
 - Lecture au jour : points et frontières restent à l'année ; un événement daté à l'année seulement tombe le 1er janvier.
 - Régions : tracé approximatif ; couverture Wikidata inégale (bonne pour l'Empire ottoman, le Saint-Empire, la France ; faible pour les niveaux fins : aucun comté rattaché au duché de Bourgogne).
 - Sons : vérifiés sans erreur, pas à l'oreille.

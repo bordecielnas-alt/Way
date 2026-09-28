@@ -29,8 +29,9 @@ Sur le globe : frontières datées à l'année, noms des royaumes peints sur la 
 = sa fiche ; nouveau clic dedans = découpage en vassaux et provinces (frontières de l'époque, ou limites
 estimées à défaut), et ainsi de suite. Panneau **Personnages** (en bas à gauche) : suivre un ou plusieurs
 personnages (études, voyages, combats, couronnement…) et afficher les armées en campagne ; rubrique
-**Blasons** : armoiries en filigrane sur les territoires, drapeaux sur les armées. ▶ sur la timeline (ou
-Espace) fait défiler le temps, jusqu'au jour près. Sons (et import de vos propres fichiers audio), ouverture
+**Blasons** : armoiries en filigrane sur les territoires, drapeaux sur les armées (en bateau sur la mer et les
+grands fleuves) ; rubrique **Géographie** : relief, fleuves, forêts, steppes, déserts, marais, glaces. Boutons
+◂◂◂ … ▸▸▸ sous la timeline (ou ← ↓ → et Espace) : reculer, pause, avancer, jusqu'au jour près. Sons (et import de vos propres fichiers audio), ouverture
 au survol et filtre « Pendant ce temps » : Réglages → Interface. Taille et durée du cache (jusqu'à 100 Go) :
 Réglages → Cache.
 
@@ -72,3 +73,4 @@ data/borders       Frontières historiques (GPL-3.0, non versionnées)
 - Images : [Wikimedia Commons](https://commons.wikimedia.org), chacune sous sa propre licence (domaine public, CC BY-SA…). Gardées en cache sur votre serveur pour l'affichage (Réglages → Cache pour le désactiver) ; les photos des fiches renvoient à leur page Commons. Les blasons en filigrane sur la carte n'ont pas de crédit individuel : leur nom de fichier est celui de la page Commons.
 - Frontières : [Cliopatria](https://github.com/Seshat-Global-History-Databank/cliopatria), Seshat Global History Databank (CC BY 4.0), datées à l'année, simplifiées au kilomètre ; avant −3400, [aourednik/historical-basemaps](https://github.com/aourednik/historical-basemaps) (GPL-3.0), instantanés approximatifs.
 - Fond de carte : Natural Earth II (livré avec Cesium) ; satellite : Esri World Imagery par défaut (configurable).
+- Géographie : [Natural Earth](https://www.naturalearthdata.com) (domaine public) pour les terres, fleuves et lacs, et les trajets des armées ; occupation du sol MODIS (IGBP, 2001) de la NASA via [GIBS](https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api) (données ouvertes) ; ombrage du relief © Esri.
