@@ -1,7 +1,8 @@
-import type { PoiLite } from './poi.ts';
+import type { PoiLite, Source } from './poi.ts';
 
 // Doors (brief §4.5): every card ends with a few chosen destinations.
-export const DOOR_KINDS = ['time', 'meanwhile', 'next', 'surprise'] as const;
+// Cause and consequence first: they are the threads a walk follows.
+export const DOOR_KINDS = ['cause', 'effect', 'meanwhile', 'time', 'surprise'] as const;
 export type DoorKind = (typeof DOOR_KINDS)[number];
 
 export interface Door {
@@ -11,6 +12,11 @@ export interface Door {
   /** Why this destination, e.g. "Guerres d'Alexandre le Grand" or "à 4 200 km à l'est". */
   hint: string;
   poi: PoiLite;
+  /**
+   * The link was read by an AI in this article (Wikidata did not state it):
+   * shown with the door, so the reader can check it.
+   */
+  source?: Source;
 }
 
 export interface DoorsResponse {

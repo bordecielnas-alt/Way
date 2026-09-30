@@ -17,7 +17,7 @@ const router = createRouter(cfg, settings);
 const auth = new Auth(join(cfg.dataDir ?? devDir, 'auth.json'));
 const bus: JobBus = cfg.redisUrl ? new RedisBus(cfg.redisUrl) : new InlineBus(store, cfg, router);
 const views = new ViewService(store, bus, cfg, () => router.hasProvider('extract'));
-const doors = new DoorService(store, () => normalizeUi(settings.get().ui).meanwhileMaxSpan);
+const doors = new DoorService(store, () => normalizeUi(settings.get().ui).meanwhileMaxSpan, router);
 const { clio, borders } = createBorders(cfg);
 const polities = createPolities(cfg, clio, settings);
 // Names, coats of arms and faiths of every realm, completed little by little in the background.

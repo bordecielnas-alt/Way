@@ -4,7 +4,7 @@ import { cellsForPoint, makeKey, type Poi } from '@way/shared';
 import { listSnapshots, snapshotFor } from './borders.ts';
 import { enforceCacheLimit } from './cache.ts';
 import { loadConfig } from './config.ts';
-import { meanwhileRange, nextCandidates, surpriseCandidates, timeCandidates } from './doors.ts';
+import { causeCandidates, effectCandidates, meanwhileRange, surpriseCandidates, timeCandidates } from './doors.ts';
 import type { DatedRow, RelatedRow } from '@way/providers';
 import { planJobs } from './pipeline.ts';
 import { MemoryStore } from './store/memory.ts';
@@ -102,7 +102,7 @@ async function exerciseStore(store: Store) {
   expect((await store.getPoisByQids(['Q1012797', 'Q404'])).map((p) => p.title)).toEqual(['Ostie']);
   expect((await store.queryTimeRange(100, 120, 5)).map((p) => p.title)).toEqual(['Empire romain']);
   expect(await store.getDoors(rome.id)).toBeNull();
-  const stored = { v: 1, doors: [{ kind: 'next' as const, title: 'La suite', hint: 'x', poi_id: ostia.id }], empty: [] };
+  const stored = { v: 1, doors: [{ kind: 'effect' as const, title: 'La suite', hint: 'x', poi_id: ostia.id }], empty: [] };
   await store.setDoors(rome.id, stored);
   expect(await store.getDoors(rome.id)).toEqual(stored);
 
@@ -152,14 +152,27 @@ const row = (qid: string, year: number, over: Partial<DatedRow> = {}): DatedRow 
 describe('doors', () => {
   const battle = poi({ wikidata_qid: 'Q1', title: 'Bataille A', category: 'battle', date_start: -333 });
 
-  it('"next" prefers the closest later part of the same whole over earlier ones', () => {
-    const rel = (qid: string, year: number, r: RelatedRow['rel'], sitelinks = 20): RelatedRow =>
-      ({ ...row(qid, year, { sitelinks }), rel: r, via: 'guerres d’Alexandre' });
-    const c = nextCandidates(battle, [rel('Q2', -334, 'sibling', 90), rel('Q3', -326, 'sibling'), rel('Q4', -331, 'sibling'), rel('Q1', -333, 'sibling')]);
-    expect(c.map((x) => x.row.qid)).toEqual(['Q4', 'Q3', 'Q2']);
+  const rel = (qid: string, year: number, r: RelatedRow['rel'], sitelinks = 20): RelatedRow =>
+    ({ ...row(qid, year, { sitelinks }), rel: r, via: 'guerres d’Alexandre' });
+
+  it('"effect" takes a stated consequence, then the closest later part of the same whole', () => {
+    const rows = [rel('Q2', -334, 'sibling', 90), rel('Q3', -326, 'sibling'), rel('Q4', -331, 'sibling'), rel('Q1', -333, 'sibling')];
+    const c = effectCandidates(battle, rows);
+    expect(c.map((x) => x.row.qid)).toEqual(['Q4', 'Q3']); // never earlier ones, never itself
     expect(c[0]!.title(battle)).toBe('La suite');
-    expect(c[2]!.title(battle)).toBe('Avant cela');
     expect(c[0]!.hint(battle)).toBe('Guerres d’Alexandre');
+    const stated = effectCandidates(battle, [...rows, rel('Q5', -300, 'effect')]);
+    expect(stated[0]!.row.qid).toBe('Q5');
+    expect(stated[0]!.title(battle)).toBe('Ce qui en a découlé');
+  });
+
+  it('"cause" takes a stated cause, then the closest earlier part, then the whole', () => {
+    const rows = [rel('Q2', -334, 'sibling', 90), rel('Q3', -326, 'sibling'), rel('Q6', -340, 'sibling'), rel('Q7', -336, 'partof')];
+    expect(causeCandidates(battle, rows).map((x) => x.row.qid)).toEqual(['Q2', 'Q6', 'Q7']);
+    const stated = causeCandidates(battle, [...rows, rel('Q8', -400, 'cause')]);
+    expect(stated[0]!.row.qid).toBe('Q8');
+    expect(stated[0]!.title(battle)).toBe('Ce qui l’a provoqué');
+    expect(stated[1]!.title(battle)).toBe('Avant cela');
   });
 
   it('"time" goes later at the same place when it can, earlier otherwise', () => {

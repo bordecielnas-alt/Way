@@ -1,20 +1,26 @@
 import {
   bucketStep, distanceKm, DOOR_KINDS, formatDistance, formatYears, histToAstro, MAX_YEAR, MIN_YEAR, toLite,
-  CATEGORY_LABELS, type Door, type DoorKind, type DoorsResponse, type Poi,
+  CATEGORY_LABELS, type Door, type DoorKind, type DoorsResponse, type Poi, type Source,
 } from '@way/shared';
 import { wikidata, type DatedRow, type RelatedRow } from '@way/providers';
+import { aiLinks, type AiLinks } from './links.ts';
 import { buildPois } from './pipeline.ts';
+import type { ProviderRouter } from './router.ts';
 import type { Store, StoredDoors } from './store/types.ts';
 
-// Doors (brief §4.5), built from Wikidata relations only (no AI):
-//  - time:      same place, another era (nearby entities, later if possible);
+// Doors (brief §4.5), built from Wikidata relations first:
+//  - cause:     what led to it (stated cause, the event before, earlier
+//               parts of the same war...);
+//  - effect:    what came of it (consequence, next part of the same war,
+//               same protagonist later...);
 //  - meanwhile: same era, far away;
-//  - next:      what came next (next part of the same war, consequence,
-//               same protagonist...), or what came before as a fallback;
+//  - time:      same place, another era (nearby entities, later if possible);
 //  - surprise:  a lesser-known place nearby, of another kind.
+// When Wikidata knows no cause or consequence, an AI reads the card's
+// Wikipedia article for them (level 2); such doors carry that article.
 
 /** Bump when the choice logic changes: cached doors are recomputed. */
-const DOORS_VERSION = 6;
+const DOORS_VERSION = 7;
 /** "Here" means close: dense cities hold hundreds of dated entities within a few km. */
 const HERE_KM = 8;
 /** Wider "here" for empty surroundings (a naval battle, a remote site). */
@@ -25,7 +31,7 @@ const ELSEWHERE_KM = 1500;
 /** Candidates materialized per door, in case some lack a Wikipedia article. */
 const CANDIDATES = 4;
 
-type Candidate = { row: DatedRow; title: (poi: Poi) => string; hint: (poi: Poi) => string };
+type Candidate = { row: DatedRow; title: (poi: Poi) => string; hint: (poi: Poi) => string; source?: Source };
 
 /**
  * Nearby entities include roads, stations and municipalities created by
@@ -58,29 +64,59 @@ const REL_HINTS: Record<RelatedRow['rel'], (via: string | null) => string> = {
 
 // ---------- candidate selection (pure, testable) ----------
 
-export function nextCandidates(poi: Poi, rows: RelatedRow[]): Candidate[] {
+/** Ranks related rows by tier (lowest first, 9 = unfit), then closest in time to `at`, better known on a tie. */
+function rankRelated(poi: Poi, rows: RelatedRow[], at: number, tier: (r: RelatedRow) => number): RelatedRow[] {
+  const score = (r: RelatedRow) => tier(r) * 1e6 + Math.abs(astroDiff(at, r.year)) * 10 - Math.log1p(r.sitelinks);
+  return rows
+    .filter((r) => r.qid !== poi.wikidata_qid && tier(r) < 9)
+    .sort((a, b) => score(a) - score(b))
+    .slice(0, CANDIDATES);
+}
+
+const LINKED = new Set<RelatedRow['rel']>(['sibling', 'person', 'event', 'part']);
+
+/**
+ * What led to it: a stated cause or the event before it, then earlier parts
+ * of the same whole or earlier events with the same protagonist, closest
+ * first; the whole it belongs to comes last.
+ */
+export function causeCandidates(poi: Poi, rows: RelatedRow[]): Candidate[] {
+  const start = poi.date_start;
+  const tier = (r: RelatedRow) =>
+    r.rel === 'cause' || r.rel === 'prev' ? 0
+      : r.year < start && LINKED.has(r.rel) && r.rel !== 'part' ? 1
+        : r.rel === 'partof' && r.year < start ? 2 : 9;
+  return rankRelated(poi, rows, start, tier).map((r) => ({
+    row: r,
+    title: () => (r.rel === 'cause' ? 'Ce qui l’a provoqué' : 'Avant cela'),
+    hint: () => REL_HINTS[r.rel](r.via),
+  }));
+}
+
+/**
+ * What came of it: a stated consequence or the event after it, then later
+ * parts of the same whole or later events with the same protagonist, closest first.
+ */
+export function effectCandidates(poi: Poi, rows: RelatedRow[]): Candidate[] {
   const start = poi.date_start;
   const end = poi.date_end ?? start;
-  const self = poi.wikidata_qid;
-  const after = (r: DatedRow) => r.year >= end && r.year !== start;
-  // Explicit sequel or consequence first, then later parts of the same whole
-  // or events with the same protagonist, closest in time first.
-  const score = (r: RelatedRow) => {
-    const explicit = r.rel === 'next' || r.rel === 'effect';
-    const later = after(r) && (r.rel === 'sibling' || r.rel === 'person' || r.rel === 'event' || r.rel === 'part');
-    const tier = explicit ? 0 : later ? 1 : r.rel === 'partof' ? 2 : 3;
-    const gap = Math.abs(astroDiff(end, r.year));
-    return tier * 1e6 + gap * 10 - Math.log1p(r.sitelinks);
-  };
-  return rows
-    .filter((r) => r.qid !== self)
-    .sort((a, b) => score(a) - score(b))
-    .slice(0, CANDIDATES)
-    .map((r) => ({
-      row: r,
-      title: () => (r.year < start ? 'Avant cela' : 'La suite'),
-      hint: () => REL_HINTS[r.rel](r.via),
-    }));
+  const tier = (r: RelatedRow) =>
+    r.rel === 'effect' || r.rel === 'next' ? 0 : r.year >= end && r.year !== start && LINKED.has(r.rel) ? 1 : 9;
+  return rankRelated(poi, rows, end, tier).map((r) => ({
+    row: r,
+    title: () => (r.rel === 'effect' ? 'Ce qui en a découlé' : 'La suite'),
+    hint: () => REL_HINTS[r.rel](r.via),
+  }));
+}
+
+/** Links an AI read in the card's article, as candidates of one kind. */
+export function aiCandidates(kind: 'cause' | 'effect', links: AiLinks): Candidate[] {
+  return links[kind].slice(0, CANDIDATES).map((l) => ({
+    row: l.row,
+    title: () => (kind === 'cause' ? 'Ce qui l’a provoqué' : 'Ce qui en a découlé'),
+    hint: () => l.why,
+    source: links.source,
+  }));
 }
 
 export function timeCandidates(poi: Poi, rows: DatedRow[], radiusKm = HERE_KM): Candidate[] {
@@ -147,13 +183,24 @@ interface Progress {
 export class DoorService {
   private inflight = new Map<string, Progress>();
 
-  /** `maxSpan`: "meanwhile" ignores events lasting longer (a century-long war says little about a moment). */
-  constructor(private store: Store, private maxSpan: () => number = () => 20) {}
+  /**
+   * `maxSpan`: "meanwhile" ignores events lasting longer (a century-long war says little about a moment).
+   * `router`: reads articles for causes and consequences Wikidata does not state (none: Wikidata only).
+   */
+  constructor(private store: Store, private maxSpan: () => number = () => 20, private router: ProviderRouter | null = null) {}
+
+  /**
+   * Doors chosen under another span limit are chosen again, and so are
+   * doors that lacked a cause or consequence while no AI could read the
+   * article, once one can.
+   */
+  private fresh(c: StoredDoors | null): c is StoredDoors {
+    return !!c && c.v === DOORS_VERSION && (c.span ?? 20) === this.maxSpan() && !(c.aiMissing && this.router?.canRun('extract'));
+  }
 
   async get(id: string): Promise<DoorsResponse | null> {
     const cached = await this.store.getDoors(id);
-    // Doors chosen under another span limit are chosen again.
-    if (cached && cached.v === DOORS_VERSION && (cached.span ?? 20) === this.maxSpan()) {
+    if (this.fresh(cached)) {
       const doors = await this.resolveStored(cached);
       if (doors) return { doors, pending: [] };
     }
@@ -172,8 +219,7 @@ export class DoorService {
   warm(poi: Poi): void {
     if (this.inflight.has(poi.id)) return;
     void this.store.getDoors(poi.id).then((c) => {
-      const stale = !c || c.v !== DOORS_VERSION || (c.span ?? 20) !== this.maxSpan();
-      if (stale && !this.inflight.has(poi.id)) this.start(poi);
+      if (!this.fresh(c) && !this.inflight.has(poi.id)) this.start(poi);
     });
   }
 
@@ -182,7 +228,7 @@ export class DoorService {
     for (const d of s.doors) {
       const poi = await this.store.getPoi(d.poi_id);
       if (!poi) return null; // destination evicted: recompute
-      doors.push({ kind: d.kind, title: d.title, hint: d.hint, poi: toLite(poi) });
+      doors.push({ kind: d.kind, title: d.title, hint: d.hint, poi: toLite(poi), ...(d.source ? { source: d.source } : {}) });
     }
     return doors;
   }
@@ -212,10 +258,29 @@ export class DoorService {
       return this.pick('time', timeCandidates(poi, rows, km), taken, { accept: (d) => !isDull(d) });
     });
 
+    // Cause and consequence share one Wikidata query, and one reading of the
+    // article by an AI, only if Wikidata leaves one of them empty.
+    const related = poi.wikidata_qid ? wikidata.queryRelated(poi.wikidata_qid) : Promise.resolve([]);
+    let aiMissing = false;
+    let read: Promise<AiLinks | null> | null = null;
+    const readArticle = () => {
+      if (!this.router?.canRun('extract')) {
+        aiMissing = !!this.router?.hasProvider('extract') || aiMissing;
+        return Promise.resolve(null);
+      }
+      return (read ??= aiLinks(poi, this.router));
+    };
+    const thread = (kind: 'cause' | 'effect', cands: (p: Poi, rows: RelatedRow[]) => Candidate[]) =>
+      settle(kind, async () => {
+        const found = await this.pick(kind, cands(poi, await related), taken);
+        if (found) return found;
+        const links = await readArticle();
+        return links ? this.pick(kind, aiCandidates(kind, links), taken) : null;
+      });
+
     const done = Promise.all([
-      settle('next', async () =>
-        poi.wikidata_qid ? this.pick('next', nextCandidates(poi, await wikidata.queryRelated(poi.wikidata_qid)), taken) : null,
-      ),
+      thread('cause', causeCandidates),
+      thread('effect', effectCandidates),
       timeDone,
       settle('meanwhile', () => this.meanwhile(poi, taken)),
       // After "time", so both doors never lead to the same place.
@@ -236,9 +301,10 @@ export class DoorService {
         span: this.maxSpan(),
         doors: DOOR_KINDS.flatMap((k) => {
           const d = doors.get(k);
-          return d ? [{ kind: k, title: d.title, hint: d.hint, poi_id: d.poi.id }] : [];
+          return d ? [{ kind: k, title: d.title, hint: d.hint, poi_id: d.poi.id, ...(d.source ? { source: d.source } : {}) }] : [];
         }),
         empty: DOOR_KINDS.filter((k) => !doors.get(k)),
+        ...(aiMissing ? { aiMissing } : {}),
       };
       await this.store.setDoors(poi.id, stored);
     });
@@ -264,7 +330,8 @@ export class DoorService {
     if (!chosen) return null;
     taken.ids.add(chosen.dest.id);
     taken.qids.add(chosen.c.row.qid);
-    return { kind, title: chosen.c.title(chosen.dest), hint: chosen.c.hint(chosen.dest), poi: toLite(chosen.dest) };
+    const door: Door = { kind, title: chosen.c.title(chosen.dest), hint: chosen.c.hint(chosen.dest), poi: toLite(chosen.dest) };
+    return chosen.c.source ? { ...door, source: chosen.c.source } : door;
   }
 
   private async meanwhile(poi: Poi, taken: Taken): Promise<Door | null> {

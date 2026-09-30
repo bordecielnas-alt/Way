@@ -1,4 +1,4 @@
-import type { Category, DoorKind, Poi, PoiLite } from '@way/shared';
+import type { Category, DoorKind, Poi, PoiLite, Source } from '@way/shared';
 
 export type KeyStatus = 'pending' | 'done' | 'partial' | 'failed';
 
@@ -14,8 +14,11 @@ export interface StoredDoors {
   v: number;
   /** "Meanwhile" span limit in force when chosen. */
   span?: number;
-  doors: { kind: DoorKind; title: string; hint: string; poi_id: string }[];
+  /** `source`: the article an AI read the link in (none: stated in Wikidata). */
+  doors: { kind: DoorKind; title: string; hint: string; poi_id: string; source?: Source }[];
   empty: DoorKind[];
+  /** A cause or consequence was missing while no AI could read the article: try again once one can. */
+  aiMissing?: boolean;
 }
 
 export interface ViewQuery {

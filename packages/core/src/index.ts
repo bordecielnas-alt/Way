@@ -29,6 +29,7 @@ export * from './cache.ts';
 export * from './router.ts';
 export * from './level2.ts';
 export * from './doors.ts';
+export * from './links.ts';
 export * from './settings.ts';
 export * from './polity.ts';
 export * from './borders.ts';

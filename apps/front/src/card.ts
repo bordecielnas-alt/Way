@@ -1,6 +1,6 @@
 import {
   ACTIVITY_LABELS, CATEGORY_LABELS, DOOR_KINDS, type Army, type JourneyStop, type PersonJourney, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
-  type PolityInfo, type PolityRulerInfo,
+  type PoiLite, type PolityInfo, type PolityRulerInfo, toLite,
 } from '@way/shared';
 import { CATEGORY_COLORS } from './icons.ts';
 import { fetchCached } from './localcache.ts';
@@ -41,7 +41,9 @@ function rulerEl(r: PolityRulerInfo): string {
     </a>`;
 }
 
-const DOOR_ICONS: Record<DoorKind, string> = { time: '🕰️', meanwhile: '🌍', next: '🔗', surprise: '❓' };
+const DOOR_ICONS: Record<DoorKind, string> = { cause: '⏪', effect: '⏩', meanwhile: '🌍', time: '🕰️', surprise: '❓' };
+/** Cards kept in the trail of the walk. */
+const TRAIL_MAX = 12;
 const DOOR_POLL_MS = 1500;
 const DOOR_WAIT_MS = 60_000;
 
@@ -57,14 +59,52 @@ export class Card {
   private shown: string | null = null;
   /** Territory card: what another click on the map will do. */
   private hint: string | null = null;
+  /** The walk so far: the points whose cards were read, oldest first (the current one last). */
+  private trail: PoiLite[] = [];
 
   get currentPoi(): string | null {
     return this.root.hidden ? null : this.shown;
   }
 
-  constructor(private root: HTMLElement, private onClose: () => void, private onDoor: (door: Door) => void) {
+  /** `onTravel`: go to a point (through a door, or back along the trail). */
+  constructor(private root: HTMLElement, private onClose: () => void, private onTravel: (p: PoiLite) => void) {
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !this.root.hidden) this.close();
+      if (this.root.hidden) return;
+      if (e.key === 'Escape') this.close();
+      // Backspace walks back the trail, like a browser.
+      const typing = e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable]');
+      if (e.key === 'Backspace' && !typing && this.shown && this.trail.length > 1) {
+        e.preventDefault();
+        this.onTravel(this.trail[this.trail.length - 2]!);
+      }
+    });
+  }
+
+  /** A card read: the trail grows, or goes back to it if it was already on the way. */
+  private remember(p: Poi): void {
+    const i = this.trail.findIndex((x) => x.id === p.id);
+    if (i >= 0) this.trail = this.trail.slice(0, i + 1);
+    else this.trail = [...this.trail, toLite(p)].slice(-TRAIL_MAX);
+  }
+
+  private trailEl(): string {
+    if (this.trail.length < 2) return '';
+    const past = this.trail.slice(0, -1);
+    return `<nav class="trail" aria-label="Chemin parcouru">
+      <span class="trail-label">Chemin</span>
+      ${past.map((p, i) => `<button type="button" class="trail-step" data-i="${i}" title="${esc(formatPoiDate(p.date_start, p.date_end, p.date_precision))}">${esc(p.title)}</button><span class="trail-sep" aria-hidden="true">›</span>`).join('')}
+      <span class="trail-here">${esc(this.trail[this.trail.length - 1]!.title)}</span>
+      <button type="button" class="trail-clear" title="Oublier ce chemin" aria-label="Oublier ce chemin">×</button>
+    </nav>`;
+  }
+
+  private bindTrail(): void {
+    this.root.querySelectorAll<HTMLButtonElement>('.trail-step').forEach((b) =>
+      b.addEventListener('click', () => this.onTravel(this.trail[Number(b.dataset.i)]!)),
+    );
+    this.root.querySelector('.trail-clear')?.addEventListener('click', () => {
+      this.trail = this.trail.slice(-1);
+      this.root.querySelector('.trail')?.remove();
     });
   }
 
@@ -326,6 +366,7 @@ export class Card {
   }
 
   private render(p: Poi, token: number): void {
+    this.remember(p);
     const conf = CONFIDENCE[p.confidence];
     // Say where the text comes from whenever it is not a French Wikipedia intro.
     const note =
@@ -348,6 +389,7 @@ export class Card {
       <div class="card-scroll">
         ${image}
         <div class="card-body">
+          ${this.trailEl()}
           <div class="card-kicker">
             <span class="card-cat"><i style="background:${CATEGORY_COLORS[p.category]}"></i>${CATEGORY_LABELS[p.category]}</span>
             <span class="badge ${p.confidence}" title="${conf.title}">${conf.icon} ${conf.label}</span>
@@ -373,6 +415,7 @@ export class Card {
         </div>
       </div>`;
     this.bindClose();
+    this.bindTrail();
     const img = this.root.querySelector<HTMLImageElement>('.card-image img');
     if (img) {
       img.addEventListener('load', () => img.classList.add('loaded'));
@@ -420,7 +463,6 @@ export class Card {
     const el = document.createElement('button');
     el.type = 'button';
     el.className = 'door';
-    el.dataset.kind = d.kind;
     el.innerHTML = `
       <span class="door-icon" aria-hidden="true">${DOOR_ICONS[d.kind]}</span>
       <span class="door-text">
@@ -428,8 +470,22 @@ export class Card {
         <span class="door-dest">${esc(d.poi.title)}</span>
         <span class="door-meta">${esc(formatPoiDate(d.poi.date_start, d.poi.date_end, d.poi.date_precision))} · ${esc(d.hint)}</span>
       </span>`;
-    el.addEventListener('click', () => this.onDoor(d));
-    return el;
+    el.addEventListener('click', () => this.onTravel(d.poi));
+    const box = document.createElement('div');
+    box.className = 'door-box';
+    box.dataset.kind = d.kind;
+    box.appendChild(el);
+    // A link read by an AI says where, so it can be checked.
+    if (d.source) {
+      const src = document.createElement('a');
+      src.className = 'door-source';
+      src.href = d.source.url;
+      src.target = '_blank';
+      src.rel = 'noopener';
+      src.textContent = `Lien lu par IA dans « ${d.source.title.replace(/^Wikipédia : /, '')} » : vérifier`;
+      box.appendChild(src);
+    }
+    return box;
   }
 
   /** Loads the destination's card (and warms its summary and image) before the click. */

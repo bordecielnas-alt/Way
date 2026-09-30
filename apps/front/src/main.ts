@@ -9,7 +9,7 @@ import './style.css';
 import { ScreenSpaceEventType, Cartesian2, BoundingSphere, Cartesian3, Cartographic, Math as CesiumMath, type Entity } from 'cesium';
 import {
   cellsForRect, formatPoiDate, isGlobalSearchRes, MAX_YEAR, MIN_YEAR, rectAreaKm2, resolutionForArea, ringAround, CATEGORY_LABELS,
-  ALL_THEMES, type Backdrop, type Category, type Door, type SubdivisionsResponse, type ThemeFilter, type ViewMessage,
+  ALL_THEMES, type Backdrop, type Category, type PoiLite, type SubdivisionsResponse, type ThemeFilter, type ViewMessage,
 } from '@way/shared';
 import { BordersLayer, realmKey, type BorderShape } from './borders.ts';
 import { Card } from './card.ts';
@@ -214,9 +214,8 @@ function showPoi(id: string): void {
   if (card.currentPoi !== id) void card.open(id);
 }
 
-/** Going through a door: the globe flies there while the timeline glides to its date. */
-function travel(door: Door): void {
-  const p = door.poi;
+/** Going through a door (or back along the trail): the globe flies there while the timeline glides to its date. */
+function travel(p: PoiLite): void {
   playSound(p.category);
   clearTerritory();
   pois.upsert([p]);

@@ -280,3 +280,12 @@ SELECT ?item ?coord ?t ?prec ?kind ?sl ?rel ?viaLabel WITH {
 }
 
 export const relationRank = (r: Relation) => REL_PRIORITY.indexOf(r);
+
+interface WbSearch { search?: { id: string }[] }
+
+/** Items whose label or alias matches `name`, best match first. */
+export async function searchItems(name: string, lang = 'fr', limit = 5): Promise<string[]> {
+  const params = new URLSearchParams({ action: 'wbsearchentities', search: name, language: lang, uselang: lang, type: 'item', limit: String(limit), format: 'json' });
+  const r = await fetchJson<WbSearch>(`https://www.wikidata.org/w/api.php?${params}`);
+  return (r.search ?? []).map((x) => x.id);
+}
