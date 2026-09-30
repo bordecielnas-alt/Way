@@ -5,6 +5,7 @@ import {
 import { FAITH_COLORS } from './borders.ts';
 import { GEOGRAPHY, type Geography } from './geography.ts';
 import { CATEGORY_COLORS, PEOPLE_COLOR, THEME_COLORS } from './icons.ts';
+import { LIVING, type Living } from './living.ts';
 
 /** Impact scale (brief §4.7): how many minor points show at a given zoom. */
 export type Scale = 'major' | 'selection' | 'all';
@@ -64,6 +65,8 @@ export class Filters {
     private onGeography: (g: Geography) => void,
     detailed: boolean,
     private onDetailed: (on: boolean) => void,
+    public living: Living,
+    private onLiving: (l: Living) => void,
   ) {
     root.innerHTML = `
       <div class="filters-head"><span class="filters-title">Lentilles</span></div>
@@ -89,6 +92,11 @@ export class Filters {
         </span>
       </div>
       <div class="themes"></div>
+      <div class="filters-head"><span class="filters-title">Monde vivant</span></div>
+      <div class="geo-chips" role="group" aria-label="Monde vivant">${LIVING.map(
+        (g) => `<button type="button" class="chip" data-living="${g.key}" title="${g.title}"><span class="chip-dot" style="background:${g.color}"></span>${g.label}</button>`,
+      ).join('')}</div>
+      <div class="living-note" hidden></div>
       <div class="filters-head"><span class="filters-title">Géographie</span></div>
       <div class="geo-chips" role="group" aria-label="Géographie">${GEOGRAPHY.map(
         (g) => `<button type="button" class="chip" data-geo="${g.key}" title="${g.title}"><span class="chip-dot" style="background:${g.color}"></span>${g.label}</button>`,
@@ -171,6 +179,16 @@ export class Filters {
         this.onHeraldry(this.heraldry);
       });
     });
+    root.querySelectorAll<HTMLButtonElement>('[data-living]').forEach((b) => {
+      const k = b.dataset.living as keyof Living;
+      const sync = () => b.setAttribute('aria-pressed', String(this.living[k]));
+      sync();
+      b.addEventListener('click', () => {
+        this.living = { ...this.living, [k]: !this.living[k] };
+        sync();
+        this.onLiving(this.living);
+      });
+    });
     root.querySelectorAll<HTMLButtonElement>('[data-geo]').forEach((b) => {
       const k = b.dataset.geo as keyof Geography;
       const sync = () => b.setAttribute('aria-pressed', String(this.geography[k]));
@@ -186,6 +204,13 @@ export class Filters {
     this.syncScale();
     this.syncBackdrop();
     this.syncThemes();
+  }
+
+  /** What the Monde vivant layers are doing (an AI reading, no AI), or '' to hide the note. */
+  setLivingNote(text: string): void {
+    const el = this.root.querySelector<HTMLElement>('.living-note')!;
+    el.hidden = !text;
+    el.textContent = text;
   }
 
   get shown(): (p: PoiLite) => boolean {

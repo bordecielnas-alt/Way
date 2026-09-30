@@ -69,3 +69,17 @@ export async function pageSummary(lang: string, title: string): Promise<WikiSumm
 export function articleUrl(lang: string, title: string): string {
   return `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`;
 }
+
+interface ExtractResponse { query?: { pages?: { title: string; extract?: string; missing?: boolean }[] } }
+
+/** An article's plain text (all sections), clipped to `chars`. Null for a missing page. */
+export async function pageText(lang: string, title: string, chars = 12_000): Promise<{ title: string; url: string; text: string } | null> {
+  const params = new URLSearchParams({
+    action: 'query', prop: 'extracts', explaintext: '1', exsectionformat: 'plain',
+    titles: title, format: 'json', formatversion: '2', redirects: '1',
+  });
+  const r = await fetchJson<ExtractResponse>(`https://${lang}.wikipedia.org/w/api.php?${params}`);
+  const p = r.query?.pages?.[0];
+  if (!p || p.missing || !p.extract) return null;
+  return { title: p.title, url: articleUrl(lang, p.title), text: p.extract.length > chars ? `${p.extract.slice(0, chars)}…` : p.extract };
+}

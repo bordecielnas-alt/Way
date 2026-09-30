@@ -5,7 +5,7 @@ import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { ClientMessage, type ServerMessage } from '@way/shared';
 import {
-  cacheBudget, createMedia, normalizeCache, CACHE_MAX_GB, createBorders, createPeople, createPolities, createSoundFiles, SOUND_MAX_BYTES, SOUND_TYPES, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, type JobBus,
+  cacheBudget, createMedia, normalizeCache, CACHE_MAX_GB, createBorders, createFlows, createPeople, createPolities, createSoundFiles, SOUND_MAX_BYTES, SOUND_TYPES, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, type JobBus,
 } from '@way/core';
 import { Auth, COOKIE, readCookie } from './auth.ts';
 import { ViewService, type View } from './views.ts';
@@ -23,6 +23,7 @@ const polities = createPolities(cfg, clio, settings);
 // Names, coats of arms and faiths of every realm, completed little by little in the background.
 polities.startRefining();
 const people = createPeople(cfg, settings);
+const flows = createFlows(cfg, router);
 const media = createMedia(cfg, settings);
 const soundFiles = createSoundFiles(cfg);
 const mode = {
@@ -330,6 +331,15 @@ app.get('/api/armies', async (req, reply) => {
     req.log.warn(`armies of ${q.data.decade}s failed: ${(e as Error).message}`);
     return reply.code(503).send({ error: 'Wikidata ne répond pas pour le moment.' });
   }
+});
+
+// ---------- Monde vivant: trade routes, epidemics, diffusions ----------
+
+// Flows asked by id (the front knows the catalog and the period shown); those never read are read in the background.
+app.get('/api/flows', async (req, reply) => {
+  const q = z.object({ ids: z.string().transform((s) => s.split(',').filter(Boolean).slice(0, 60)) }).safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: 'requête invalide' });
+  return flows.get(q.data.ids);
 });
 
 // ---------- sounds imported by the owner (they replace the synthesized ones) ----------

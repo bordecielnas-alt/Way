@@ -1,9 +1,10 @@
 import {
   ACTIVITY_LABELS, CATEGORY_LABELS, DOOR_KINDS, type Army, type JourneyStop, type PersonJourney, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
-  type PolityInfo, type PolityRulerInfo,
+  type PolityInfo, type PolityRulerInfo, FLOW_LABELS, type CityRow, type Flow, type FlowDef, type FlowStage,
 } from '@way/shared';
 import { CATEGORY_COLORS } from './icons.ts';
 import { fetchCached } from './localcache.ts';
+import { formatPop } from './living.ts';
 import { viaServer } from './media.ts';
 
 const CONFIDENCE: Record<Poi['confidence'], { icon: string; label: string; title: string }> = {
@@ -233,6 +234,79 @@ export class Card {
     this.bindClose();
     this.root.querySelectorAll<HTMLButtonElement>('.journey button').forEach((b) =>
       b.addEventListener('click', () => onBattle(a.battles[Number(b.dataset.i)]!)),
+    );
+  }
+
+  /** Card of a city of the Villes layer: its population at the moment, and the figures it comes from. */
+  openCity(c: CityRow, pop: number, sure: number, year: number): void {
+    this.token++;
+    this.shown = null;
+    this.root.hidden = false;
+    document.body.classList.add('card-open');
+    const [name, country, , , certainty, series] = c;
+    const figures: [number, number][] = [];
+    for (let i = 0; i < series.length; i += 2) figures.push([series[i]!, series[i + 1]!]);
+    const max = Math.max(...figures.map(([, v]) => v));
+    this.root.innerHTML = `
+      <button class="card-close" type="button" aria-label="Fermer">×</button>
+      <div class="card-scroll"><div class="card-body">
+        <div class="card-kicker"><span class="card-cat"><i style="background:#efe4cc"></i>Ville</span></div>
+        <h2 class="card-title">${esc(name)}</h2>
+        <div class="card-desc">${esc(country)}</div>
+        <div class="card-date">${esc(formatPop(pop))} habitants en ${esc(formatYear(Math.floor(year)))}</div>
+        <div class="card-summary-note">${sure < 1 ? 'Estimation incertaine : chiffre repris du plus proche, ou interpolé entre deux chiffres éloignés de plusieurs siècles. ' : ''}${certainty > 1 ? 'Emplacement incertain dans la source.' : ''}</div>
+        <div class="card-section">
+          <div class="card-section-title">Population estimée</div>
+          <ol class="city-figures">${figures.map(([y, v]) => `
+            <li><span class="journey-when">${esc(formatYear(y))}</span><span class="city-bar" style="width:${Math.max(2, Math.round((100 * Math.log10(v)) / Math.log10(max)))}%"></span><span class="city-pop">${esc(formatPop(v))}</span></li>`).join('')}</ol>
+          <div class="card-summary-note">Entre deux chiffres, la population est interpolée. Les estimations anciennes sont des ordres de grandeur.</div>
+        </div>
+        <div class="card-section">
+          <div class="card-section-title">Sources</div>
+          <ul class="card-sources">
+            <li><a href="https://doi.org/10.1038/sdata.2016.34" target="_blank" rel="noopener">Reba, Reitsma et Seto (2016), 6 000 ans d’urbanisation (Chandler, Modelski), CC BY 4.0</a></li>
+          </ul>
+        </div>
+      </div></div>`;
+    this.bindClose();
+  }
+
+  /** Card of a flow (trade route, epidemic, diffusion): its places in order; one clicked takes the map there. */
+  openFlow(def: FlowDef, flow: Flow, stage: number, onStage: (s: FlowStage) => void): void {
+    this.token++;
+    this.shown = null;
+    this.root.hidden = false;
+    document.body.classList.add('card-open');
+    const here = flow.stages[stage];
+    const span = def.start === def.end ? formatYear(def.start) : `${formatYear(def.start)} – ${formatYear(def.end)}`;
+    const color = { trade: '#d9a441', epidemic: '#d9534f', diffusion: '#7fb3e0' }[def.kind];
+    this.root.innerHTML = `
+      <button class="card-close" type="button" aria-label="Fermer">×</button>
+      <div class="card-scroll"><div class="card-body">
+        <div class="card-kicker">
+          <span class="card-cat"><i style="background:${color}"></i>${esc(FLOW_LABELS[def.kind].label)}</span>
+          <span class="badge web_single_source" title="Étapes lues par une IA dans l’article cité, puis placées sur la carte">🔎 Lu par IA</span>
+        </div>
+        <h2 class="card-title">${esc(def.title)}</h2>
+        <div class="card-date">${esc(span)}</div>
+        ${here ? `<div class="polity-hint">${esc(here.place)}, ${esc(formatYear(here.year))} : ${esc(here.note)}</div>` : ''}
+        <div class="card-section">
+          <div class="card-section-title">Étapes</div>
+          <ol class="journey">${flow.stages.map((s, i) => `
+            <li><button type="button" data-i="${i}" ${i === stage ? 'aria-current="true"' : ''}>
+              <span class="journey-when">${esc(formatYear(s.year))}</span>
+              <span class="journey-what"><b>${esc(s.place)}</b> ${esc(s.note)}${s.from !== null ? ` <small>depuis ${esc(flow.stages[s.from]!.place)}</small>` : ''}</span>
+            </button></li>`).join('')}</ol>
+          <div class="card-summary-note">Lieux et dates lus par une IA dans l’article ci-dessous (chaque étape y est citée), placés sur la carte par géocodage : vérifiez-les. Entre deux étapes, le trajet est tracé au plus court${def.kind === 'trade' ? ', par la mer quand il le faut' : ''}.</div>
+        </div>
+        <div class="card-section">
+          <div class="card-section-title">Sources</div>
+          <ul class="card-sources"><li><a href="${esc(flow.source.url)}" target="_blank" rel="noopener">${esc(flow.source.title)}</a></li></ul>
+        </div>
+      </div></div>`;
+    this.bindClose();
+    this.root.querySelectorAll<HTMLButtonElement>('.journey button').forEach((b) =>
+      b.addEventListener('click', () => onStage(flow.stages[Number(b.dataset.i)]!)),
     );
   }
 

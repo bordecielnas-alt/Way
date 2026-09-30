@@ -8,7 +8,7 @@ import './style.css';
 
 import { ScreenSpaceEventType, Cartesian2, BoundingSphere, Cartesian3, Cartographic, Math as CesiumMath, type Entity } from 'cesium';
 import {
-  cellsForRect, formatPoiDate, isGlobalSearchRes, MAX_YEAR, MIN_YEAR, rectAreaKm2, resolutionForArea, ringAround, CATEGORY_LABELS,
+  cellsForRect, formatPoiDate, formatYear, isGlobalSearchRes, MAX_YEAR, MIN_YEAR, rectAreaKm2, resolutionForArea, ringAround, CATEGORY_LABELS,
   ALL_THEMES, type Backdrop, type Category, type Door, type SubdivisionsResponse, type ThemeFilter, type ViewMessage,
 } from '@way/shared';
 import { BordersLayer, realmKey, type BorderShape } from './borders.ts';
@@ -17,6 +17,7 @@ import { Connection } from './connection.ts';
 import { bounds, contains, divide, type Area, type Region } from './divisions.ts';
 import { Filters, importanceFloor, type Heraldry, type Scale } from './filters.ts';
 import { GeographyLayer, NO_GEOGRAPHY, type Geography } from './geography.ts';
+import { formatPop, LivingLayer, NO_LIVING, type Living, type LivingPick } from './living.ts';
 import { cameraState, createGlobe, restoreCamera, setBasemap, viewRect, type Basemap, type CameraState } from './globe.ts';
 import { PoiLayer } from './markers.ts';
 import { PeopleLayer, type Picked } from './people.ts';
@@ -27,7 +28,7 @@ import { Timeline, type TimeWindow } from './timeline.ts';
 // ---------- persisted per-viewer preferences ----------
 interface Saved {
   camera?: CameraState; window?: TimeWindow; basemap?: Basemap; scale?: Scale; heraldry?: Heraldry; geography?: Geography;
-  themes?: ThemeFilter; backdrop?: Backdrop; detailed?: boolean;
+  themes?: ThemeFilter; backdrop?: Backdrop; detailed?: boolean; living?: Living;
   /** Hidden categories, before themes (read once, then replaced by `themes`). */
   hidden?: Category[];
 }
@@ -62,6 +63,7 @@ if (import.meta.env.DEV) (window as unknown as { __viewer: unknown }).__viewer =
 const geography = new GeographyLayer(viewer);
 const pois = new PoiLayer(viewer);
 const people = new PeopleLayer(viewer, document.getElementById('people')!);
+const living = new LivingLayer(viewer);
 
 // ---------- timeline & borders ----------
 const timelineEl = document.getElementById('timeline')!;
@@ -86,6 +88,7 @@ function followBorders(): void {
 const timeline = new Timeline(timelineEl, saved.window ?? { tStart: -500, tEnd: -300 }, (w, moment) => {
   pois.setWindow(w.tStart, w.tEnd);
   people.setWindow(moment.tStart, moment.tEnd);
+  living.setWindow(w.tStart, w.tEnd, (moment.tStart + moment.tEnd) / 2);
   filters.setCounts(pois.inWindow());
   followBorders();
   save({ window: moment });
@@ -102,6 +105,7 @@ borders.onPeriod = () => {
 };
 pois.setWindow(timeline.window.tStart, timeline.window.tEnd);
 people.setWindow(timeline.moment.tStart, timeline.moment.tEnd);
+living.setWindow(timeline.window.tStart, timeline.window.tEnd, (timeline.moment.tStart + timeline.moment.tEnd) / 2);
 
 /** Following someone: to where they are, and into their lifetime if the window is outside it. */
 people.onGoTo = (qid) => {
@@ -131,6 +135,32 @@ function openFigure(f: Picked): void {
     playSound('army');
     card.openArmy(f.army, f.presence.text, (b) => goTo(b.t, b.lat, b.lon));
   }
+}
+
+/** Tooltip of a city or a flow's place under the cursor. */
+function livingAt(at: Cartesian2): { title: string; meta: string } | null {
+  const l = living.pick(at);
+  if (!l) return null;
+  if (l.kind === 'city') return { title: l.city[0], meta: `${formatPop(l.pop)} habitants · ${l.city[1]}` };
+  const s = l.flow.stages[l.stage]!;
+  return { title: `${s.place} : ${s.note}`, meta: `${l.def.title} · ${formatYear(s.year)}` };
+}
+
+/** A city or a flow clicked: its card; a flow's places take the map and the timeline there. */
+function openLiving(l: LivingPick): void {
+  clearTerritory();
+  pois.select(null);
+  const mid = (timeline.moment.tStart + timeline.moment.tEnd) / 2;
+  if (l.kind === 'city') {
+    playSound('city');
+    card.openCity(l.city, l.pop, l.sure, mid);
+    return;
+  }
+  playSound(l.def.kind === 'trade' ? 'trade' : l.def.kind === 'epidemic' ? 'disaster' : 'religion');
+  card.openFlow(l.def, l.flow, l.stage, (s) => {
+    timeline.glideTo(s.year);
+    viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(s.lon, s.lat, 2_500_000), duration: 1.6 });
+  });
 }
 
 // ---------- filters ----------
@@ -169,7 +199,14 @@ const filters = new Filters(
   },
   saved.detailed ?? false,
   (detailed) => save({ detailed }),
+  { ...NO_LIVING, ...saved.living },
+  (l) => {
+    save({ living: l });
+    living.set(l);
+  },
 );
+living.onStatus = (text) => filters.setLivingNote(text);
+living.set(filters.living);
 geography.set(filters.geography);
 borders.setBackdrop(filters.backdrop);
 borders.setHeraldry(filters.heraldry.territories);
@@ -371,6 +408,17 @@ function hover(): void {
     tooltip.lastElementChild!.textContent = figure.presence.text;
     return;
   }
+  const alive = livingAt(at);
+  if (alive) {
+    viewer.canvas.style.cursor = 'pointer';
+    tooltip.hidden = false;
+    tooltip.style.left = `${at.x}px`;
+    tooltip.style.top = `${at.y}px`;
+    tooltip.innerHTML = '<div class="tooltip-title"></div><div class="tooltip-meta"></div>';
+    tooltip.firstElementChild!.textContent = alive.title;
+    tooltip.lastElementChild!.textContent = alive.meta;
+    return;
+  }
   const { poi, cluster } = pois.pick(at);
   viewer.canvas.style.cursor = poi || cluster ? 'pointer' : '';
   if ((poi?.id ?? null) !== hoverPoi) {
@@ -417,6 +465,12 @@ handler.setInputAction((c: { position: Cartesian2 }) => {
   if (figure) {
     tooltip.hidden = true;
     openFigure(figure);
+    return;
+  }
+  const alive = living.pick(c.position);
+  if (alive) {
+    tooltip.hidden = true;
+    openLiving(alive);
     return;
   }
   const { poi, cluster } = pois.pick(c.position);
