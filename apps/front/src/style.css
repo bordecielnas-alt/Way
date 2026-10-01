@@ -332,3 +332,30 @@ body.card-open .cesium-viewer-bottom { right: 452px; }
 @media (max-width: 520px) {
   .people { bottom: auto; top: 16px; left: auto; right: 16px; width: 200px; }
 }
+
+/* ---------- doors read by an AI, trail of the walk ---------- */
+.door-box { display: grid; gap: 3px; }
+.door-source { justify-self: end; font-size: 11px; color: var(--info); text-decoration: none; opacity: 0.85; }
+.door-source:hover { opacity: 1; text-decoration: underline; }
+.trail {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; margin: 0 0 14px; padding-bottom: 10px;
+  border-bottom: 1px dashed var(--panel-border); font-size: 12px; color: var(--muted);
+}
+.trail-label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; margin-right: 4px; }
+.trail-step {
+  max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 1px 4px; border: 0; border-radius: 4px; background: none; color: var(--ink-soft); font: inherit; cursor: pointer;
+}
+.trail-step:hover, .trail-step:focus-visible { background: var(--gold-soft); color: var(--gold); outline: none; }
+.trail-sep { color: var(--muted); }
+.trail-here { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gold); padding: 1px 4px; }
+.trail-clear { margin-left: auto; border: 0; background: none; color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.trail-clear:hover { color: var(--ink); }
+/* ---------- Monde vivant ---------- */
+.living-note { margin: -6px 0 12px; font-size: 11.5px; line-height: 1.4; color: var(--muted); font-style: italic; }
+.city-figures { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.city-figures li { display: grid; grid-template-columns: 92px 1fr 88px; align-items: center; gap: 8px; font-size: 12px; }
+.city-bar { height: 6px; border-radius: 3px; background: linear-gradient(90deg, rgba(232, 194, 122, 0.35), #e8c27a); }
+.city-pop { text-align: right; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.journey button[aria-current="true"] { background: var(--gold-soft); }
+.journey-what small { color: var(--muted); }

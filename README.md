@@ -30,7 +30,12 @@ Sur le globe : frontières datées à l'année, noms des royaumes peints sur la 
 estimées à défaut), et ainsi de suite. Panneau **Personnages** (en bas à gauche) : suivre un ou plusieurs
 personnages (études, voyages, combats, couronnement…) et afficher les armées en campagne ; rubrique
 **Blasons** : armoiries en filigrane sur les territoires, drapeaux sur les armées (en bateau sur la mer et les
-grands fleuves) ; rubrique **Géographie** : relief, fleuves, forêts, steppes, déserts, marais, glaces. Boutons
+grands fleuves) ; rubrique **Géographie** : relief, fleuves, forêts, steppes, déserts, marais, glaces ;
+rubrique **Monde vivant** : les villes grandissent et déclinent (populations estimées de Chandler et Modelski,
+[Reba et al. 2016](https://doi.org/10.1038/sdata.2016.34), CC BY 4.0, construites par `npx tsx scripts/build-cities.ts`),
+les routes commerciales s'animent de caravanes et de navires, les épidémies et les diffusions (religions,
+écritures, techniques) se propagent ville après ville. Les étapes des flux sont lues par l'IA dans un article
+Wikipédia (chaque étape doit y être citée) : il faut une clé d'IA, chaque flux est lu une fois puis gardé. Boutons
 ◂◂◂ … ▸▸▸ sous la timeline (ou ← ↓ → et Espace) : reculer, pause, avancer, jusqu'au jour près. Sons (et import de vos propres fichiers audio), ouverture
 au survol et filtre « Pendant ce temps » : Réglages → Interface. Taille et durée du cache (jusqu'à 100 Go) :
 Réglages → Cache.

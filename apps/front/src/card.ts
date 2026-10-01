@@ -1,9 +1,10 @@
 import {
   ACTIVITY_LABELS, CATEGORY_LABELS, DOOR_KINDS, type Army, type JourneyStop, type PersonJourney, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
-  type PolityInfo, type PolityRulerInfo,
+  type PoiLite, type PolityInfo, type PolityRulerInfo, toLite, FLOW_LABELS, type CityRow, type Flow, type FlowDef, type FlowStage,
 } from '@way/shared';
 import { CATEGORY_COLORS } from './icons.ts';
 import { fetchCached } from './localcache.ts';
+import { formatPop } from './living.ts';
 import { viaServer } from './media.ts';
 
 const CONFIDENCE: Record<Poi['confidence'], { icon: string; label: string; title: string }> = {
@@ -41,7 +42,9 @@ function rulerEl(r: PolityRulerInfo): string {
     </a>`;
 }
 
-const DOOR_ICONS: Record<DoorKind, string> = { time: '🕰️', meanwhile: '🌍', next: '🔗', surprise: '❓' };
+const DOOR_ICONS: Record<DoorKind, string> = { cause: '⏪', effect: '⏩', meanwhile: '🌍', time: '🕰️', surprise: '❓' };
+/** Cards kept in the trail of the walk. */
+const TRAIL_MAX = 12;
 const DOOR_POLL_MS = 1500;
 const DOOR_WAIT_MS = 60_000;
 
@@ -57,14 +60,52 @@ export class Card {
   private shown: string | null = null;
   /** Territory card: what another click on the map will do. */
   private hint: string | null = null;
+  /** The walk so far: the points whose cards were read, oldest first (the current one last). */
+  private trail: PoiLite[] = [];
 
   get currentPoi(): string | null {
     return this.root.hidden ? null : this.shown;
   }
 
-  constructor(private root: HTMLElement, private onClose: () => void, private onDoor: (door: Door) => void) {
+  /** `onTravel`: go to a point (through a door, or back along the trail). */
+  constructor(private root: HTMLElement, private onClose: () => void, private onTravel: (p: PoiLite) => void) {
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !this.root.hidden) this.close();
+      if (this.root.hidden) return;
+      if (e.key === 'Escape') this.close();
+      // Backspace walks back the trail, like a browser.
+      const typing = e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable]');
+      if (e.key === 'Backspace' && !typing && this.shown && this.trail.length > 1) {
+        e.preventDefault();
+        this.onTravel(this.trail[this.trail.length - 2]!);
+      }
+    });
+  }
+
+  /** A card read: the trail grows, or goes back to it if it was already on the way. */
+  private remember(p: Poi): void {
+    const i = this.trail.findIndex((x) => x.id === p.id);
+    if (i >= 0) this.trail = this.trail.slice(0, i + 1);
+    else this.trail = [...this.trail, toLite(p)].slice(-TRAIL_MAX);
+  }
+
+  private trailEl(): string {
+    if (this.trail.length < 2) return '';
+    const past = this.trail.slice(0, -1);
+    return `<nav class="trail" aria-label="Chemin parcouru">
+      <span class="trail-label">Chemin</span>
+      ${past.map((p, i) => `<button type="button" class="trail-step" data-i="${i}" title="${esc(formatPoiDate(p.date_start, p.date_end, p.date_precision))}">${esc(p.title)}</button><span class="trail-sep" aria-hidden="true">›</span>`).join('')}
+      <span class="trail-here">${esc(this.trail[this.trail.length - 1]!.title)}</span>
+      <button type="button" class="trail-clear" title="Oublier ce chemin" aria-label="Oublier ce chemin">×</button>
+    </nav>`;
+  }
+
+  private bindTrail(): void {
+    this.root.querySelectorAll<HTMLButtonElement>('.trail-step').forEach((b) =>
+      b.addEventListener('click', () => this.onTravel(this.trail[Number(b.dataset.i)]!)),
+    );
+    this.root.querySelector('.trail-clear')?.addEventListener('click', () => {
+      this.trail = this.trail.slice(-1);
+      this.root.querySelector('.trail')?.remove();
     });
   }
 
@@ -236,6 +277,79 @@ export class Card {
     );
   }
 
+  /** Card of a city of the Villes layer: its population at the moment, and the figures it comes from. */
+  openCity(c: CityRow, pop: number, sure: number, year: number): void {
+    this.token++;
+    this.shown = null;
+    this.root.hidden = false;
+    document.body.classList.add('card-open');
+    const [name, country, , , certainty, series] = c;
+    const figures: [number, number][] = [];
+    for (let i = 0; i < series.length; i += 2) figures.push([series[i]!, series[i + 1]!]);
+    const max = Math.max(...figures.map(([, v]) => v));
+    this.root.innerHTML = `
+      <button class="card-close" type="button" aria-label="Fermer">×</button>
+      <div class="card-scroll"><div class="card-body">
+        <div class="card-kicker"><span class="card-cat"><i style="background:#efe4cc"></i>Ville</span></div>
+        <h2 class="card-title">${esc(name)}</h2>
+        <div class="card-desc">${esc(country)}</div>
+        <div class="card-date">${esc(formatPop(pop))} habitants en ${esc(formatYear(Math.floor(year)))}</div>
+        <div class="card-summary-note">${sure < 1 ? 'Estimation incertaine : chiffre repris du plus proche, ou interpolé entre deux chiffres éloignés de plusieurs siècles. ' : ''}${certainty > 1 ? 'Emplacement incertain dans la source.' : ''}</div>
+        <div class="card-section">
+          <div class="card-section-title">Population estimée</div>
+          <ol class="city-figures">${figures.map(([y, v]) => `
+            <li><span class="journey-when">${esc(formatYear(y))}</span><span class="city-bar" style="width:${Math.max(2, Math.round((100 * Math.log10(v)) / Math.log10(max)))}%"></span><span class="city-pop">${esc(formatPop(v))}</span></li>`).join('')}</ol>
+          <div class="card-summary-note">Entre deux chiffres, la population est interpolée. Les estimations anciennes sont des ordres de grandeur.</div>
+        </div>
+        <div class="card-section">
+          <div class="card-section-title">Sources</div>
+          <ul class="card-sources">
+            <li><a href="https://doi.org/10.1038/sdata.2016.34" target="_blank" rel="noopener">Reba, Reitsma et Seto (2016), 6 000 ans d’urbanisation (Chandler, Modelski), CC BY 4.0</a></li>
+          </ul>
+        </div>
+      </div></div>`;
+    this.bindClose();
+  }
+
+  /** Card of a flow (trade route, epidemic, diffusion): its places in order; one clicked takes the map there. */
+  openFlow(def: FlowDef, flow: Flow, stage: number, onStage: (s: FlowStage) => void): void {
+    this.token++;
+    this.shown = null;
+    this.root.hidden = false;
+    document.body.classList.add('card-open');
+    const here = flow.stages[stage];
+    const span = def.start === def.end ? formatYear(def.start) : `${formatYear(def.start)} – ${formatYear(def.end)}`;
+    const color = { trade: '#d9a441', epidemic: '#d9534f', diffusion: '#7fb3e0' }[def.kind];
+    this.root.innerHTML = `
+      <button class="card-close" type="button" aria-label="Fermer">×</button>
+      <div class="card-scroll"><div class="card-body">
+        <div class="card-kicker">
+          <span class="card-cat"><i style="background:${color}"></i>${esc(FLOW_LABELS[def.kind].label)}</span>
+          <span class="badge web_single_source" title="Étapes lues par une IA dans l’article cité, puis placées sur la carte">🔎 Lu par IA</span>
+        </div>
+        <h2 class="card-title">${esc(def.title)}</h2>
+        <div class="card-date">${esc(span)}</div>
+        ${here ? `<div class="polity-hint">${esc(here.place)}, ${esc(formatYear(here.year))} : ${esc(here.note)}</div>` : ''}
+        <div class="card-section">
+          <div class="card-section-title">Étapes</div>
+          <ol class="journey">${flow.stages.map((s, i) => `
+            <li><button type="button" data-i="${i}" ${i === stage ? 'aria-current="true"' : ''}>
+              <span class="journey-when">${esc(formatYear(s.year))}</span>
+              <span class="journey-what"><b>${esc(s.place)}</b> ${esc(s.note)}${s.from !== null ? ` <small>depuis ${esc(flow.stages[s.from]!.place)}</small>` : ''}</span>
+            </button></li>`).join('')}</ol>
+          <div class="card-summary-note">Lieux et dates lus par une IA dans l’article ci-dessous (chaque étape y est citée), placés sur la carte par géocodage : vérifiez-les. Entre deux étapes, le trajet est tracé au plus court${def.kind === 'trade' ? ', par la mer quand il le faut' : ''}.</div>
+        </div>
+        <div class="card-section">
+          <div class="card-section-title">Sources</div>
+          <ul class="card-sources"><li><a href="${esc(flow.source.url)}" target="_blank" rel="noopener">${esc(flow.source.title)}</a></li></ul>
+        </div>
+      </div></div>`;
+    this.bindClose();
+    this.root.querySelectorAll<HTMLButtonElement>('.journey button').forEach((b) =>
+      b.addEventListener('click', () => onStage(flow.stages[Number(b.dataset.i)]!)),
+    );
+  }
+
   /** Replaces the card's hint line (what another click will do). */
   setHint(text: string | null): void {
     this.hint = text;
@@ -326,6 +440,7 @@ export class Card {
   }
 
   private render(p: Poi, token: number): void {
+    this.remember(p);
     const conf = CONFIDENCE[p.confidence];
     // Say where the text comes from whenever it is not a French Wikipedia intro.
     const note =
@@ -348,6 +463,7 @@ export class Card {
       <div class="card-scroll">
         ${image}
         <div class="card-body">
+          ${this.trailEl()}
           <div class="card-kicker">
             <span class="card-cat"><i style="background:${CATEGORY_COLORS[p.category]}"></i>${CATEGORY_LABELS[p.category]}</span>
             <span class="badge ${p.confidence}" title="${conf.title}">${conf.icon} ${conf.label}</span>
@@ -373,6 +489,7 @@ export class Card {
         </div>
       </div>`;
     this.bindClose();
+    this.bindTrail();
     const img = this.root.querySelector<HTMLImageElement>('.card-image img');
     if (img) {
       img.addEventListener('load', () => img.classList.add('loaded'));
@@ -420,7 +537,6 @@ export class Card {
     const el = document.createElement('button');
     el.type = 'button';
     el.className = 'door';
-    el.dataset.kind = d.kind;
     el.innerHTML = `
       <span class="door-icon" aria-hidden="true">${DOOR_ICONS[d.kind]}</span>
       <span class="door-text">
@@ -428,8 +544,22 @@ export class Card {
         <span class="door-dest">${esc(d.poi.title)}</span>
         <span class="door-meta">${esc(formatPoiDate(d.poi.date_start, d.poi.date_end, d.poi.date_precision))} · ${esc(d.hint)}</span>
       </span>`;
-    el.addEventListener('click', () => this.onDoor(d));
-    return el;
+    el.addEventListener('click', () => this.onTravel(d.poi));
+    const box = document.createElement('div');
+    box.className = 'door-box';
+    box.dataset.kind = d.kind;
+    box.appendChild(el);
+    // A link read by an AI says where, so it can be checked.
+    if (d.source) {
+      const src = document.createElement('a');
+      src.className = 'door-source';
+      src.href = d.source.url;
+      src.target = '_blank';
+      src.rel = 'noopener';
+      src.textContent = `Lien lu par IA dans « ${d.source.title.replace(/^Wikipédia : /, '')} » : vérifier`;
+      box.appendChild(src);
+    }
+    return box;
   }
 
   /** Loads the destination's card (and warms its summary and image) before the click. */
