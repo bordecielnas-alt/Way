@@ -15,6 +15,7 @@ import { BordersService } from './borders.ts';
 import { PeopleService } from './people.ts';
 import { SoundFiles } from './sounds.ts';
 import { MediaCache } from './media.ts';
+import { FlowService } from './flows.ts';
 import { normalizeCache, refreshMs } from './settings.ts';
 import type { Store } from './store/types.ts';
 
@@ -30,6 +31,7 @@ export * from './router.ts';
 export * from './level2.ts';
 export * from './doors.ts';
 export * from './links.ts';
+export * from './flows.ts';
 export * from './settings.ts';
 export * from './polity.ts';
 export * from './borders.ts';
@@ -103,4 +105,9 @@ export function cacheBudget(cfg: Config, settings: SettingsFile): number {
 /** Sounds imported in the Réglages page, next to the data. */
 export function createSoundFiles(cfg: Config): SoundFiles {
   return new SoundFiles(join(cfg.dataDir ?? devDir, 'sounds'));
+}
+
+/** Trade routes, epidemics and diffusions read by an AI, kept next to the data. */
+export function createFlows(cfg: Config, router: ProviderRouter): FlowService {
+  return new FlowService(join(cfg.dataDir ?? devDir, 'flows.json'), router);
 }
