@@ -1,6 +1,7 @@
 import {
   ACTIVITY_LABELS, CATEGORY_LABELS, DOOR_KINDS, type Army, type JourneyStop, type PersonJourney, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
   type PoiLite, type PolityInfo, type PolityRulerInfo, toLite, FLOW_LABELS, type CityRow, type Flow, type FlowDef, type FlowStage,
+  STORY_PHASES, STORY_PHASE_LABELS, type Story, type StoryPerson, type StoryResponse, type StoryStop,
 } from '@way/shared';
 import { setActivity } from './activity.ts';
 import { CATEGORY_COLORS } from './icons.ts';
@@ -48,6 +49,8 @@ const DOOR_ICONS: Record<DoorKind, string> = { cause: '⏪', effect: '⏩', mean
 const TRAIL_MAX = 12;
 const DOOR_POLL_MS = 1500;
 const DOOR_WAIT_MS = 60_000;
+const STORY_POLL_MS = 3000;
+const STORY_WAIT_MS = 150_000;
 
 /** Right-hand side panel with the selected point's card. */
 /** A realm of the map, a member drawn inside it (real borders), or a region whose limits are estimated. */
@@ -63,6 +66,11 @@ export class Card {
   private hint: string | null = null;
   /** The walk so far: the points whose cards were read, oldest first (the current one last). */
   private trail: PoiLite[] = [];
+
+  /** A stop of a card's story: the map and the timeline go there; `openCard`: its own card too, when it has one. */
+  onStoryStop: (s: StoryStop, openCard: boolean) => void = () => undefined;
+  /** A person of a card's story: followed on the map (Personnages panel). */
+  onStoryPerson: (p: StoryPerson) => void = () => undefined;
 
   get currentPoi(): string | null {
     return this.root.hidden ? null : this.shown;
@@ -477,6 +485,10 @@ export class Card {
             <div class="card-section-title">Continuer l’exploration</div>
             <div class="door-list"></div>
           </div>
+          <div class="card-section story" hidden>
+            <div class="card-section-title">Le fil de l’histoire</div>
+            <div class="story-body"></div>
+          </div>
           <div class="card-section">
             <div class="card-section-title">Sources</div>
             <ul class="card-sources">${p.sources
@@ -498,6 +510,118 @@ export class Card {
     }
     this.root.querySelector('.card-scroll')!.scrollTop = 0;
     void this.loadDoors(p.id, token);
+    void this.loadStory(p.id, token);
+  }
+
+  /** The story is read once by an AI: poll while it is, then lay it out. */
+  private async loadStory(id: string, token: number): Promise<void> {
+    const key = `story:${token}`;
+    const section = this.root.querySelector<HTMLElement>('.story')!;
+    const body = section.querySelector<HTMLElement>('.story-body')!;
+    const started = performance.now();
+    try {
+      for (;;) {
+        let res: StoryResponse;
+        try {
+          const r = await fetch(`/api/poi/${encodeURIComponent(id)}/story`);
+          if (!r.ok) throw new Error(String(r.status));
+          res = (await r.json()) as StoryResponse;
+        } catch {
+          res = { status: 'none', story: null };
+        }
+        if (token !== this.token) return;
+        if (res.story) {
+          section.hidden = false;
+          this.renderStory(body, res.story);
+          return;
+        }
+        if (res.status !== 'pending' || performance.now() - started > STORY_WAIT_MS) {
+          section.hidden = true;
+          return;
+        }
+        if (section.hidden) {
+          section.hidden = false;
+          body.innerHTML = `<div class="story-wait">L’IA lit l’article : lieux, personnages, scénarios…</div>
+            ${'<div class="door skeleton story-skeleton"></div>'.repeat(3)}`;
+        }
+        setActivity(key, { label: 'IA · fil de l’histoire', title: 'L’IA lit l’article pour ses lieux, ses personnages et des scénarios', ai: true });
+        await new Promise((r) => setTimeout(r, STORY_POLL_MS));
+      }
+    } finally {
+      setActivity(key, null);
+    }
+  }
+
+  private renderStory(body: HTMLElement, s: Story): void {
+    const life = (p: StoryPerson) =>
+      p.born !== null || p.died !== null ? `${p.born !== null ? formatYear(p.born) : '?'} – ${p.died !== null ? formatYear(p.died) : ''}` : '';
+    const stop = (i: number) => {
+      const st = s.stops[i]!;
+      return `<li><button type="button" class="story-stop" data-stop="${i}" title="${st.poi ? 'Aller à cette fiche' : 'Aller à ce lieu'}">
+        <span class="story-year">${esc(formatYear(st.year))}</span>
+        <span class="story-text"><span class="story-label">${esc(st.label)}</span><span class="story-name">${esc(st.poi?.title ?? st.name)}</span></span>
+        ${st.poi ? '<span class="story-card" aria-label="fiche">›</span>' : '<span class="story-card story-pin" aria-label="lieu">◎</span>'}
+      </button></li>`;
+    };
+    const phases = STORY_PHASES.map((ph) => {
+      const idx = s.stops.flatMap((st, i) => (st.phase === ph ? [i] : []));
+      return idx.length ? `<div class="story-phase story-${ph}"><div class="story-phase-title">${STORY_PHASE_LABELS[ph]}</div><ol class="story-stops">${idx.map(stop).join('')}</ol></div>` : '';
+    }).join('');
+    const people = s.people.length
+      ? `<div class="story-phase"><div class="story-phase-title">Personnages <span class="story-aside">· cliquer pour suivre sur la carte</span></div>
+          <div class="story-people">${s.people.map((p, i) => `
+            <button type="button" class="story-person" data-person="${i}" title="Suivre ${esc(p.name)} sur la carte">
+              <span class="ruler-portrait">${p.image ? `<img alt="" src="${esc(viaServer(p.image))}" referrerpolicy="no-referrer">` : esc(p.name.charAt(0))}</span>
+              <span class="ruler-text"><span class="ruler-name">${esc(p.name)}</span><span class="ruler-meta">${esc([p.role, life(p)].filter(Boolean).join(' · '))}</span></span>
+            </button>`).join('')}</div></div>`
+      : '';
+    const scenarios = s.scenarios.length
+      ? `<div class="story-phase"><div class="story-phase-title">Scénarios <span class="story-aside">· imaginés par l’IA d’après l’article</span></div>
+          ${s.scenarios.map((sc, k) => `
+            <details class="story-scenario" data-scenario="${k}">
+              <summary><span class="story-sc-title">🎭 ${esc(sc.title)}</span><span class="story-sc-premise">${esc(sc.premise)}</span></summary>
+              <ol class="story-steps">${sc.steps.map((st, j) => {
+                const where = s.stops[st.stop]!;
+                return `<li><button type="button" class="story-step" data-stop="${st.stop}" data-step="${j}">
+                  <span class="story-step-head">${j + 1}. ${esc(where.poi?.title ?? where.name)} · ${esc(formatYear(where.year))}</span>
+                  <span class="story-step-text">${esc(st.text)}</span>
+                </button></li>`;
+              }).join('')}</ol>
+              <div class="story-sc-actions">
+                <button type="button" class="story-go" data-scenario="${k}">Partir ▸</button>
+                ${sc.person !== null && s.people[sc.person] ? `<button type="button" class="story-follow" data-person="${sc.person}">Suivre ${esc(s.people[sc.person]!.name)}</button>` : ''}
+              </div>
+            </details>`).join('')}</div>`
+      : '';
+    body.innerHTML = `${phases}${people}${scenarios}
+      <a class="door-source story-source" href="${esc(s.source.url)}" target="_blank" rel="noopener">Lu par IA dans « ${esc(s.source.title.replace(/^Wikipédia : /, ''))} » : vérifier</a>`;
+
+    body.querySelectorAll<HTMLButtonElement>('.story-stop').forEach((b) =>
+      b.addEventListener('click', () => this.onStoryStop(s.stops[Number(b.dataset.stop)]!, true)),
+    );
+    body.querySelectorAll<HTMLButtonElement>('.story-person, .story-follow').forEach((b) =>
+      b.addEventListener('click', () => this.onStoryPerson(s.people[Number(b.dataset.person)]!)),
+    );
+    // A scenario walks on the map only: its card stays open, step after step.
+    const step = (box: HTMLElement, j: number) => {
+      const btns = [...box.querySelectorAll<HTMLButtonElement>('.story-step')];
+      const b = btns[j];
+      if (!b) return;
+      btns.forEach((x) => x.classList.toggle('active', x === b));
+      const go = box.querySelector<HTMLButtonElement>('.story-go')!;
+      go.dataset.next = String(j + 1);
+      go.textContent = j + 1 < btns.length ? `Étape suivante (${j + 2}/${btns.length}) ▸` : 'Recommencer ↺';
+      this.onStoryStop(s.stops[Number(b.dataset.stop)]!, false);
+    };
+    body.querySelectorAll<HTMLElement>('.story-scenario').forEach((box) => {
+      box.querySelectorAll<HTMLButtonElement>('.story-step').forEach((b) => b.addEventListener('click', () => step(box, Number(b.dataset.step))));
+      const go = box.querySelector<HTMLButtonElement>('.story-go')!;
+      go.addEventListener('click', () => {
+        const n = Number(go.dataset.next ?? 0);
+        step(box, n < box.querySelectorAll('.story-step').length ? n : 0);
+      });
+    });
+    body.querySelectorAll<HTMLImageElement>('.story-person img').forEach((img) => img.addEventListener('error', () => img.remove()));
   }
 
   /** Doors arrive progressively: poll until every kind is known. */

@@ -34,12 +34,17 @@ export async function searchPeople(text: string): Promise<PersonHit[]> {
     })}`,
   );
   const ids = (s.query?.search ?? []).map((r) => r.title).filter((t) => /^Q\d+$/.test(t));
+  return peopleByQids(ids);
+}
+
+/** Humans among `ids` (other items are dropped), best known first. */
+export async function peopleByQids(ids: string[]): Promise<PersonHit[]> {
   if (!ids.length) return [];
   const q = `
 SELECT ?p ?sl (SAMPLE(?lf) AS ?fr) (SAMPLE(?le) AS ?en) (SAMPLE(?df) AS ?desc) (SAMPLE(?de) AS ?descEn)
   (MIN(?b) AS ?born) (MIN(?d) AS ?died) (SAMPLE(?im) AS ?img) WHERE {
   VALUES ?p { ${ids.map((x) => `wd:${x}`).join(' ')} }
-  ?p wikibase:sitelinks ?sl .
+  ?p wdt:P31 wd:Q5 ; wikibase:sitelinks ?sl .
   OPTIONAL { ?p rdfs:label ?lf . FILTER(LANG(?lf) = "fr") }
   OPTIONAL { ?p rdfs:label ?le . FILTER(LANG(?le) = "en") }
   OPTIONAL { ?p schema:description ?df . FILTER(LANG(?df) = "fr") }

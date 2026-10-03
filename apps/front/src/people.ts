@@ -274,8 +274,9 @@ export class PeopleLayer {
     }
   }
 
-  private follow(h: PersonHit): void {
-    if (this.prefs.followed.some((f) => f.qid === h.qid)) return;
+  /** Follows someone (from the search, or a card's story); already followed: goes to them. */
+  follow(h: PersonHit): void {
+    if (this.prefs.followed.some((f) => f.qid === h.qid)) return this.onGoTo(h.qid);
     const used = new Set(this.prefs.followed.map((f) => f.color));
     const color = PALETTE.find((c) => !used.has(c)) ?? PALETTE[this.prefs.followed.length % PALETTE.length]!;
     this.prefs.followed.push({ qid: h.qid, name: h.name, color });

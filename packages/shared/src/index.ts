@@ -10,3 +10,4 @@ export * from './borders.ts';
 export * from './people.ts';
 export * from './themes.ts';
 export * from './living.ts';
+export * from './story.ts';

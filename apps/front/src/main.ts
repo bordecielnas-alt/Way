@@ -254,6 +254,23 @@ const card = new Card(
   },
   travel,
 );
+/** A stop of a card's story: there, at the story's moment (a port's own card would take the timeline to its founding). */
+card.onStoryStop = (s, openCard) => {
+  clearTerritory();
+  timeline.glideTo(s.year);
+  viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(s.lon, s.lat, s.poi ? 600_000 : 1_200_000), duration: 1.6 });
+  if (!s.poi) return;
+  pois.upsert([s.poi]);
+  pois.select(s.poi.id);
+  if (openCard) {
+    playSound(s.poi.category);
+    void card.open(s.poi.id);
+  }
+};
+card.onStoryPerson = (p) => {
+  playSound('person');
+  people.follow({ qid: p.qid, name: p.name, description: p.role, born: p.born, died: p.died, image: p.image });
+};
 
 /** Shows a point's card; the camera only moves on click, not on hover. */
 function showPoi(id: string): void {

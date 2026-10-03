@@ -253,6 +253,63 @@ body.card-open .basemap { right: 452px; }
 .door-meta { font-size: 12px; color: var(--muted); }
 @keyframes door-in { from { opacity: 0; transform: translateY(4px); } }
 
+/* ---------- story of a card: places, people, scenarios ---------- */
+.story-body { display: grid; gap: 16px; }
+.story-wait { font-size: 12px; color: var(--muted); font-style: italic; }
+.story-skeleton { height: 40px; }
+.story-phase-title { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--gold); margin-bottom: 6px; }
+.story-aside { text-transform: none; letter-spacing: 0; color: var(--muted); font-style: italic; }
+.story-stops { list-style: none; margin: 0; padding: 0 0 0 9px; border-left: 1px solid rgba(217, 164, 65, 0.35); display: grid; gap: 2px; }
+.story-stop {
+  position: relative; display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px;
+  background: none; border: 0; border-radius: 6px; color: var(--ink); text-align: left; cursor: pointer; font: inherit;
+  animation: door-in 0.35s ease-out both;
+}
+.story-stop::before {
+  content: ''; position: absolute; left: -13px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px;
+  border-radius: 50%; background: var(--panel-bg-solid); border: 1px solid var(--gold);
+}
+.story-stop:hover, .story-stop:focus-visible { background: var(--gold-soft); outline: none; }
+.story-stop:hover::before { background: var(--gold); }
+.story-year { flex: none; width: 52px; font-size: 12px; color: var(--gold); font-variant-numeric: tabular-nums; }
+.story-text { display: grid; gap: 1px; min-width: 0; flex: 1; }
+.story-label { font-size: 11px; color: var(--muted); }
+.story-name { font-family: var(--serif); font-size: 16px; line-height: 1.2; }
+.story-card { flex: none; color: var(--muted); font-size: 16px; }
+.story-pin { font-size: 12px; }
+.story-people { display: grid; gap: 2px; }
+.story-person {
+  display: flex; align-items: center; gap: 12px; padding: 6px 10px; margin: 0 -10px; width: calc(100% + 20px);
+  background: none; border: 0; border-radius: 10px; color: var(--ink); text-align: left; cursor: pointer; font: inherit;
+}
+.story-person:hover, .story-person:focus-visible { background: rgba(255, 255, 255, 0.05); outline: none; }
+.story-person .ruler-portrait { width: 36px; height: 36px; font-size: 15px; }
+.story-person .ruler-name { font-size: 16px; }
+.story-scenario { border: 1px solid var(--panel-border); border-radius: 8px; background: rgba(255, 255, 255, 0.03); }
+.story-scenario + .story-scenario { margin-top: 8px; }
+.story-scenario summary { display: grid; gap: 3px; padding: 10px 12px; cursor: pointer; list-style: none; }
+.story-scenario summary::-webkit-details-marker { display: none; }
+.story-scenario[open] summary { border-bottom: 1px solid var(--panel-border); }
+.story-sc-title { font-family: var(--serif); font-size: 17px; }
+.story-sc-premise { font-size: 13px; color: var(--ink-soft); font-style: italic; }
+.story-steps { list-style: none; margin: 0; padding: 6px; display: grid; gap: 2px; }
+.story-step {
+  display: grid; gap: 2px; width: 100%; padding: 7px 8px; background: none; border: 0; border-left: 2px solid transparent;
+  border-radius: 4px; color: var(--ink); text-align: left; cursor: pointer; font: inherit;
+}
+.story-step:hover, .story-step:focus-visible { background: rgba(255, 255, 255, 0.05); outline: none; }
+.story-step.active { border-left-color: var(--gold); background: var(--gold-soft); }
+.story-step-head { font-size: 12px; color: var(--gold); }
+.story-step-text { font-size: 13.5px; line-height: 1.45; color: var(--ink-soft); }
+.story-sc-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 12px 12px; }
+.story-go, .story-follow {
+  padding: 6px 12px; border-radius: 999px; font: inherit; font-size: 12px; cursor: pointer;
+  border: 1px solid rgba(217, 164, 65, 0.55); background: var(--gold-soft); color: var(--ink);
+}
+.story-follow { background: none; color: var(--ink-soft); border-color: var(--panel-border); }
+.story-go:hover, .story-follow:hover { border-color: var(--gold); }
+.story-source { justify-self: end; }
+
 .skeleton { background: linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.09), rgba(255,255,255,0.04)); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; border-radius: 4px; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 

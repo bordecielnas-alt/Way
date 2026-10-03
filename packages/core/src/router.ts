@@ -205,12 +205,12 @@ export class ProviderRouter {
    * on answers `parse` rejects. Returns null in degraded mode.
    */
   async completeJson<T>(
-    task: Task, system: string, user: string, parse: (value: unknown) => T,
+    task: Task, system: string, user: string, parse: (value: unknown) => T, maxTokens?: number,
   ): Promise<{ value: T; provider: string } | null> {
     for (const id of this.cfg.routes[task]) {
       if (!this.available(id)) continue;
       const value = await this.call(id, task, async () => {
-        const text = await this.complete(id, system, user, this.cfg.providers[id]!.timeoutMs);
+        const text = await this.complete(id, system, user, this.cfg.providers[id]!.timeoutMs, maxTokens);
         return parse(llm.parseJsonObject(text));
       });
       if (value !== undefined) return { value, provider: id };
@@ -248,11 +248,11 @@ export class ProviderRouter {
   // ---------- internals ----------
 
   /** One JSON completion through the provider's own protocol. */
-  private complete(id: string, system: string, user: string, timeoutMs?: number): Promise<string> {
+  private complete(id: string, system: string, user: string, timeoutMs?: number, maxTokens?: number): Promise<string> {
     const def = this.cfg.providers[id]!;
     const common = { model: this.model(id)!, system, user, json: true, timeoutMs };
     if (def.api === 'anthropic') return llm.anthropicChat({ ...common, apiKey: this.key(id)!, effort: def.effort });
-    return llm.chat({ ...common, baseUrl: this.url(id)!, apiKey: this.key(id) ?? undefined });
+    return llm.chat({ ...common, baseUrl: this.url(id)!, apiKey: this.key(id) ?? undefined, maxTokens });
   }
 
   private async call<T>(id: string, task: string, fn: () => Promise<T>): Promise<T | undefined> {
