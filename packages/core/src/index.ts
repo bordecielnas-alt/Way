@@ -16,6 +16,7 @@ import { PeopleService } from './people.ts';
 import { SoundFiles } from './sounds.ts';
 import { MediaCache } from './media.ts';
 import { FlowService } from './flows.ts';
+import { StoryService } from './story.ts';
 import { normalizeCache, refreshMs } from './settings.ts';
 import type { Store } from './store/types.ts';
 
@@ -32,6 +33,7 @@ export * from './level2.ts';
 export * from './doors.ts';
 export * from './links.ts';
 export * from './flows.ts';
+export * from './story.ts';
 export * from './settings.ts';
 export * from './polity.ts';
 export * from './borders.ts';
@@ -110,4 +112,9 @@ export function createSoundFiles(cfg: Config): SoundFiles {
 /** Trade routes, epidemics and diffusions read by an AI, kept next to the data. */
 export function createFlows(cfg: Config, router: ProviderRouter): FlowService {
   return new FlowService(join(cfg.dataDir ?? devDir, 'flows.json'), router);
+}
+
+/** Stories of the cards (places, people, scenarios) read by an AI, kept next to the data. */
+export function createStories(cfg: Config, store: Store, router: ProviderRouter): StoryService {
+  return new StoryService(store, join(cfg.dataDir ?? devDir, 'stories.json'), router);
 }

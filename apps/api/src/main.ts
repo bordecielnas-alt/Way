@@ -5,7 +5,7 @@ import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { ClientMessage, type ServerMessage } from '@way/shared';
 import {
-  cacheBudget, createMedia, normalizeCache, CACHE_MAX_GB, createBorders, createFlows, createPeople, createPolities, createSoundFiles, SOUND_MAX_BYTES, SOUND_TYPES, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, type JobBus,
+  cacheBudget, createMedia, normalizeCache, CACHE_MAX_GB, createBorders, createFlows, createPeople, createStories, createPolities, createSoundFiles, SOUND_MAX_BYTES, SOUND_TYPES, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, type JobBus,
 } from '@way/core';
 import { Auth, COOKIE, readCookie } from './auth.ts';
 import { ViewService, type View } from './views.ts';
@@ -24,6 +24,7 @@ const polities = createPolities(cfg, clio, settings);
 polities.startRefining();
 const people = createPeople(cfg, settings);
 const flows = createFlows(cfg, router);
+const stories = createStories(cfg, store, router);
 const media = createMedia(cfg, settings);
 const soundFiles = createSoundFiles(cfg);
 const mode = {
@@ -202,6 +203,13 @@ app.get<{ Params: { id: string } }>('/api/poi/:id/doors', async (req, reply) => 
   const res = await doors.get(req.params.id);
   if (!res) return reply.code(404).send({ error: 'not found' });
   return res;
+});
+
+// The card's story (places, people, scenarios): read once by an AI, `pending` meanwhile.
+app.get<{ Params: { id: string } }>('/api/poi/:id/story', async (req, reply) => {
+  const poi = await store.getPoi(req.params.id);
+  if (!poi) return reply.code(404).send({ error: 'not found' });
+  return stories.get(poi);
 });
 
 // Kingdom card: the territory's name in the snapshot and the timeline year.

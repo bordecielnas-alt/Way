@@ -35,7 +35,12 @@ rubrique **Monde vivant** : les villes grandissent et déclinent (populations es
 [Reba et al. 2016](https://doi.org/10.1038/sdata.2016.34), CC BY 4.0, construites par `npx tsx scripts/build-cities.ts`),
 les routes commerciales s'animent de caravanes et de navires, les épidémies et les diffusions (religions,
 écritures, techniques) se propagent ville après ville. Les étapes des flux sont lues par l'IA dans un article
-Wikipédia (chaque étape doit y être citée) : il faut une clé d'IA, chaque flux est lu une fois puis gardé. Boutons
+Wikipédia (chaque étape doit y être citée) : il faut une clé d'IA, chaque flux est lu une fois puis gardé.
+Sur chaque fiche, **Le fil de l'histoire** (avec une clé d'IA) : les lieux et moments du sujet lus dans son article
+(pour le Titanic : construction à Belfast, départ de Southampton, escales de Cherbourg et Queenstown, arrivée du
+Carpathia à New York), ce qu'il a engendré, ses personnages (clic = les suivre sur la carte) et des scénarios à vivre
+étape par étape dans la peau de quelqu'un. Lieux et personnages doivent être cités dans l'article et se retrouver dans
+Wikidata ou sur la carte ; les scénarios sont imaginés par l'IA, mais seulement sur ces étapes vérifiées. Boutons
 ◂◂◂ … ▸▸▸ sous la timeline (ou ← ↓ → et Espace) : reculer, pause, avancer, jusqu'au jour près. Sons (et import de vos propres fichiers audio), ouverture
 au survol et filtre « Pendant ce temps » : Réglages → Interface. Taille et durée du cache (jusqu'à 100 Go) :
 Réglages → Cache.

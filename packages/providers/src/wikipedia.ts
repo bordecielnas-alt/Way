@@ -83,3 +83,34 @@ export async function pageText(lang: string, title: string, chars = 12_000): Pro
   if (!p || p.missing || !p.extract) return null;
   return { title: p.title, url: articleUrl(lang, p.title), text: p.extract.length > chars ? `${p.extract.slice(0, chars)}…` : p.extract };
 }
+
+interface LinksResponse {
+  continue?: Record<string, string>;
+  query?: {
+    pages?: { title: string; missing?: boolean; pageprops?: { wikibase_item?: string } }[];
+    redirects?: { from: string; to: string }[];
+  };
+}
+
+/**
+ * The Wikidata items an article links to, with the titles that led there
+ * (the page's own, and the redirects the article used). The article's own
+ * links say which Southampton or which Edward Smith it means.
+ */
+export async function linkedItems(lang: string, title: string, max = 2000): Promise<{ qid: string; titles: string[] }[]> {
+  const byTitle = new Map<string, string>();
+  const aliases = new Map<string, string[]>();
+  let cont: Record<string, string> = {};
+  for (let page = 0; page < 6 && byTitle.size < max; page++) {
+    const params = new URLSearchParams({
+      action: 'query', generator: 'links', titles: title, gplnamespace: '0', gpllimit: 'max',
+      prop: 'pageprops', ppprop: 'wikibase_item', redirects: '1', format: 'json', formatversion: '2', ...cont,
+    });
+    const r = await fetchJson<LinksResponse>(`https://${lang}.wikipedia.org/w/api.php?${params}`);
+    for (const p of r.query?.pages ?? []) if (p.pageprops?.wikibase_item) byTitle.set(p.title, p.pageprops.wikibase_item);
+    for (const rd of r.query?.redirects ?? []) aliases.set(rd.to, [...(aliases.get(rd.to) ?? []), rd.from]);
+    if (!r.continue) break;
+    cont = r.continue;
+  }
+  return [...byTitle].map(([t, qid]) => ({ qid, titles: [t, ...(aliases.get(t) ?? [])] }));
+}
