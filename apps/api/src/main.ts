@@ -3,7 +3,7 @@ import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
 import { z } from 'zod';
-import { ClientMessage, type ServerMessage } from '@way/shared';
+import { ClientMessage, THEMES, type ServerMessage } from '@way/shared';
 import {
   cacheBudget, createMedia, normalizeCache, CACHE_MAX_GB, createBorders, createFlows, createPeople, createStories, createPolities, createSoundFiles, SOUND_MAX_BYTES, SOUND_TYPES, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, type JobBus,
 } from '@way/core';
@@ -210,6 +210,27 @@ app.get<{ Params: { id: string } }>('/api/poi/:id/story', async (req, reply) => 
   const poi = await store.getPoi(req.params.id);
   if (!poi) return reply.code(404).send({ error: 'not found' });
   return stories.get(poi);
+});
+
+// Scenarios over that story, written for the visitor's lens, themes and walk so far.
+const ScenariosQuery = z.object({
+  lens: z.string().max(40).optional(),
+  themes: z.string().max(300).default(''),
+  people: z.enum(['0', '1']).default('1'),
+  trail: z.union([z.string().max(300), z.array(z.string().max(300)).max(12)]).optional(),
+});
+app.get<{ Params: { id: string } }>('/api/poi/:id/scenarios', async (req, reply) => {
+  const q = ScenariosQuery.safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: q.error.issues });
+  const poi = await store.getPoi(req.params.id);
+  if (!poi) return reply.code(404).send({ error: 'not found' });
+  const trail = q.data.trail === undefined ? [] : Array.isArray(q.data.trail) ? q.data.trail : [q.data.trail];
+  return stories.scenarios(poi, {
+    lens: q.data.lens || null,
+    themes: THEMES.filter((t) => q.data.themes.split(',').includes(t)),
+    people: q.data.people === '1',
+    trail: trail.slice(-6),
+  });
 });
 
 // Kingdom card: the territory's name in the snapshot and the timeline year.
