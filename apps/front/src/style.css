@@ -306,8 +306,17 @@ body.card-open .basemap { right: 452px; }
   padding: 6px 12px; border-radius: 999px; font: inherit; font-size: 12px; cursor: pointer;
   border: 1px solid rgba(217, 164, 65, 0.55); background: var(--gold-soft); color: var(--ink);
 }
-.story-follow { background: none; color: var(--ink-soft); border-color: var(--panel-border); }
+.story-follow, .story-cancel { background: none; color: var(--ink-soft); border-color: var(--panel-border); }
+.story-cancel {
+  padding: 6px 12px; border-radius: 999px; font: inherit; font-size: 12px; cursor: pointer; border: 1px solid rgba(200, 85, 79, 0.5);
+}
 .story-go:hover, .story-follow:hover { border-color: var(--gold); }
+.story-cancel:hover { border-color: #c8554f; color: var(--ink); }
+.story-scenario.playing { border-color: rgba(217, 164, 65, 0.55); }
+.story-sc-kind { justify-self: start; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; }
+.story-sc-kind.real { color: var(--gold); background: var(--gold-soft); }
+.story-sc-kind.invented { color: var(--info); background: rgba(91, 143, 209, 0.12); }
+.story-step-cast { font-size: 11.5px; color: var(--muted); font-style: italic; }
 .story-source { justify-self: end; }
 
 .skeleton { background: linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.09), rgba(255,255,255,0.04)); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; border-radius: 4px; }

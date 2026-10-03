@@ -9,11 +9,12 @@ import './style.css';
 import { ScreenSpaceEventType, Cartesian2, BoundingSphere, Cartesian3, Cartographic, Math as CesiumMath, type Entity } from 'cesium';
 import {
   cellsForRect, formatPoiDate, formatYear, isGlobalSearchRes, MAX_YEAR, MIN_YEAR, rectAreaKm2, resolutionForArea, ringAround, CATEGORY_LABELS,
-  ALL_THEMES, type Backdrop, type Category, type PoiLite, type SubdivisionsResponse, type ThemeFilter, type ViewMessage,
+  ALL_THEMES, THEMES, type Backdrop, type Category, type PoiLite, type SubdivisionsResponse, type ThemeFilter, type ViewMessage,
 } from '@way/shared';
 import { currentActivity, onActivity, setActivity } from './activity.ts';
 import { BordersLayer, realmKey, type BorderShape } from './borders.ts';
 import { Card } from './card.ts';
+import { CastLayer, type CastMember } from './cast.ts';
 import { Connection } from './connection.ts';
 import { bounds, contains, divide, type Area, type Region } from './divisions.ts';
 import { Filters, importanceFloor, type Heraldry, type Scale } from './filters.ts';
@@ -169,6 +170,8 @@ const savedThemes: ThemeFilter = saved.themes
   ?? (saved.hidden
     ? { hiddenThemes: [], hiddenCats: saved.hidden.filter((c) => c !== 'person'), people: !saved.hidden.includes('person') }
     : ALL_THEMES);
+/** Set once the card exists: the filters changed, its scenarios follow the new view. */
+let refreshScenarios = (): void => undefined;
 const filters = new Filters(
   document.getElementById('filters')!,
   savedThemes,
@@ -176,11 +179,13 @@ const filters = new Filters(
     pois.setFilter(filters.shown);
     filters.setCounts(pois.inWindow());
     save({ themes, hidden: undefined });
+    refreshScenarios();
   },
   saved.backdrop ?? 'political',
   (backdrop) => {
     save({ backdrop });
     borders.setBackdrop(backdrop);
+    refreshScenarios();
     syncPaper();
   },
   saved.scale ?? 'selection',
@@ -254,11 +259,34 @@ const card = new Card(
   },
   travel,
 );
+/**
+ * Looks straight down on a point from `height`, the point in the middle of
+ * the map left visible between the filters and the card (not under the card).
+ */
+function flyToVisible(lat: number, lon: number, height: number): void {
+  const canvas = viewer.scene.canvas;
+  const rect = (id: string) => {
+    const el = document.getElementById(id);
+    return el && !el.hidden ? el.getBoundingClientRect() : null;
+  };
+  const left = rect('filters')?.right ?? 0;
+  const right = rect('card')?.left ?? canvas.clientWidth;
+  const shiftPx = canvas.clientWidth / 2 - (left + right) / 2;
+  const f = viewer.camera.frustum as { fov?: number; aspectRatio?: number };
+  const aspect = f.aspectRatio ?? canvas.clientWidth / Math.max(1, canvas.clientHeight);
+  const fov = f.fov ?? Math.PI / 3;
+  const fovX = aspect >= 1 ? fov : 2 * Math.atan(Math.tan(fov / 2) * aspect);
+  const metersPerPx = (2 * height * Math.tan(fovX / 2)) / Math.max(1, canvas.clientWidth);
+  // The camera moves east of the point, so the point shows left of the center.
+  const dLon = (shiftPx * metersPerPx) / (111_320 * Math.max(0.1, Math.cos(CesiumMath.toRadians(lat))));
+  viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(lon + dLon, lat, height), duration: 1.6 });
+}
+
 /** A stop of a card's story: there, at the story's moment (a port's own card would take the timeline to its founding). */
 card.onStoryStop = (s, openCard) => {
   clearTerritory();
   timeline.glideTo(s.year);
-  viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(s.lon, s.lat, s.poi ? 600_000 : 1_200_000), duration: 1.6 });
+  flyToVisible(s.lat, s.lon, s.poi ? 600_000 : 1_200_000);
   if (!s.poi) return;
   pois.upsert([s.poi]);
   pois.select(s.poi.id);
@@ -270,6 +298,49 @@ card.onStoryStop = (s, openCard) => {
 card.onStoryPerson = (p) => {
   playSound('person');
   people.follow({ qid: p.qid, name: p.name, description: p.role, born: p.born, died: p.died, image: p.image });
+};
+
+// ---------- scenarios of a card's story ----------
+const cast = new CastLayer(viewer);
+/** Where the visitor was when the scenario started: "Annuler" brings them back. */
+let beforeScenario: { year: number; camera: CameraState } | null = null;
+card.scenarioContext = () => ({
+  lens: filters.lens,
+  themes: THEMES.filter((t) => !filters.themes.hiddenThemes.includes(t)),
+  people: filters.themes.people,
+});
+refreshScenarios = () => card.refreshScenarios();
+card.onScenarioStep = (sc, j, story) => {
+  const step = sc.steps[j]!;
+  const where = story.stops[step.stop]!;
+  beforeScenario ??= { year: (timeline.moment.tStart + timeline.moment.tEnd) / 2, camera: cameraState(viewer) };
+  clearTerritory();
+  playSound(where.poi?.category ?? 'person');
+  timeline.glideTo(where.year);
+  flyToVisible(where.lat, where.lon, 900_000);
+  // The protagonist stands on the spot: "Vous" for an invented one, the real person otherwise.
+  const members: CastMember[] = step.cast.map((c) => {
+    const p = story.people[c]!;
+    return { name: p.name, role: p.role, image: p.image, you: c === sc.person };
+  });
+  if (sc.invented) members.unshift({ name: 'Vous', role: sc.title, image: null, you: true });
+  else if (sc.person !== null && !step.cast.includes(sc.person)) {
+    const p = story.people[sc.person]!;
+    members.unshift({ name: p.name, role: p.role, image: p.image, you: true });
+  }
+  cast.show(where, members);
+};
+card.onScenarioEnd = (restore) => {
+  cast.clear();
+  const back = beforeScenario;
+  beforeScenario = null;
+  if (!restore || !back) return;
+  timeline.glideTo(back.year);
+  viewer.camera.flyTo({
+    destination: Cartesian3.fromDegrees(back.camera.lon, back.camera.lat, back.camera.height),
+    orientation: { heading: back.camera.heading, pitch: back.camera.pitch, roll: 0 },
+    duration: 1.6,
+  });
 };
 
 /** Shows a point's card; the camera only moves on click, not on hover. */

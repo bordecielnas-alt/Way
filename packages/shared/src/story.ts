@@ -1,4 +1,5 @@
 import type { PoiLite, Source } from './poi.ts';
+import type { Theme } from './themes.ts';
 
 // The story of a subject (brief §4.5, beyond the five doors): an AI reads the
 // card's Wikipedia article for the places and moments of its story (where
@@ -6,7 +7,9 @@ import type { PoiLite, Source } from './poi.ts';
 // were buried), what it led to (the wars that followed the attacks on the
 // World Trade Center), the people who lived it, and a few walks through it
 // in someone's shoes. Places and moments quote the article; people are
-// Wikidata humans; scenarios are written by the AI over those checked stops.
+// Wikidata humans; scenarios are written by the AI over those checked stops,
+// for the way the visitor looks at the world (lens, themes) and the path that
+// led them to the card: two follow real people, the last an invented one.
 
 export const STORY_PHASES = ['before', 'during', 'after'] as const;
 export type StoryPhase = (typeof STORY_PHASES)[number];
@@ -45,18 +48,34 @@ export interface StoryScenario {
   title: string;
   /** Whose shoes, e.g. "Vous êtes un émigrant irlandais embarqué en troisième classe". */
   premise: string;
-  /** Index in `stops`, and what happens there for that character. */
-  steps: { stop: number; text: string }[];
+  /**
+   * Index in `stops`, what happens there for that character, and the key
+   * people present (indexes in `people`), placed on the map at that step.
+   */
+  steps: { stop: number; text: string; cast: number[] }[];
   /** Index in `people` when the scenario follows one of them. */
   person: number | null;
+  /** An invented character (a typical person of the time), not a real one. */
+  invented: boolean;
 }
 
 export interface Story {
   stops: StoryStop[];
   people: StoryPerson[];
-  scenarios: StoryScenario[];
   source: Source;
   provider: string;
+}
+
+/** How the visitor looks at the world and how they got here: scenarios are written for it. */
+export interface ScenarioContext {
+  /** Lens id when the filters are exactly a lens (`LENSES`). */
+  lens: string | null;
+  /** Themes shown. */
+  themes: Theme[];
+  /** People shown on the map. */
+  people: boolean;
+  /** Titles of the cards read before this one, oldest first (the walk so far). */
+  trail: string[];
 }
 
 /** `no-ai`: no AI can read the article now; `none`: nothing was found. */
@@ -65,4 +84,9 @@ export type StoryStatus = 'ready' | 'pending' | 'none' | 'no-ai';
 export interface StoryResponse {
   status: StoryStatus;
   story: Story | null;
+}
+
+export interface ScenariosResponse {
+  status: StoryStatus;
+  scenarios: StoryScenario[];
 }
