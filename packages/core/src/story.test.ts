@@ -3,7 +3,7 @@ import { walkOf, type PersonJourney, type StoryStop } from '@way/shared';
 import { grounded } from './links.ts';
 import {
   aliveIn, atSea, buildScenarios, contextKey, describeContext, ExtractedScenarios, ExtractedStory, fitsStory, linkMatches, livedThen,
-  buildPersonWalk, namedIn, namesMatch, nearEnough, personStops, plausibleYear, sameName, textFitsYear,
+  buildPersonWalk, detourAsk, namedIn, namesMatch, nearEnough, nearMoment, personStops, plausibleYear, sameName, textFitsYear,
 } from './story.ts';
 
 describe('story of a card', () => {
@@ -168,6 +168,31 @@ describe('scenarios played on their own', () => {
     expect(w.steps[0]!.cast.map((p) => p.qid)).toEqual(['Q1']);
   });
 
+  it('offers what the story led to, beyond the walk, as leads for its end', () => {
+    const from = { id: 'p1', title: 'Titanic' } as Parameters<typeof walkOf>[0];
+    const card = (id: string, title: string) => ({ id, title }) as NonNullable<StoryStop['poi']>;
+    const after = (name: string, year: number, poi: StoryStop['poi']): StoryStop => ({ ...stop(name, year, poi), phase: 'after' });
+    const story = {
+      stops: [
+        stop('Southampton', 1912), after('Enquête', 1912, card('e', 'Enquête américaine')), after('Convention', 1914, card('s', 'SOLAS')),
+        after('Épave', 1985, null), after('Mémorial', 1913, card('e', 'Enquête américaine')), stop('Arrivée', 1912, card('n', 'New York')),
+        after('Rapatriement', 1912, card('n', 'New York')),
+      ],
+      people: [], source: { url: 'u', title: 't', kind: 'wikipedia' as const }, provider: 'x',
+    };
+    const w = walkOf(from, story, { title: 'Un', premise: 'Vous êtes un émigrant.', person: null, invented: true, steps: [{ stop: 0, text: 'Un.', cast: [] }, { stop: 2, text: 'Deux.', cast: [] }, { stop: 5, text: 'Trois.', cast: [] }] });
+    // A stop or a card already walked through, one without a card, and the same card twice are no leads.
+    expect(w.after?.map((l) => l.poi.title)).toEqual(['Enquête américaine']);
+  });
+
+  it('keeps the moments nearest to the one branched from, in the order of time', () => {
+    const stops = [1850, 1873, 1889, 1909, 1911, 1912, 1985].map((year) => ({ year }));
+    expect(nearMoment(stops, 1910).map((s) => s.year)).toEqual([1889, 1909, 1911, 1912]);
+    expect(nearMoment(stops, 1910, 2).map((s) => s.year)).toEqual([1909, 1911]);
+    expect(nearMoment(stops.slice(0, 1), 1910)).toHaveLength(1);
+    expect(detourAsk(1912, 'Le chantier')).toContain('« Le chantier »');
+  });
+
   const journey: PersonJourney = {
     qid: 'Q1', name: 'Thomas Andrews', description: 'architecte naval', image: null, born: 1873.1, died: 1912.3,
     stops: [
@@ -206,5 +231,9 @@ describe('scenarios played on their own', () => {
     expect(w?.id).toBe('Q1|Une vie');
     // A text about another year does not fit its stop; two steps are not a walk.
     expect(buildPersonWalk(item([{ stop: 0, text: 'En 1950, rien.' }, { stop: 1, text: 'Un.' }, { stop: 2, text: 'Deux.' }]), stops, andrews, source)).toBeNull();
+    // A detour: two steps are enough, three at most, under its own id.
+    const detour = buildPersonWalk(item([{ stop: 1, text: 'Un.' }, { stop: 2, text: 'Deux.' }]), stops, andrews, source, { min: 2, max: 3, id: 'Q1|détour|1910' });
+    expect(detour?.steps).toHaveLength(2);
+    expect(detour?.id).toBe('Q1|détour|1910');
   });
 });
