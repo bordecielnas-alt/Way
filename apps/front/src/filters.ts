@@ -67,6 +67,8 @@ export class Filters {
     private onDetailed: (on: boolean) => void,
     public living: Living,
     private onLiving: (l: Living) => void,
+    public scenarios: boolean,
+    private onScenarios: (on: boolean) => void,
   ) {
     root.innerHTML = `
       <button type="button" class="filters-fold" aria-expanded="true">
@@ -97,6 +99,11 @@ export class Filters {
       ${section('geography', 'Géographie', `<div class="geo-chips" role="group" aria-label="Géographie">${GEOGRAPHY.map(
         (g) => `<button type="button" class="chip" data-geo="${g.key}" title="${g.title}"><span class="chip-dot" style="background:${g.color}"></span>${g.label}</button>`,
       ).join('')}</div>`)}
+      ${section('scenarios', 'Scénarios', `<div class="scale" role="group" aria-label="Scénarios">
+        <button type="button" data-scenarios="on" title="L’IA écrit des scénarios sur les fiches, et pour les personnages cherchés">Activés</button>
+        <button type="button" data-scenarios="off" title="Plus aucun scénario écrit ni proposé">Désactivés</button>
+      </div>
+      <div class="living-note scenarios-note">Désactivés : l’IA n’écrit plus aucun scénario, rien ne lui est demandé.</div>`)}
       ${section('heraldry', 'Blasons', `<div class="scale heraldry" role="group" aria-label="Blasons et drapeaux">${HERALDRY.map(
         (h) => `<button type="button" data-heraldry="${h.key}" title="${h.title}">${h.label}</button>`,
       ).join('')}</div>`)}
@@ -205,6 +212,16 @@ export class Filters {
         this.onGeography(this.geography);
       });
     });
+    root.querySelectorAll<HTMLButtonElement>('[data-scenarios]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const on = b.dataset.scenarios === 'on';
+        if (on === this.scenarios) return;
+        this.scenarios = on;
+        this.syncScenarios();
+        this.onScenarios(on);
+      }),
+    );
+    this.syncScenarios();
     if (!this.scaleButtons.has(this.scale)) this.scale = 'selection';
     if (!this.backdropButtons.has(this.backdrop)) this.backdrop = 'political';
     this.syncScale();
@@ -286,6 +303,7 @@ export class Filters {
     const count = (n: number) => (n ? `${n} actif${n > 1 ? 's' : ''}` : 'Aucun');
     sum('living', count(LIVING.filter((g) => this.living[g.key]).length));
     sum('geography', count(GEOGRAPHY.filter((g) => this.geography[g.key]).length));
+    sum('scenarios', this.scenarios ? 'Activés' : 'Désactivés');
     sum('heraldry', HERALDRY.filter((h) => this.heraldry[h.key]).map((h) => h.label).join(' · ') || 'Aucun');
     // Folded panel: the lens (else the backdrop) recalls the view.
     this.root.querySelector<HTMLElement>('.filters-fold .fsec-sum')!.textContent = lens?.label ?? BACKDROP_LABELS[this.backdrop].label;
@@ -330,6 +348,14 @@ export class Filters {
     this.backdrop = b;
     this.syncBackdrop();
     this.onBackdrop(b);
+  }
+
+  private syncScenarios(): void {
+    this.root.querySelectorAll<HTMLButtonElement>('[data-scenarios]').forEach((b) =>
+      b.setAttribute('aria-pressed', String((b.dataset.scenarios === 'on') === this.scenarios)),
+    );
+    this.root.querySelector<HTMLElement>('.scenarios-note')!.hidden = this.scenarios;
+    this.summarize();
   }
 
   private syncScale(): void {

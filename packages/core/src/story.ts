@@ -2,9 +2,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import {
-  distanceKm, histToAstro, LENSES, MAX_YEAR, MIN_YEAR, STORY_PHASES, THEME_LABELS, THEMES, toLite,
-  type Poi, type ScenarioContext, type ScenariosResponse, type Story, type StoryPerson, type StoryPhase, type StoryResponse,
-  type StoryScenario, type StoryStop,
+  ACTIVITY_LABELS, distanceKm, histToAstro, LENSES, MAX_YEAR, MIN_YEAR, STORY_PHASES, THEME_LABELS, THEMES, toLite,
+  type ActivityKind, type PersonJourney, type PersonScenarioResponse, type Poi, type PoiLite, type ScenarioContext, type ScenarioWalk,
+  type ScenariosResponse, type Source, type Story, type StoryPerson, type StoryPhase, type StoryResponse, type StoryScenario, type StoryStop,
 } from '@way/shared';
 import { geocode, people, wikidata, wikipedia, type DatedRow } from '@way/providers';
 import { grounded, normalize } from './links.ts';
@@ -24,16 +24,23 @@ import type { Store } from './store/types.ts';
 // with the people present at each step. Both are read once, then kept on disk.
 
 /** Bump when the reading changes: stories are read again. */
-const STORY_VERSION = 9;
-const SCENARIOS_VERSION = 8;
-const ARTICLE_CHARS = 20_000;
-const SCENARIO_ARTICLE_CHARS = 12_000;
-const MAX_STOPS = 12;
+const STORY_VERSION = 10;
+const SCENARIOS_VERSION = 9;
+const PERSON_VERSION = 2;
+/** Articles are read far enough for long stories: their later sections hold the aftermath. */
+const ARTICLE_CHARS = 40_000;
+const SCENARIO_ARTICLE_CHARS = 24_000;
+const MAX_STOPS = 20;
 const MAX_PEOPLE = 6;
 const MAX_SCENARIOS = 3;
 /** Real people followed by scenarios; the rest are invented characters. */
 const REAL_SCENARIOS = 2;
 const MAX_CAST = 4;
+/** Steps of a scenario: one per stop the character lives, as many as the story allows. */
+const MAX_STEPS = 12;
+/** A person's life: stops offered to the AI, and the fewest steps worth a walk. */
+const MAX_PERSON_STOPS = 20;
+const MIN_PERSON_STEPS = 3;
 /** Scenarios kept on disk (one set per card and way of looking). */
 const SCENARIOS_KEEP = 2000;
 /** Years a Wikidata event's date may differ from the article's. */
@@ -69,10 +76,10 @@ const ScenarioItem = z.object({
     stop: Index,
     text: z.string().trim().min(5).max(260),
     cast: z.array(Index.catch(-1)).max(8).catch([]),
-  }).nullable().catch(null)).max(8),
+  }).nullable().catch(null)).max(MAX_STEPS + 4),
 });
 export const ExtractedStory = z.object({
-  stops: z.array(StopItem.nullable().catch(null)).max(24).catch([]),
+  stops: z.array(StopItem.nullable().catch(null)).max(32).catch([]),
   people: z.array(PersonItem.nullable().catch(null)).max(12).catch([]),
 });
 export const ExtractedScenarios = z.object({
@@ -89,7 +96,7 @@ Return two lists.
    - "during": the places where it happened or that it went through (ports of departure and of call, the route, the site of the event, where people fled or were rescued);
    - "after": what it led to: later events, wars, trials, inquiries, rescues, burials, reconstructions, memorials.
    For each: name (the place or event as the article names it), article (the title of the Wikipedia article about that very event or place, e.g. "Harland & Wolff", "Attentat du World Trade Center de 1993"; never the subject's own article; null if none), at_subject (true when the stop happens at the subject's own location: its main event, e.g. the sinking for a ship, the attack for a building, the battle itself, and later events there, e.g. the discovery of a wreck; false for every other place, construction sites and ports included), modern_place (findable on a map today, in the article's language, followed by its country, e.g. "Southampton, Royaume-Uni", "Cobh, Irlande", "Lower Manhattan, New York, États-Unis"; for an event, the place where it happened), year (the year the article gives for that stop, historical: negative before Christ, no year 0; skip a stop the article gives no year for), label (its part in the story, in French, 2 to 6 words, e.g. "Port de départ", "Escale à Cherbourg", "Lieu du naufrage", "Riposte américaine"), phase, quote.
-   Aim for 8 to ${MAX_STOPS}, covering the three phases: for a voyage, every port of departure and of call, the place of the event, where the survivors were brought; for a war or an attack, each place struck and each later event the article names. Always include the main event (phase "during", at_subject = true). Every other stop must have a place on a map (a city, a port, a building, a site), not an ocean or a country.
+   Aim for 12 to ${MAX_STOPS}, covering the three phases: for a voyage, every port of departure and of call, the place of the event, where the survivors were brought; for a war or an attack, each place struck and each later event the article names. Always include the main event (phase "during", at_subject = true). Every other stop must have a place on a map (a city, a port, a building, a site), not an ocean or a country.
 2. people: the people of the story the article names (builders, commanders, victims, survivors, perpetrators, rescuers, witnesses...). For each: name (full name, as in their own Wikipedia article), role (in French, 2 to 8 words, e.g. "Commandant du navire", "Architecte des tours"), quote. At most ${MAX_PEOPLE}.
 Rules, all mandatory:
 - ONLY what the article states explicitly; quote = the words of the article (copied verbatim, 12 to 300 characters, one sentence) that state it. Never add knowledge of your own. Fewer items are better than doubtful ones.
@@ -102,12 +109,21 @@ Scenarios come in a set of ${MAX_SCENARIOS} (you may be asked for one of them at
 - the last one follows an INVENTED character, a typical person of the time and place the article describes, chosen for the angle (person = null, invented = true): e.g. for a merchant, a cargo agent or a shipowner's clerk rather than a tourist.
   If fewer than ${REAL_SCENARIOS} people are listed, write invented characters instead.
 The angle is mandatory: it decides who is followed, what the premise says and what each step tells (a merchant's scenario speaks of freight, tickets, money, ports and trade; a strategist's of decisions, orders and their consequences). When a card explored before connects to this subject, the premise starts from that link (e.g. coming from a port, the character left from it or works for it).
-For each scenario: title (French, a few words), premise (French, one sentence in the second person, "Vous êtes...", saying the character's angle), person, invented, steps (3 to 6, in the order of time, across the phases the character lived; each: stop = the number of one of the stops; text = what this character lives there, in French, two sentences in the second person, with the concrete facts the article gives there (times, numbers, names, decisions), no filler about feelings; cast = the numbers of the listed people the article places there at that moment (on board, on site), the protagonist included when real, at most ${MAX_CAST}; nobody who was not yet born, already dead, or elsewhere).
+For each scenario: title (French, a few words), premise (French, one sentence in the second person, "Vous êtes...", saying the character's angle), person, invented, steps (one per stop this character lives, as many as the stops allow: ideally 6 to ${MAX_STEPS}, never fewer than 3 when there are enough stops; in the order of time, across the phases the character lived; each: stop = the number of one of the stops; text = what this character lives there, in French, two sentences in the second person, with the concrete facts the article gives there (times, numbers, names, decisions), no filler about feelings; cast = the numbers of the listed people the article places there at that moment (on board, on site), the protagonist included when real, at most ${MAX_CAST}; nobody who was not yet born, already dead, or elsewhere).
 Rules, all mandatory:
 - Only the stops and people listed. Never invent events, dates or deeds the article does not support: the character may be imagined, the history may not.
 - A real person only at steps of their adult life where the article involves them, and never with a role before they held it (a future mayor is not yet mayor).
 - A step happens in its stop's year: choose the stop whose year is when the character lives that moment (a 1985 discovery is never on a 1912 stop), within a real person's lifetime (given with the people).
 Answer with a single JSON object: {"scenarios": [...]}.`;
+
+const PERSON_SYSTEM = `You write ONE interactive scenario for a visitor of a historical globe: a walk through the life of a REAL person, step by step, in their shoes.
+You get how the visitor looks at the world (with the angle to take), the checked places of that person's life (S0, S1...: from Wikidata, and from the stories of subjects they took part in), and their Wikipedia article.
+Write: title (French, a few words), premise (French, one sentence in the second person, "Vous êtes <their full name>...", saying the angle), person = null, invented = false, steps (one per place they live, as many as the article supports: ideally 6 to ${MAX_STEPS}, in the order of time; each: stop = the number of one of the places; text = what they live there, in French, two sentences in the second person, with the concrete facts the article gives for that moment (dates, numbers, names, decisions), no filler about feelings; cast = []).
+The angle is mandatory: it decides what the premise says and what each step tells.
+Rules, all mandatory:
+- Only the places listed. Never invent events, dates or deeds the article does not support; skip a place the article says nothing about.
+- A step happens in its place's year: its text speaks of that moment, never of another year.
+Answer with a single JSON object: {"scenarios": [ { ...the scenario... } ]}.`;
 
 /** What each lens looks for, told to the AI writing scenarios. */
 const LENS_ANGLES: Record<string, string> = {
@@ -256,7 +272,7 @@ export function buildScenarios(
       seen.add(st.stop);
       const cast = [...new Set(st.cast.filter((c) => c >= 0 && c < persons.length && aliveIn(persons[c]!, year)))].slice(0, MAX_CAST);
       return [{ stop: st.stop, text: st.text, cast }];
-    }).sort((a, b) => histToAstro(stops[a.stop]!.year) - histToAstro(stops[b.stop]!.year));
+    }).sort((a, b) => histToAstro(stops[a.stop]!.year) - histToAstro(stops[b.stop]!.year)).slice(0, MAX_STEPS);
     if (steps.length < 2) continue;
     if (isReal) {
       if (followed.has(person) || real.length >= REAL_SCENARIOS) continue;
@@ -286,6 +302,70 @@ export function contextKey(ctx: ScenarioContext): string {
   return `${view}|${ctx.people ? 1 : 0}|${normalize(ctx.trail.at(-1) ?? '')}`;
 }
 
+/** A place of a real person's life: from their Wikidata journey, or a stop of a card's story they took part in. */
+export interface PersonStop {
+  place: string;
+  label: string;
+  year: number;
+  lat: number;
+  lon: number;
+  poi: PoiLite | null;
+  /** The card whose story it comes from, if any. */
+  card: string | null;
+}
+
+/** Moments a journey guesses (on the way, waiting) are no places to stop at. */
+const GUESSED: ActivityKind[] = ['travel', 'sail', 'wait'];
+/** Two places of a life the same year closer than this are the same moment. */
+const SAME_PLACE_KM = 100;
+/** Which moments of a life are kept first when there are too many. */
+const KIND_RANK: Partial<Record<ActivityKind, number>> = { birth: 0, death: 0, battle: 1, coronation: 1, reign: 1, office: 2, event: 2, marriage: 3 };
+
+/**
+ * The places of someone's life, in the order of time: the stops of the card
+ * stories they appear in (within their lifetime), then their placed Wikidata
+ * moments, one per place and year; when too many, births, deaths, battles
+ * and reigns before studies and stays. Pure, for tests.
+ */
+export function personStops(j: PersonJourney, stories: { title: string; stops: StoryStop[] }[], max = MAX_PERSON_STOPS): PersonStop[] {
+  const life = { born: j.born === null ? null : Math.floor(j.born), died: j.died === null ? null : Math.floor(j.died) };
+  const seen = new Set<string>();
+  const out: (PersonStop & { rank: number })[] = [];
+  const add = (s: PersonStop, rank: number) => {
+    const key = `${normalize(s.place)}|${s.year}`;
+    // The same moment told twice (the sinking in the story, the death at sea in Wikidata): once.
+    if (seen.has(key) || !aliveIn(life, s.year) || out.some((o) => o.year === s.year && distanceKm(o, s) < SAME_PLACE_KM)) return;
+    seen.add(key);
+    out.push({ ...s, rank });
+  };
+  for (const story of stories) {
+    for (const s of story.stops) add({ place: s.poi?.title ?? s.name, label: s.label, year: s.year, lat: s.lat, lon: s.lon, poi: s.poi, card: story.title }, 0);
+  }
+  for (const s of j.stops) {
+    if (s.lat === null || s.lon === null || GUESSED.includes(s.kind)) continue;
+    add({ place: s.label, label: ACTIVITY_LABELS[s.kind], year: Math.floor(s.start), lat: s.lat, lon: s.lon, poi: null, card: null }, KIND_RANK[s.kind] ?? 4);
+  }
+  const kept = [...out].sort((a, b) => a.rank - b.rank).slice(0, max);
+  return kept.sort((a, b) => histToAstro(a.year) - histToAstro(b.year)).map(({ rank: _, ...s }) => s);
+}
+
+/**
+ * A person's life as a walk: only the stops listed, each once, in the order
+ * of time, while they lived, the text speaking of that moment; none under
+ * MIN_PERSON_STEPS steps. Pure, for tests.
+ */
+export function buildPersonWalk(item: ScenarioItem, stops: PersonStop[], hero: StoryPerson, source: Source): ScenarioWalk | null {
+  const seen = new Set<number>();
+  const steps = item.steps.flatMap((st) => {
+    const s = st && stops[st.stop];
+    if (!st || !s || seen.has(st.stop) || !aliveIn(hero, s.year) || !textFitsYear(st.text, s.year)) return [];
+    seen.add(st.stop);
+    return [{ place: s.place, label: s.label, year: s.year, lat: s.lat, lon: s.lon, poi: s.poi, text: st.text, cast: [hero] }];
+  }).sort((a, b) => histToAstro(a.year) - histToAstro(b.year)).slice(0, MAX_STEPS);
+  if (steps.length < MIN_PERSON_STEPS) return null;
+  return { id: `${hero.qid}|${item.title}`, title: item.title, premise: item.premise, invented: false, hero, steps, source, from: null };
+}
+
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 /** How far from the subject's card a stop "at the subject" may be named. */
 const SUBJECT_KM = 1200;
@@ -304,11 +384,13 @@ interface StoredStory extends Story { rows: (DatedRow | null)[] }
 interface Entry { at: number; v: number; story: StoredStory | null }
 /** `story`: when the story they walk through was read (its stops are numbered by that reading). */
 interface ScenariosEntry { at: number; v: number; story: number; scenarios: StoryScenario[] }
+interface PersonEntry { at: number; v: number; walk: ScenarioWalk | null }
 interface Job { key: string; run: () => Promise<void> }
 
 export class StoryService {
   private cache: Record<string, Entry> = {};
   private scenarioCache: Record<string, ScenariosEntry> = {};
+  private personCache: Record<string, PersonEntry> = {};
   private queue: Job[] = [];
   private reading: string | null = null;
   private failed = new Map<string, number>();
@@ -317,9 +399,12 @@ export class StoryService {
   constructor(private store: Store, private file: string | null, private router: ProviderRouter) {
     if (file && existsSync(file)) {
       try {
-        const raw = JSON.parse(readFileSync(file, 'utf8')) as { stories?: Record<string, Entry>; scenarios?: Record<string, ScenariosEntry> };
+        const raw = JSON.parse(readFileSync(file, 'utf8')) as {
+          stories?: Record<string, Entry>; scenarios?: Record<string, ScenariosEntry>; persons?: Record<string, PersonEntry>;
+        };
         this.cache = raw.stories ?? {};
         this.scenarioCache = raw.scenarios ?? {};
+        this.personCache = raw.persons ?? {};
       } catch {
         /* corrupt cache: read again */
       }
@@ -354,7 +439,10 @@ export class StoryService {
     const key = `${storyKey}|${contextKey(ctx)}`;
     const done = this.scenarioCache[key];
     if (done && done.v === SCENARIOS_VERSION && done.story === hit.at && (done.scenarios.length || Date.now() - done.at < EMPTY_RETRY_MS)) {
-      return { status: done.scenarios.length ? 'ready' : 'none', scenarios: done.scenarios };
+      // With the reading they number: the card may still show an older one.
+      return done.scenarios.length
+        ? { status: 'ready', scenarios: done.scenarios, story: await this.resolve(hit.story) }
+        : { status: 'none', scenarios: [] };
     }
     if (!this.router.canRun('write')) return { status: 'no-ai', scenarios: [] };
     const story = hit.story;
@@ -367,6 +455,29 @@ export class StoryService {
       console.log(`[story] scenarios for ${poi.title} (${contextKey(ctx)}): ${scenarios.length}`);
     });
     return { status: 'pending', scenarios: [] };
+  }
+
+  /**
+   * A real person's life as a scenario, for the visitor's view: across the
+   * card stories they appear in and their Wikidata moments, written once per
+   * view, then kept.
+   */
+  async personScenario(j: PersonJourney, ctx: ScenarioContext): Promise<PersonScenarioResponse> {
+    const key = `person|${j.qid}|${contextKey(ctx)}`;
+    const done = this.personCache[key];
+    if (done && done.v === PERSON_VERSION && (done.walk || Date.now() - done.at < EMPTY_RETRY_MS)) {
+      return { status: done.walk ? 'ready' : 'none', walk: done.walk };
+    }
+    if ((this.failed.get(key) ?? 0) > Date.now()) return { status: 'none', walk: null };
+    if (!this.router.canRun('write')) return { status: 'no-ai', walk: null };
+    this.enqueue(key, async () => {
+      const walk = await this.writePerson(j, ctx);
+      this.personCache[key] = { at: Date.now(), v: PERSON_VERSION, walk };
+      const keys = Object.keys(this.personCache);
+      if (keys.length > SCENARIOS_KEEP) for (const old of keys.slice(0, keys.length - SCENARIOS_KEEP)) delete this.personCache[old];
+      console.log(`[story] life of ${j.name} (${contextKey(ctx)}): ${walk ? `${walk.steps.length} steps` : 'too few places'}`);
+    });
+    return { status: 'pending', walk: null };
   }
 
   private enqueue(key: string, run: () => Promise<void>): void {
@@ -398,7 +509,7 @@ export class StoryService {
     const article = await wikipedia.pageText(lang, poi.wiki_title!, ARTICLE_CHARS);
     if (!article) return null;
     const answer = await this.router.completeJson(
-      'extract', SYSTEM, `Article « ${article.title} » :\n\n${article.text}`, (v) => ExtractedStory.parse(v), 5000,
+      'extract', SYSTEM, `Article « ${article.title} » :\n\n${article.text}`, (v) => ExtractedStory.parse(v), 7000,
     );
     if (!answer) throw new Error('no AI available');
     const ok = <T extends { quote: string }>(x: T | null): x is T => !!x && grounded(article.text, x.quote);
@@ -481,6 +592,47 @@ export class StoryService {
     // Nothing usable is not kept: tried again later rather than shown empty for days.
     if (out.length === 0) throw new Error('no usable scenario');
     return out;
+  }
+
+  /** Someone's life over the stops of the stories they took part in and their own Wikidata moments; null when too few. */
+  private async writePerson(j: PersonJourney, ctx: ScenarioContext): Promise<ScenarioWalk | null> {
+    // The card stories already read where they appear: their checked stops become theirs.
+    const appears = Object.entries(this.cache)
+      .filter(([, e]) => e.v === STORY_VERSION && e.story?.people.some((p) => p.qid === j.qid))
+      .slice(0, 8);
+    const cards = new Map((await this.store.getPoisByQids(appears.map(([k]) => k)).catch(() => [] as Poi[])).map((p) => [p.wikidata_qid, p]));
+    const stories = await Promise.all(appears.map(async ([k, e]) => ({ title: cards.get(k)?.title ?? k, stops: (await this.resolve(e.story!)).stops })));
+    const stops = personStops(j, stories);
+    if (stops.length < MIN_PERSON_STEPS) return null;
+
+    const info = (await wikidata.queryEntityInfo([j.qid])).get(j.qid);
+    const lang = info?.frTitle ? 'fr' : 'en';
+    const title = info?.frTitle ?? info?.enTitle;
+    const article = title ? await wikipedia.pageText(lang, title, SCENARIO_ARTICLE_CHARS) : null;
+    if (!article) return null;
+    const year = (y: number | null) => (y === null ? null : Math.floor(y));
+    const hero: StoryPerson = { qid: j.qid, name: j.name, role: j.description ?? '', born: year(j.born), died: year(j.died), image: j.image };
+    const user = [
+      `Person: ${j.name} (${hero.born ?? '?'}–${hero.died ?? ''})${j.description ? `, ${j.description}` : ''}.`,
+      describeContext(ctx),
+      '',
+      'Places of their life:',
+      ...stops.map((s, i) => `S${i}. year ${s.year} · ${s.label} · ${s.place}${s.card ? ` (story of « ${s.card} »)` : ''}`),
+      '',
+      `Article « ${article.title} » :`,
+      '',
+      article.text,
+    ].join('\n');
+    const source: Source = { url: article.url, title: `Wikipédia : ${article.title}`, kind: 'wikipedia' };
+    // A small model sometimes answers off the list: once more before giving up for a while.
+    for (let tries = 0; tries < 2; tries++) {
+      const answer = await this.router.completeJson('write', PERSON_SYSTEM, user, (v) => ExtractedScenarios.parse(v), 5000);
+      if (!answer) throw new Error('no AI available');
+      const item = answer.value.scenarios.find((x): x is ScenarioItem => !!x);
+      const walk = item && buildPersonWalk(item, stops, hero, source);
+      if (walk) return walk;
+    }
+    throw new Error('no usable life scenario');
   }
 
   /**
@@ -596,7 +748,7 @@ export class StoryService {
       this.saveTimer = null;
       try {
         mkdirSync(dirname(this.file!), { recursive: true });
-        writeFileSync(this.file!, JSON.stringify({ stories: this.cache, scenarios: this.scenarioCache }));
+        writeFileSync(this.file!, JSON.stringify({ stories: this.cache, scenarios: this.scenarioCache, persons: this.personCache }));
       } catch (e) {
         console.warn('[story] could not save cache:', (e as Error).message);
       }

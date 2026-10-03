@@ -6,10 +6,11 @@ import '@fontsource/eb-garamond/500-italic.css';
 import '@fontsource-variable/inter';
 import './style.css';
 
-import { ScreenSpaceEventType, Cartesian2, BoundingSphere, Cartesian3, Cartographic, Math as CesiumMath, type Entity } from 'cesium';
+import { ScreenSpaceEventType, Cartesian2, BoundingSphere, Cartesian3, Cartographic, Math as CesiumMath, Rectangle, type Entity } from 'cesium';
 import {
   cellsForRect, formatPoiDate, formatYear, isGlobalSearchRes, MAX_YEAR, MIN_YEAR, rectAreaKm2, resolutionForArea, ringAround, CATEGORY_LABELS,
-  ALL_THEMES, THEMES, type Backdrop, type Category, type PoiLite, type SubdivisionsResponse, type ThemeFilter, type ViewMessage,
+  ALL_THEMES, THEMES, type Backdrop, type Category, type PersonHit, type PersonScenarioResponse, type PoiLite, type SubdivisionsResponse,
+  type ThemeFilter, type ViewMessage,
 } from '@way/shared';
 import { currentActivity, onActivity, setActivity } from './activity.ts';
 import { BordersLayer, realmKey, type BorderShape } from './borders.ts';
@@ -23,6 +24,8 @@ import { formatPop, LivingLayer, NO_LIVING, type Living, type LivingPick } from 
 import { cameraState, createGlobe, restoreCamera, setBasemap, setPaper, viewRect, type Basemap, type CameraState } from './globe.ts';
 import { PoiLayer } from './markers.ts';
 import { PeopleLayer, type Picked } from './people.ts';
+import { ScenarioLibrary, ScenarioPlayer } from './scenario.ts';
+import { SearchBox } from './search.ts';
 import { fetchCached } from './localcache.ts';
 import { loadUiSettings, playSound } from './sounds.ts';
 import { Timeline, type TimeWindow } from './timeline.ts';
@@ -31,6 +34,8 @@ import { Timeline, type TimeWindow } from './timeline.ts';
 interface Saved {
   camera?: CameraState; window?: TimeWindow; basemap?: Basemap; scale?: Scale; heraldry?: Heraldry; geography?: Geography;
   themes?: ThemeFilter; backdrop?: Backdrop; detailed?: boolean; living?: Living;
+  /** Scenarios written by the AI and offered (on unless turned off). */
+  scenarios?: boolean;
   /** Hidden categories, before themes (read once, then replaced by `themes`). */
   hidden?: Category[];
 }
@@ -124,6 +129,7 @@ people.onGoTo = (qid) => {
 };
 
 function openFigure(f: Picked): void {
+  elsewhere();
   clearTerritory();
   pois.select(null);
   const goTo = (year: number, lat: number | null, lon: number | null) => {
@@ -150,6 +156,7 @@ function livingAt(at: Cartesian2): { title: string; meta: string } | null {
 
 /** A city or a flow clicked: its card; a flow's places take the map and the timeline there. */
 function openLiving(l: LivingPick): void {
+  elsewhere();
   clearTerritory();
   pois.select(null);
   const mid = (timeline.moment.tStart + timeline.moment.tEnd) / 2;
@@ -211,6 +218,16 @@ const filters = new Filters(
   (l) => {
     save({ living: l });
     living.set(l);
+  },
+  saved.scenarios ?? true,
+  (on) => {
+    save({ scenarios: on });
+    card.setScenariosOn(on);
+    // Turned off: the scenario played stops where it is, nothing more is asked of the AI.
+    if (!on) {
+      lifeToken++;
+      player.stop();
+    }
   },
 );
 living.onStatus = (text) => filters.setLivingNote(text);
@@ -284,6 +301,7 @@ function flyToVisible(lat: number, lon: number, height: number): void {
 
 /** A stop of a card's story: there, at the story's moment (a port's own card would take the timeline to its founding). */
 card.onStoryStop = (s, openCard) => {
+  elsewhere();
   clearTerritory();
   timeline.glideTo(s.year);
   flyToVisible(s.lat, s.lon, s.poi ? 600_000 : 1_200_000);
@@ -296,41 +314,49 @@ card.onStoryStop = (s, openCard) => {
   }
 };
 card.onStoryPerson = (p) => {
+  elsewhere();
   playSound('person');
   people.follow({ qid: p.qid, name: p.name, description: p.role, born: p.born, died: p.died, image: p.image });
 };
 
-// ---------- scenarios of a card's story ----------
+// ---------- scenarios: played on their own, above the map ----------
 const cast = new CastLayer(viewer);
-/** Where the visitor was when the scenario started: "Annuler" brings them back. */
+const player = new ScenarioPlayer(document.getElementById('scenario')!);
+const library = new ScenarioLibrary();
+/** Where the visitor was when the first scenario started: quitting brings them back. */
 let beforeScenario: { year: number; camera: CameraState } | null = null;
-card.scenarioContext = () => ({
+const viewContext = () => ({
   lens: filters.lens,
   themes: THEMES.filter((t) => !filters.themes.hiddenThemes.includes(t)),
   people: filters.themes.people,
 });
+card.scenarioContext = viewContext;
 refreshScenarios = () => card.refreshScenarios();
-card.onScenarioStep = (sc, j, story) => {
-  const step = sc.steps[j]!;
-  const where = story.stops[step.stop]!;
+card.setScenariosOn(filters.scenarios);
+card.onScenarios = (walks) => library.add(walks);
+card.onPlayScenario = (walk, step) => player.play(walk, step);
+player.onChange = () => {
+  const p = player.playing;
+  card.syncScenario(p && { id: p.walk.id, step: p.step, paused: player.state === 'paused' });
+};
+player.onStep = (walk, j) => {
+  const step = walk.steps[j]!;
   beforeScenario ??= { year: (timeline.moment.tStart + timeline.moment.tEnd) / 2, camera: cameraState(viewer) };
   clearTerritory();
-  playSound(where.poi?.category ?? 'person');
-  timeline.glideTo(where.year);
-  flyToVisible(where.lat, where.lon, 900_000);
+  playSound(step.poi?.category ?? 'person');
+  timeline.glideTo(step.year);
+  flyToVisible(step.lat, step.lon, 900_000);
+  if (step.poi) pois.upsert([step.poi]);
   // The protagonist stands on the spot: "Vous" for an invented one, the real person otherwise.
-  const members: CastMember[] = step.cast.map((c) => {
-    const p = story.people[c]!;
-    return { name: p.name, role: p.role, image: p.image, you: c === sc.person };
-  });
-  if (sc.invented) members.unshift({ name: 'Vous', role: sc.title, image: null, you: true });
-  else if (sc.person !== null && !step.cast.includes(sc.person)) {
-    const p = story.people[sc.person]!;
-    members.unshift({ name: p.name, role: p.role, image: p.image, you: true });
+  const members: CastMember[] = step.cast.map((p) => ({ name: p.name, role: p.role, image: p.image, you: p.qid === walk.hero?.qid }));
+  if (walk.invented) members.unshift({ name: 'Vous', role: walk.title, image: null, you: true });
+  else if (walk.hero && !step.cast.some((p) => p.qid === walk.hero!.qid)) {
+    members.unshift({ name: walk.hero.name, role: walk.hero.role, image: walk.hero.image, you: true });
   }
-  cast.show(where, members);
+  cast.show(step, members);
 };
-card.onScenarioEnd = (restore) => {
+player.onPause = () => cast.clear();
+player.onEnd = (restore) => {
   cast.clear();
   const back = beforeScenario;
   beforeScenario = null;
@@ -342,9 +368,107 @@ card.onScenarioEnd = (restore) => {
     duration: 1.6,
   });
 };
+player.onOpenCard = (walk) => {
+  if (!walk.from) return;
+  pois.upsert([walk.from]);
+  pois.select(walk.from.id);
+  void card.open(walk.from.id);
+};
+
+/** Clicked elsewhere on the globe (a point, a territory, a person…): the scenario played waits. */
+const elsewhere = () => player.pause();
+
+const SCENARIO_POLL_MS = 3000;
+const SCENARIO_WAIT_MS = 180_000;
+let lifeToken = 0;
+/** "de Napoléon", "d’Edward". */
+const of = (name: string) => (/^[aeiouyàâéèêëîïôöùûü]/i.test(name) ? `d’${name}` : `de ${name}`);
+/** A real person's life as a scenario across the cards they appear in: written by an AI, then played. */
+async function lifeScenario(h: PersonHit): Promise<void> {
+  if (!filters.scenarios) return;
+  const token = ++lifeToken;
+  const ctx = viewContext();
+  const params = new URLSearchParams({ themes: ctx.themes.join(','), people: ctx.people ? '1' : '0' });
+  if (ctx.lens) params.set('lens', ctx.lens);
+  const key = `life:${token}`;
+  const started = performance.now();
+  player.setNote(`L’IA écrit l’histoire ${of(h.name)} à travers les fiches de sa vie…`);
+  try {
+    for (;;) {
+      let res: PersonScenarioResponse;
+      try {
+        const r = await fetch(`/api/people/${encodeURIComponent(h.qid)}/scenario?${params}`);
+        if (!r.ok) throw new Error(String(r.status));
+        res = (await r.json()) as PersonScenarioResponse;
+      } catch {
+        res = { status: 'none', walk: null };
+      }
+      if (token !== lifeToken || !filters.scenarios) return;
+      if (res.walk) {
+        library.add([res.walk]);
+        player.play(res.walk, 0);
+        return;
+      }
+      if (res.status !== 'pending' || performance.now() - started > SCENARIO_WAIT_MS) {
+        player.setNote(res.status === 'no-ai'
+          ? 'Aucune IA disponible pour écrire cette histoire pour le moment.'
+          : `Pas assez de lieux connus dans la vie ${of(h.name)} pour en faire un scénario.`);
+        window.setTimeout(() => token === lifeToken && player.setNote(null), 6000);
+        return;
+      }
+      setActivity(key, { label: 'IA · histoire d’un personnage', title: `L’IA écrit l’histoire ${of(h.name)}`, ai: true });
+      await new Promise((r) => setTimeout(r, SCENARIO_POLL_MS));
+    }
+  } finally {
+    setActivity(key, null);
+  }
+}
+
+// ---------- search bar ----------
+const fold = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+new SearchBox(document.getElementById('search')!, {
+  territories: (q) => {
+    const want = fold(q);
+    const seen = new Set<string>();
+    return borders.shapes
+      .filter((s) => s.parent === null && s.name)
+      .sort((a, b) => b.km2 - a.km2)
+      .flatMap((s) => {
+        const key = realmKey(s);
+        const label = borders.displayName(s.name);
+        if (seen.has(key) || !(fold(label).includes(want) || fold(s.name).includes(want))) return [];
+        seen.add(key);
+        return [{ key, label }];
+      })
+      .slice(0, 4);
+  },
+  scenarios: (q) => library.search(q),
+  scenariosOn: () => filters.scenarios,
+}, {
+  card: (p) => {
+    elsewhere();
+    travel(p);
+  },
+  person: (h) => {
+    elsewhere();
+    playSound('person');
+    people.follow(h);
+  },
+  personScenario: (h) => void lifeScenario(h),
+  territory: (t) => {
+    elsewhere();
+    const realm = borders.realmByKey(t.key);
+    if (!realm) return;
+    selectTerritory(realm);
+    const a = borders.territoryArea(t.key);
+    if (a) viewer.camera.flyTo({ destination: Rectangle.fromDegrees(a.west, a.south, a.east, a.north), duration: 1.6 });
+  },
+  scenario: (w) => player.play(w, 0),
+});
 
 /** Shows a point's card; the camera only moves on click, not on hover. */
 function showPoi(id: string): void {
+  elsewhere();
   clearTerritory();
   pois.select(id);
   if (card.currentPoi !== id) void card.open(id);
@@ -352,6 +476,7 @@ function showPoi(id: string): void {
 
 /** Going through a door (or back along the trail): the globe flies there while the timeline glides to its date. */
 function travel(p: PoiLite): void {
+  elsewhere();
   playSound(p.category);
   clearTerritory();
   pois.upsert([p]);
@@ -702,6 +827,7 @@ function clickTerritory(position: Cartesian2): void {
     return;
   }
   const realm = c ? borders.realmAt(lon, lat) : null;
+  if (realm) elsewhere();
   if (!realm) {
     // Sea or unclaimed land: a territory card closes, a point's card stays.
     if (card.currentPoi === null) card.close();
@@ -723,6 +849,7 @@ function clickTerritory(position: Cartesian2): void {
 }
 
 function selectTerritory(realm: BorderShape): void {
+  elsewhere();
   dividing++;
   playSound('territory');
   pois.select(null);
@@ -742,6 +869,7 @@ function selectTerritory(realm: BorderShape): void {
 }
 
 function selectRegion(level: number, region: Region): void {
+  elsewhere();
   dividing++;
   playSound('territory');
   pois.select(null);
