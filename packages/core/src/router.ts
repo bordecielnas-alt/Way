@@ -163,7 +163,14 @@ export class ProviderRouter {
     // A failed test must not pause the provider: the user is fixing it.
     if (value === undefined) s.openUntil = 0;
     const error = s.lastError ?? 'échec';
-    const detail = value ?? (/fetch failed|ECONNREFUSED|ENOTFOUND/.test(error) ? 'serveur injoignable à cette adresse' : error);
+    let detail = value ?? (/fetch failed|ECONNREFUSED|ENOTFOUND/.test(error) ? 'serveur injoignable à cette adresse' : error);
+    if (value === undefined && def.type === 'llm' && def.api !== 'anthropic' && modelRefused(error)) {
+      detail = `la clé n’a pas accès au modèle « ${this.model(id)} »`;
+      const usable = suggestModels(await llm.listModels(this.url(id)!, this.key(id) ?? undefined));
+      detail += usable.length
+        ? ` : indiquez-en un autre dans le champ modèle, par exemple ${usable.map((m) => `« ${m} »`).join(', ')}.`
+        : ' : indiquez-en un autre dans le champ modèle (ou autorisez celui-ci dans les réglages du compte).';
+    }
     return { ok: value !== undefined, ms: Date.now() - started, detail };
   }
 
@@ -349,6 +356,20 @@ export class ProviderRouter {
     }, 2000);
     this.saveTimer.unref();
   }
+}
+
+/** The provider refused the model itself (not reachable for this key or project). */
+export function modelRefused(error: string): boolean {
+  return /^(403|404|400)\b/.test(error) && /model/i.test(error)
+    && /access|not found|does not exist|not exist|unknown|invalid model|not available/i.test(error);
+}
+
+/** A few chat models from a key's list, small ones first (the tasks are short). */
+export function suggestModels(ids: string[]): string[] {
+  const chat = ids.filter((m) => /gpt|mistral|llama|gemini|qwen|deepseek|claude|gemma|o\d/i.test(m)
+    && !/embed|whisper|tts|dall|image|audio|realtime|transcri|moderation|search|codex|instruct-|vision/i.test(m));
+  const rank = (m: string) => (/nano|mini|small|flash|lite/i.test(m) ? 0 : 1) + (/\d{4}-\d{2}-\d{2}/.test(m) ? 0.5 : 0);
+  return [...new Set(chat)].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).slice(0, 4);
 }
 
 /** GROQ_MODEL, GEMINI_FLASH_LITE_MODEL… */

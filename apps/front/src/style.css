@@ -54,6 +54,27 @@ button { font: inherit; color: inherit; }
 
 /* ---------- filters ---------- */
 .filters { top: 76px; left: 16px; width: 232px; padding: 10px; max-height: calc(100vh - 76px - 226px); overflow: auto; }
+/* Foldable: the panel folds to one line, each section to its header and current choice. */
+.filters-fold, .fsec-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; cursor: pointer;
+  padding: 6px 4px; border-radius: 6px; text-align: left; color: inherit; font: inherit;
+}
+.filters-fold:hover, .fsec-head:hover { background: rgba(255, 255, 255, 0.04); }
+.filters-fold { padding-bottom: 8px; }
+.filters-fold .filters-title { color: var(--ink-soft); }
+.fsec-head .filters-title, .filters-fold .filters-title { flex: none; white-space: nowrap; }
+.fsec-sum { flex: 1 1 auto; min-width: 0; text-align: right; font-size: 11.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fsec-chev { width: 7px; height: 7px; flex: none; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); transition: transform 0.2s; margin-right: 2px; }
+[aria-expanded='true'] > .fsec-chev { transform: rotate(45deg); }
+.fsec { border-top: 1px solid rgba(255, 255, 255, 0.05); }
+.fsec-body { display: none; padding-top: 4px; }
+.fsec.open .fsec-body { display: block; }
+.fsec.open .fsec-sum { visibility: hidden; }
+.filters.folded .filters-body { display: none; }
+.filters.folded .filters-fold { padding-bottom: 6px; }
+.filters:not(.folded) .filters-fold .fsec-sum { visibility: hidden; }
+.themes-tools { display: flex; justify-content: flex-end; gap: 2px; margin: -2px 0 4px; }
+@media (prefers-reduced-motion: reduce) { .fsec-chev { transition: none; } }
 .filters-head { display: flex; justify-content: space-between; align-items: center; padding: 2px 4px 8px; }
 .filters-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .filters-toggle { background: none; border: 0; padding: 2px 4px; font-size: 12px; color: var(--gold); cursor: pointer; }
@@ -137,6 +158,8 @@ body.card-open .basemap { right: 452px; }
 .tl-range em { font-style: italic; color: var(--muted); font-size: 16px; margin: 0 6px; }
 .tl-borders { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tl-status { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.tl-status-text { font-size: 11px; letter-spacing: 0.02em; opacity: 0.8; max-width: 220px; overflow: hidden; text-overflow: ellipsis; transition: opacity 0.4s; }
+.tl-status.idle .tl-status-text { opacity: 0; }
 .tl-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .tl-status.busy .tl-status-dot { background: var(--gold); animation: pulse 1.1s ease-in-out infinite; }
 .tl-status.offline .tl-status-dot { background: #d05a4a; }
