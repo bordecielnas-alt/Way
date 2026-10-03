@@ -30,15 +30,34 @@
       "type": "llm", "baseUrl": "https://api.mistral.ai/v1",
       "keyEnv": "MISTRAL_API_KEY", "model": "mistral-small-latest", "perMinute": 30, "perDay": 1000
     },
+    "cerebras": {
+      "type": "llm", "baseUrl": "https://api.cerebras.ai/v1",
+      "keyEnv": "CEREBRAS_API_KEY", "model": "gpt-oss-120b", "perMinute": 25, "perDay": 900
+    },
     "ollama": {
       "type": "llm", "urlEnv": "OLLAMA_URL", "urlSuffix": "/v1",
       "model": "qwen2.5:7b", "perMinute": 2, "perDay": 100000, "timeoutMs": 600000
+    },
+    "deepseek": {
+      "_comment": "Paid: perDay is a spending cap, not a free quota.",
+      "type": "llm", "baseUrl": "https://api.deepseek.com/v1",
+      "keyEnv": "DEEPSEEK_API_KEY", "model": "deepseek-chat", "perMinute": 20, "perDay": 300
+    },
+    "openai": {
+      "_comment": "Paid: perDay is a spending cap, not a free quota.",
+      "type": "llm", "baseUrl": "https://api.openai.com/v1",
+      "keyEnv": "OPENAI_API_KEY", "model": "gpt-4.1-mini", "perMinute": 20, "perDay": 300
+    },
+    "anthropic": {
+      "_comment": "Paid: perDay is a spending cap, not a free quota. Native Messages API; effort low suits short JSON tasks.",
+      "type": "llm", "api": "anthropic", "keyEnv": "ANTHROPIC_API_KEY",
+      "model": "claude-opus-5-5", "effort": "low", "perMinute": 20, "perDay": 200, "timeoutMs": 120000
     }
   },
   "routes": {
     "search": ["wikipedia", "tavily", "brave", "searxng"],
-    "extract": ["gemini-flash-lite", "groq", "mistral", "github", "openrouter", "gemini-flash", "ollama"],
-    "write": ["gemini-flash", "groq", "mistral", "github", "openrouter", "gemini-flash-lite"]
+    "extract": ["gemini-flash-lite", "groq", "cerebras", "mistral", "github", "openrouter", "gemini-flash", "ollama", "deepseek", "openai", "anthropic"],
+    "write": ["gemini-flash", "groq", "cerebras", "mistral", "github", "openrouter", "gemini-flash-lite", "anthropic", "openai", "deepseek"]
   },
   "breaker": { "failures": 2, "cooldownMinutes": 10 },
   "headroom": 0.95

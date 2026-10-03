@@ -12,6 +12,10 @@ export type Task = 'extract' | 'write';
 interface ProviderDef {
   type: 'search' | 'llm';
   adapter?: 'wikipedia' | 'tavily' | 'brave' | 'searxng';
+  /** LLM wire protocol: OpenAI-compatible (default) or Anthropic's Messages API. */
+  api?: 'openai' | 'anthropic';
+  /** Anthropic only: thinking depth (low by default, these are short JSON tasks). */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   baseUrl?: string;
   keyEnv?: string;
   urlEnv?: string;
@@ -147,15 +151,12 @@ export class ProviderRouter {
         if (!hits.length) throw new Error('aucun résultat');
         return `${hits.length} résultat(s), dont « ${hits[0]!.title} »`;
       }
-      const text = await llm.chat({
-        baseUrl: this.url(id)!,
-        apiKey: this.key(id) ?? undefined,
-        model: this.model(id)!,
-        system: 'Réponds uniquement par un objet JSON.',
-        user: 'En quelle année a eu lieu la bataille de Marignan ? Réponds {"annee": nombre}.',
-        json: true,
-        timeoutMs: Math.min(def.timeoutMs ?? 60_000, 60_000),
-      });
+      const text = await this.complete(
+        id,
+        'Réponds uniquement par un objet JSON.',
+        'En quelle année a eu lieu la bataille de Marignan ? Réponds {"annee": nombre}.',
+        Math.min(def.timeoutMs ?? 60_000, 60_000),
+      );
       const v = llm.parseJsonObject(text) as { annee?: unknown };
       return `le modèle répond ${JSON.stringify(v).slice(0, 80)}`;
     });
@@ -201,17 +202,8 @@ export class ProviderRouter {
   ): Promise<{ value: T; provider: string } | null> {
     for (const id of this.cfg.routes[task]) {
       if (!this.available(id)) continue;
-      const def = this.cfg.providers[id]!;
       const value = await this.call(id, task, async () => {
-        const text = await llm.chat({
-          baseUrl: this.url(id)!,
-          apiKey: this.key(id) ?? undefined,
-          model: this.model(id)!,
-          system,
-          user,
-          json: true,
-          timeoutMs: def.timeoutMs,
-        });
+        const text = await this.complete(id, system, user, this.cfg.providers[id]!.timeoutMs);
         return parse(llm.parseJsonObject(text));
       });
       if (value !== undefined) return { value, provider: id };
@@ -247,6 +239,14 @@ export class ProviderRouter {
   }
 
   // ---------- internals ----------
+
+  /** One JSON completion through the provider's own protocol. */
+  private complete(id: string, system: string, user: string, timeoutMs?: number): Promise<string> {
+    const def = this.cfg.providers[id]!;
+    const common = { model: this.model(id)!, system, user, json: true, timeoutMs };
+    if (def.api === 'anthropic') return llm.anthropicChat({ ...common, apiKey: this.key(id)!, effort: def.effort });
+    return llm.chat({ ...common, baseUrl: this.url(id)!, apiKey: this.key(id) ?? undefined });
+  }
 
   private async call<T>(id: string, task: string, fn: () => Promise<T>): Promise<T | undefined> {
     const s = this.state.get(id)!;
