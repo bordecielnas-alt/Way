@@ -1,8 +1,10 @@
-import { fetchJson } from './http.ts';
+import Anthropic from '@anthropic-ai/sdk';
+import { fetchJson, HttpError } from './http.ts';
 
-// Every LLM of the brief's chain (Gemini, Groq, GitHub Models, OpenRouter,
-// Mistral, Ollama) exposes an OpenAI-compatible chat completions endpoint:
-// one adapter covers them all.
+// Most LLMs of the chain (Gemini, Groq, GitHub Models, OpenRouter, Mistral,
+// Cerebras, DeepSeek, OpenAI, Ollama) expose an OpenAI-compatible chat
+// completions endpoint: one adapter covers them all. Claude goes through
+// Anthropic's own SDK (anthropicChat below).
 
 export interface ChatRequest {
   baseUrl: string; // e.g. https://api.groq.com/openai/v1
@@ -42,6 +44,39 @@ export async function chat(req: ChatRequest): Promise<string> {
   const text = r.choices?.[0]?.message?.content;
   if (!text) throw new Error('empty completion');
   return text;
+}
+
+export interface AnthropicChatRequest extends Omit<ChatRequest, 'baseUrl'> {
+  apiKey: string;
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+}
+
+/**
+ * Claude through the Messages API. There is no JSON mode: the system prompt
+ * asks for JSON and parseJsonObject tolerates the rest. SDK errors become
+ * HttpError so the router's quota breaker sees 429/402 as it does elsewhere.
+ */
+export async function anthropicChat(req: AnthropicChatRequest): Promise<string> {
+  const client = new Anthropic({ apiKey: req.apiKey, timeout: req.timeoutMs ?? 60_000, maxRetries: 0 });
+  try {
+    const r = await client.beta.messages.create({
+      model: req.model,
+      max_tokens: req.maxTokens ?? 16_000,
+      output_config: { effort: req.effort ?? 'low' },
+      // On a policy decline, the API re-runs the request on a fallback model.
+      betas: ['server-side-fallback-2026-07-01'],
+      fallbacks: 'default',
+      system: req.json ? `${req.system}\nRéponds uniquement par un objet JSON, sans texte autour.` : req.system,
+      messages: [{ role: 'user', content: req.user }],
+    });
+    if (r.stop_reason === 'refusal') throw new Error(`refusal (${r.stop_details?.category ?? 'no category'})`);
+    const text = r.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
+    if (!text) throw new Error(`empty completion (${r.stop_reason})`);
+    return text;
+  } catch (e) {
+    if (e instanceof Anthropic.APIError && e.status) throw new HttpError(e.status, e.message);
+    throw e;
+  }
 }
 
 /** Extracts the JSON object from a completion (tolerates code fences and preambles). */

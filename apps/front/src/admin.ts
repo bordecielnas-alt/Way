@@ -74,6 +74,22 @@ const SERVICES: Record<string, Service> = {
     name: 'OpenRouter', note: 'Modèles gratuits (suffixe « :free »), quotas bas.',
     link: 'https://openrouter.ai/settings/keys', field: 'Clé API',
   },
+  CEREBRAS_API_KEY: {
+    name: 'Cerebras', note: 'Gratuit, sans carte : environ 1 000 requêtes par jour, très rapide.',
+    link: 'https://cloud.cerebras.ai', field: 'Clé API',
+  },
+  ANTHROPIC_API_KEY: {
+    name: 'Anthropic (Claude)', note: 'Payant : utilisé en dernier recours, plafonné à 200 requêtes par jour.',
+    link: 'https://console.anthropic.com/settings/keys', field: 'Clé API',
+  },
+  OPENAI_API_KEY: {
+    name: 'OpenAI', note: 'Payant : utilisé en dernier recours, plafonné à 300 requêtes par jour.',
+    link: 'https://platform.openai.com/api-keys', field: 'Clé API',
+  },
+  DEEPSEEK_API_KEY: {
+    name: 'DeepSeek', note: 'Payant (très bon marché) : utilisé en dernier recours.',
+    link: 'https://platform.deepseek.com/api_keys', field: 'Clé API',
+  },
   OLLAMA_URL: {
     name: 'Ollama (local)', note: 'Un modèle sur votre propre machine : lent sans carte graphique, mais illimité.',
     field: 'Adresse', placeholder: 'http://192.168.1.10:11434',

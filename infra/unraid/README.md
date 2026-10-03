@@ -35,7 +35,8 @@ saisie dans les Réglages les remplace :
 | `GEMINI_API_KEY` | aistudio.google.com → Get API key |
 | `GROQ_API_KEY` | console.groq.com → API Keys |
 | `TAVILY_API_KEY` (recherche web) | tavily.com |
-| `MISTRAL_API_KEY`, `GITHUB_MODELS_TOKEN`, `OPENROUTER_API_KEY` | autres secours |
+| `MISTRAL_API_KEY`, `GITHUB_MODELS_TOKEN`, `OPENROUTER_API_KEY`, `CEREBRAS_API_KEY` | autres secours |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY` | payants, en dernier recours (plafond quotidien) |
 | `OLLAMA_URL` | IA locale, ex. `http://192.168.1.10:11434` |
 
 État des quotas et des fournisseurs : onglet **État** des Réglages.
