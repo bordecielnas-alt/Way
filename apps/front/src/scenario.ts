@@ -568,7 +568,7 @@ export class Carnet {
       return `<div class="cn-fork">${icon}
         <span class="cn-fork-text"><b>${esc(name)}</b><small>${esc(meta)}</small></span>
         ${detour}
-        <button type="button" class="cn-go" data-act="lead" data-i="${i}" data-how="full" title="${l.kind === 'person' ? 'Toute son histoire, comme une branche de ce chemin' : 'Les chemins qui passent par ce lieu'}">${l.kind === 'person' ? 'Tout son chemin' : 'Ses chemins'}</button>
+        <button type="button" class="cn-go" data-act="lead" data-i="${i}" data-how="full" title="${l.kind === 'person' ? 'Toute son histoire, comme une branche de ce chemin' : 'Entrer dans l’histoire de ce lieu : ses lieux, ses chemins'}">${l.kind === 'person' ? 'Tout son chemin' : 'Son histoire ⤷'}</button>
       </div>`;
     }).join('');
   }
@@ -636,7 +636,7 @@ export class Carnet {
           <button type="button" class="cn-go cn-go-main" data-act="life" data-how="full">Tout son chemin ▸</button>
         </div>`
       : '';
-    const state = h.status === 'pending' ? '<div class="sc-note"><span class="sc-note-dot" aria-hidden="true"></span>L’IA trace les chemins qui passent ici…</div>'
+    const state = h.status === 'pending' ? `<div class="sc-note"><span class="sc-note-dot" aria-hidden="true"></span>${h.walks.length ? 'L’IA écrit d’autres chemins…' : 'L’IA trace les chemins qui passent ici…'}</div>`
       : h.status === 'no-ai' && !h.walks.length ? '<p class="cn-empty">Aucune IA disponible pour tracer des chemins pour le moment.</p>'
       : !h.walks.length && !h.person ? '<p class="cn-empty">Aucun chemin ne passe encore par ici.</p>'
       : '';
@@ -646,7 +646,7 @@ export class Carnet {
       ${life}
       <div class="cn-walks">${h.walks.map((w, i) => this.walkRow(w, i, p)).join('')}</div>
       ${state}
-      ${h.poi ? '<footer class="sc-foot"><button type="button" class="sc-link" data-act="card">Voir la fiche</button></footer>' : ''}`;
+      ${h.poi ? '<footer class="sc-foot"><button type="button" class="sc-link" data-act="card">Explorer sa fiche et tous ses lieux ⤷</button></footer>' : ''}`;
   }
 
   private pathsView(p: Path | null): string {

@@ -205,7 +205,7 @@ app.get<{ Params: { id: string } }>('/api/poi/:id/doors', async (req, reply) => 
   return res;
 });
 
-// The card's story (places, people, scenarios): read once by an AI, `pending` meanwhile.
+// The card's story (places, people): its bones read from the article in seconds (`pending` meanwhile), an AI labelling them (`draft`).
 app.get<{ Params: { id: string } }>('/api/poi/:id/story', async (req, reply) => {
   const poi = await store.getPoi(req.params.id);
   if (!poi) return reply.code(404).send({ error: 'not found' });
