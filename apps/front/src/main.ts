@@ -9,12 +9,13 @@ import './style.css';
 import { ScreenSpaceEventType, Cartesian2, BoundingSphere, Cartesian3, Cartographic, Math as CesiumMath, Rectangle, type Entity } from 'cesium';
 import {
   cellsForRect, formatPoiDate, formatYear, isGlobalSearchRes, MAX_YEAR, MIN_YEAR, rectAreaKm2, resolutionForArea, ringAround, CATEGORY_LABELS,
-  ALL_THEMES, THEMES, type Backdrop, type Category, type PersonHit, type PersonScenarioResponse, type PoiLite, type SubdivisionsResponse,
+  ALL_THEMES, THEMES, walkOf, type Backdrop, type Category, type DetourKind, type PersonScenarioResponse, type PoiLite, type ScenarioWalk,
+  type ScenariosResponse, type StoryPerson, type StoryResponse, type SubdivisionsResponse,
   type ThemeFilter, type ViewMessage,
 } from '@way/shared';
 import { currentActivity, onActivity, setActivity } from './activity.ts';
 import { BordersLayer, realmKey, type BorderShape } from './borders.ts';
-import { Card } from './card.ts';
+import { Card, type CardPaths } from './card.ts';
 import { CastLayer, type CastMember } from './cast.ts';
 import { Connection } from './connection.ts';
 import { bounds, contains, divide, type Area, type Region } from './divisions.ts';
@@ -24,7 +25,7 @@ import { formatPop, LivingLayer, NO_LIVING, type Living, type LivingPick } from 
 import { cameraState, createGlobe, restoreCamera, setBasemap, setPaper, viewRect, type Basemap, type CameraState } from './globe.ts';
 import { PoiLayer } from './markers.ts';
 import { PeopleLayer, type Picked } from './people.ts';
-import { ScenarioLibrary, ScenarioPlayer } from './scenario.ts';
+import { Carnet, ScenarioLibrary, type Here, type LeadFrom } from './scenario.ts';
 import { SearchBox } from './search.ts';
 import { fetchCached } from './localcache.ts';
 import { loadUiSettings, playSound } from './sounds.ts';
@@ -225,8 +226,9 @@ const filters = new Filters(
     card.setScenariosOn(on);
     // Turned off: the scenario played stops where it is, nothing more is asked of the AI.
     if (!on) {
-      lifeToken++;
-      player.stop();
+      writeToken++;
+      placeToken++;
+      carnet.stop();
     }
   },
 );
@@ -286,8 +288,11 @@ function flyToVisible(lat: number, lon: number, height: number): void {
     const el = document.getElementById(id);
     return el && !el.hidden ? el.getBoundingClientRect() : null;
   };
-  const left = rect('filters')?.right ?? 0;
-  const right = rect('card')?.left ?? canvas.clientWidth;
+  // The carnet open covers the panels: the map left visible is on its right (above it on a phone).
+  const sheet = document.querySelector('.carnet.open .carnet-sheet')?.getBoundingClientRect();
+  const beside = sheet && sheet.width < canvas.clientWidth * 0.8;
+  const left = sheet ? (beside ? sheet.right : 0) : rect('filters')?.right ?? 0;
+  const right = sheet ? canvas.clientWidth : rect('card')?.left ?? canvas.clientWidth;
   const shiftPx = canvas.clientWidth / 2 - (left + right) / 2;
   const f = viewer.camera.frustum as { fov?: number; aspectRatio?: number };
   const aspect = f.aspectRatio ?? canvas.clientWidth / Math.max(1, canvas.clientHeight);
@@ -296,7 +301,10 @@ function flyToVisible(lat: number, lon: number, height: number): void {
   const metersPerPx = (2 * height * Math.tan(fovX / 2)) / Math.max(1, canvas.clientWidth);
   // The camera moves east of the point, so the point shows left of the center.
   const dLon = (shiftPx * metersPerPx) / (111_320 * Math.max(0.1, Math.cos(CesiumMath.toRadians(lat))));
-  viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(lon + dLon, lat, height), duration: 1.6 });
+  // On a phone the carnet is a sheet at the bottom: the camera moves south, the point shows above it.
+  const shiftPy = sheet && !beside ? canvas.clientHeight / 2 - sheet.top / 2 : 0;
+  const dLat = Math.min(30, (shiftPy * metersPerPx) / 111_320);
+  viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(lon + dLon, Math.max(-89, lat - dLat), height), duration: 1.6 });
 }
 
 /** A stop of a card's story: there, at the story's moment (a port's own card would take the timeline to its founding). */
@@ -319,27 +327,44 @@ card.onStoryPerson = (p) => {
   people.follow({ qid: p.qid, name: p.name, description: p.role, born: p.born, died: p.died, image: p.image });
 };
 
-// ---------- scenarios: played on their own, above the map ----------
+// ---------- scenarios: the carnet de route, over the globe ----------
 const cast = new CastLayer(viewer);
-const player = new ScenarioPlayer(document.getElementById('scenario')!);
 const library = new ScenarioLibrary();
-/** Where the visitor was when the first scenario started: quitting brings them back. */
+const carnet = new Carnet(document.getElementById('scenario')!, () => library.all);
+/** Where the visitor was when the first path started: quitting brings them back. */
 let beforeScenario: { year: number; camera: CameraState } | null = null;
 const viewContext = () => ({
   lens: filters.lens,
   themes: THEMES.filter((t) => !filters.themes.hiddenThemes.includes(t)),
   people: filters.themes.people,
 });
+/** The visitor's view as query parameters, for what the AI writes. */
+function viewParams(): URLSearchParams {
+  const ctx = viewContext();
+  const params = new URLSearchParams({ themes: ctx.themes.join(','), people: ctx.people ? '1' : '0' });
+  if (ctx.lens) params.set('lens', ctx.lens);
+  return params;
+}
 card.scenarioContext = viewContext;
 refreshScenarios = () => card.refreshScenarios();
 card.setScenariosOn(filters.scenarios);
-card.onScenarios = (walks) => library.add(walks);
-card.onPlayScenario = (walk, step) => player.play(walk, step);
-player.onChange = () => {
-  const p = player.playing;
-  card.syncScenario(p && { id: p.walk.id, step: p.step, paused: player.state === 'paused' });
+card.pathsThrough = (poi) => library.through({ poi });
+carnet.onMet = (w) => library.add([w]);
+
+/** The paths through a card: its own scenarios, then those met elsewhere passing there. */
+function cardHere(at: CardPaths): Here {
+  const ids = new Set(at.walks.map((w) => w.id));
+  return { key: at.poi.id, title: at.poi.title, poi: at.poi, status: at.status, walks: [...at.walks, ...library.through({ poi: at.poi }).filter((w) => !ids.has(w.id))] };
+}
+const personHere = (p: StoryPerson): Here => ({ key: p.qid, title: p.name, person: p, status: 'ready', walks: library.through({ qid: p.qid }) });
+card.onPaths = (at) => carnet.showHere(cardHere(at));
+card.onPathsChanged = (at) => {
+  library.add(at.walks);
+  carnet.updateHere(cardHere(at));
 };
-player.onStep = (walk, j) => {
+card.onPersonPaths = (p) => carnet.showHere(personHere(p));
+carnet.onChange = () => card.syncScenario(carnet.playing?.walk ?? null);
+carnet.onStep = (walk, j) => {
   const step = walk.steps[j]!;
   beforeScenario ??= { year: (timeline.moment.tStart + timeline.moment.tEnd) / 2, camera: cameraState(viewer) };
   clearTerritory();
@@ -355,8 +380,8 @@ player.onStep = (walk, j) => {
   }
   cast.show(step, members);
 };
-player.onPause = () => cast.clear();
-player.onEnd = (restore) => {
+carnet.onPause = () => cast.clear();
+carnet.onEnd = (restore) => {
   cast.clear();
   const back = beforeScenario;
   beforeScenario = null;
@@ -368,57 +393,131 @@ player.onEnd = (restore) => {
     duration: 1.6,
   });
 };
-player.onOpenCard = (walk) => {
-  if (!walk.from) return;
-  pois.upsert([walk.from]);
-  pois.select(walk.from.id);
-  void card.open(walk.from.id);
+carnet.onOpenCard = (poi) => {
+  clearTerritory();
+  pois.upsert([poi]);
+  pois.select(poi.id);
+  void card.open(poi.id);
+};
+carnet.onLead = (lead, how, at) => {
+  if (lead.kind === 'person') {
+    if (how === 'full') void lifeScenario(lead.person, true);
+    else void detour('person', lead.person.qid, lead.person.name, at);
+  } else if (how === 'full') void placePaths(lead.poi);
+  else void detour('card', lead.poi.id, lead.poi.title, at);
 };
 
-/** Clicked elsewhere on the globe (a point, a territory, a person…): the scenario played waits. */
-const elsewhere = () => player.pause();
+/** Clicked elsewhere on the globe (a point, a territory, a person…): the path played waits, the carnet folds. */
+const elsewhere = () => carnet.pause();
 
 const SCENARIO_POLL_MS = 3000;
 const SCENARIO_WAIT_MS = 180_000;
-let lifeToken = 0;
+/** The latest walk asked of the AI wins: a life, or a detour. */
+let writeToken = 0;
 /** "de Napoléon", "d’Edward". */
 const of = (name: string) => (/^[aeiouyàâéèêëîïôöùûü]/i.test(name) ? `d’${name}` : `de ${name}`);
-/** A real person's life as a scenario across the cards they appear in: written by an AI, then played. */
-async function lifeScenario(h: PersonHit): Promise<void> {
+
+/** A walk written by an AI (a life, a detour): polled while it is, then played. */
+async function writeWalk(url: string, note: string, fail: string, play: (w: ScenarioWalk) => void): Promise<void> {
   if (!filters.scenarios) return;
-  const token = ++lifeToken;
-  const ctx = viewContext();
-  const params = new URLSearchParams({ themes: ctx.themes.join(','), people: ctx.people ? '1' : '0' });
-  if (ctx.lens) params.set('lens', ctx.lens);
-  const key = `life:${token}`;
+  const token = ++writeToken;
+  const key = `walk:${token}`;
   const started = performance.now();
-  player.setNote(`L’IA écrit l’histoire ${of(h.name)} à travers les fiches de sa vie…`);
+  carnet.setNote(note);
   try {
     for (;;) {
       let res: PersonScenarioResponse;
       try {
-        const r = await fetch(`/api/people/${encodeURIComponent(h.qid)}/scenario?${params}`);
+        const r = await fetch(url);
         if (!r.ok) throw new Error(String(r.status));
         res = (await r.json()) as PersonScenarioResponse;
       } catch {
         res = { status: 'none', walk: null };
       }
-      if (token !== lifeToken || !filters.scenarios) return;
+      if (token !== writeToken || !filters.scenarios) return;
       if (res.walk) {
         library.add([res.walk]);
-        player.play(res.walk, 0);
+        play(res.walk);
         return;
       }
       if (res.status !== 'pending' || performance.now() - started > SCENARIO_WAIT_MS) {
-        player.setNote(res.status === 'no-ai'
-          ? 'Aucune IA disponible pour écrire cette histoire pour le moment.'
-          : `Pas assez de lieux connus dans la vie ${of(h.name)} pour en faire un scénario.`);
-        window.setTimeout(() => token === lifeToken && player.setNote(null), 6000);
+        carnet.setNote(res.status === 'no-ai' ? 'Aucune IA disponible pour écrire ce chemin pour le moment.' : fail);
+        window.setTimeout(() => token === writeToken && carnet.setNote(null), 6000);
         return;
       }
-      setActivity(key, { label: 'IA · histoire d’un personnage', title: `L’IA écrit l’histoire ${of(h.name)}`, ai: true });
+      setActivity(key, { label: 'IA · chemin', title: note, ai: true });
       await new Promise((r) => setTimeout(r, SCENARIO_POLL_MS));
     }
+  } finally {
+    setActivity(key, null);
+  }
+}
+
+/** A real person's life as a path across the cards they appear in; `branch`: hung on the path played. */
+function lifeScenario(h: { qid: string; name: string }, branch: boolean): Promise<void> {
+  return writeWalk(
+    `/api/people/${encodeURIComponent(h.qid)}/scenario?${viewParams()}`,
+    `L’IA écrit l’histoire ${of(h.name)} à travers les fiches de sa vie…`,
+    `Pas assez de lieux connus dans la vie ${of(h.name)} pour en faire un chemin.`,
+    (w) => carnet.play(w, 0, branch && carnet.playing ? 'branch' : undefined),
+  );
+}
+
+/** A short detour off the path played: a person's moments, or a place's story, around the step's year. */
+function detour(kind: DetourKind, id: string, name: string, at: LeadFrom): Promise<void> {
+  const year = at.year;
+  const params = viewParams();
+  params.set('kind', kind);
+  params.set('id', id);
+  params.set('year', String(Math.round(year)));
+  params.set('from', (at.walk?.title ?? name).slice(0, 120));
+  // A person's detour goes elsewhere than the story branched from, when their life allows.
+  if (at.walk?.from) params.set('card', at.walk.from.id);
+  return writeWalk(
+    `/api/detour?${params}`,
+    kind === 'person' ? `L’IA écrit un détour avec ${name} autour de ${formatYear(Math.round(year))}…` : `L’IA écrit un détour par ${name} autour de ${formatYear(Math.round(year))}…`,
+    kind === 'person' ? `Pas assez de moments connus ${of(name)} autour de cette date pour un détour.` : `Pas assez de lieux dans l’histoire de « ${name} » autour de cette date pour un détour.`,
+    (w) => carnet.play(w, 0, 'detour'),
+  );
+}
+
+/** The paths through a place's card, in the carnet: its story read, then its scenarios written. */
+let placeToken = 0;
+async function placePaths(poi: PoiLite): Promise<void> {
+  const token = ++placeToken;
+  const show = (walks: ScenarioWalk[], status: Here['status']) => cardHere({ poi, walks, status });
+  carnet.showHere(show([], filters.scenarios ? 'pending' : 'none'));
+  if (!filters.scenarios) return;
+  const started = performance.now();
+  const get = async <T>(url: string): Promise<T | null> => {
+    try {
+      const r = await fetch(url);
+      return r.ok ? ((await r.json()) as T) : null;
+    } catch {
+      return null;
+    }
+  };
+  const key = `place:${token}`;
+  try {
+    while (performance.now() - started < SCENARIO_WAIT_MS) {
+      if (token !== placeToken || carnet.hereKey !== poi.id) return;
+      // The story first: scenarios are written over its stops.
+      const story = await get<StoryResponse>(`/api/poi/${encodeURIComponent(poi.id)}/story`);
+      if (story?.story) {
+        const res = await get<ScenariosResponse>(`/api/poi/${encodeURIComponent(poi.id)}/scenarios?${viewParams()}`);
+        if (token !== placeToken) return;
+        if (res?.scenarios.length) {
+          const walks = res.scenarios.map((sc) => walkOf(poi, res.story ?? story.story!, sc));
+          library.add(walks);
+          carnet.updateHere(show(walks, 'ready'));
+          return;
+        }
+        if (!res || res.status !== 'pending') return carnet.updateHere(show([], res?.status ?? 'none'));
+      } else if (!story || story.status !== 'pending') return carnet.updateHere(show([], story?.status ?? 'none'));
+      setActivity(key, { label: 'IA · chemins', title: `L’IA trace les chemins de « ${poi.title} »`, ai: true });
+      await new Promise((r) => setTimeout(r, SCENARIO_POLL_MS));
+    }
+    carnet.updateHere(show([], 'none'));
   } finally {
     setActivity(key, null);
   }
@@ -454,7 +553,7 @@ new SearchBox(document.getElementById('search')!, {
     playSound('person');
     people.follow(h);
   },
-  personScenario: (h) => void lifeScenario(h),
+  personScenario: (h) => void lifeScenario(h, false),
   territory: (t) => {
     elsewhere();
     const realm = borders.realmByKey(t.key);
@@ -463,7 +562,10 @@ new SearchBox(document.getElementById('search')!, {
     const a = borders.territoryArea(t.key);
     if (a) viewer.camera.flyTo({ destination: Rectangle.fromDegrees(a.west, a.south, a.east, a.north), duration: 1.6 });
   },
-  scenario: (w) => player.play(w, 0),
+  scenario: (w) => {
+    const known = carnet.pathOf(w.id);
+    carnet.play(w, known && !known.done ? known.step : 0);
+  },
 });
 
 /** Shows a point's card; the camera only moves on click, not on hover. */

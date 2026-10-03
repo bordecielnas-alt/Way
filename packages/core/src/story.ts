@@ -3,8 +3,8 @@ import { dirname } from 'node:path';
 import { z } from 'zod';
 import {
   ACTIVITY_LABELS, distanceKm, histToAstro, LENSES, MAX_YEAR, MIN_YEAR, STORY_PHASES, THEME_LABELS, THEMES, toLite,
-  type ActivityKind, type PersonJourney, type PersonScenarioResponse, type Poi, type PoiLite, type ScenarioContext, type ScenarioWalk,
-  type ScenariosResponse, type Source, type Story, type StoryPerson, type StoryPhase, type StoryResponse, type StoryScenario, type StoryStop,
+  type ActivityKind, type DetourKind, type PersonJourney, type PersonScenarioResponse, type Poi, type PoiLite, type ScenarioContext, type ScenarioWalk,
+  type ScenariosResponse, type Source, walkOf, type Story, type StoryPerson, type StoryPhase, type StoryResponse, type StoryScenario, type StoryStop,
 } from '@way/shared';
 import { geocode, people, wikidata, wikipedia, type DatedRow } from '@way/providers';
 import { grounded, normalize } from './links.ts';
@@ -41,6 +41,10 @@ const MAX_STEPS = 12;
 /** A person's life: stops offered to the AI, and the fewest steps worth a walk. */
 const MAX_PERSON_STOPS = 20;
 const MIN_PERSON_STEPS = 3;
+/** A detour off a walk: a few moments around the one the visitor branched from. */
+const DETOUR_STOPS = 4;
+const DETOUR_MIN = 2;
+const DETOUR_MAX = 3;
 /** Scenarios kept on disk (one set per card and way of looking). */
 const SCENARIOS_KEEP = 2000;
 /** Years a Wikidata event's date may differ from the article's. */
@@ -354,16 +358,39 @@ export function personStops(j: PersonJourney, stories: { title: string; stops: S
  * of time, while they lived, the text speaking of that moment; none under
  * MIN_PERSON_STEPS steps. Pure, for tests.
  */
-export function buildPersonWalk(item: ScenarioItem, stops: PersonStop[], hero: StoryPerson, source: Source): ScenarioWalk | null {
+export function buildPersonWalk(
+  item: ScenarioItem, stops: PersonStop[], hero: StoryPerson, source: Source,
+  limits: { min: number; max: number; id?: string } = { min: MIN_PERSON_STEPS, max: MAX_STEPS },
+): ScenarioWalk | null {
   const seen = new Set<number>();
   const steps = item.steps.flatMap((st) => {
     const s = st && stops[st.stop];
     if (!st || !s || seen.has(st.stop) || !aliveIn(hero, s.year) || !textFitsYear(st.text, s.year)) return [];
     seen.add(st.stop);
     return [{ place: s.place, label: s.label, year: s.year, lat: s.lat, lon: s.lon, poi: s.poi, text: st.text, cast: [hero] }];
-  }).sort((a, b) => histToAstro(a.year) - histToAstro(b.year)).slice(0, MAX_STEPS);
-  if (steps.length < MIN_PERSON_STEPS) return null;
-  return { id: `${hero.qid}|${item.title}`, title: item.title, premise: item.premise, invented: false, hero, steps, source, from: null };
+  }).sort((a, b) => histToAstro(a.year) - histToAstro(b.year)).slice(0, limits.max);
+  if (steps.length < limits.min) return null;
+  return { id: limits.id ?? `${hero.qid}|${item.title}`, title: item.title, premise: item.premise, invented: false, hero, steps, source, from: null };
+}
+
+/**
+ * The `n` moments closest in time to `year` (the one branched from), back
+ * in the order of time: a detour stays around that moment. Pure, for tests.
+ */
+export function nearMoment<T extends { year: number }>(stops: T[], year: number, n = DETOUR_STOPS): T[] {
+  const y = histToAstro(year);
+  return stops
+    .map((s, i) => ({ s, i, d: Math.abs(histToAstro(s.year) - y) }))
+    .sort((a, b) => a.d - b.d || a.i - b.i)
+    .slice(0, n)
+    .sort((a, b) => histToAstro(a.s.year) - histToAstro(b.s.year) || a.i - b.i)
+    .map((x) => x.s);
+}
+
+/** What the AI is told of the walk a detour branches off. Pure, for tests. */
+export function detourAsk(year: number, from: string): string {
+  return `This time write exactly ONE short DETOUR: ${DETOUR_MIN} to ${DETOUR_MAX} steps only, each at a DIFFERENT listed stop (never the same stop twice), the stops nearest to the year ${year}. `
+    + `The visitor branches off the scenario « ${from} » at that moment: the premise starts from it (what links this character to that moment), and the title is new (not « ${from} »).`;
 }
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -478,6 +505,83 @@ export class StoryService {
       console.log(`[story] life of ${j.name} (${contextKey(ctx)}): ${walk ? `${walk.steps.length} steps` : 'too few places'}`);
     });
     return { status: 'pending', walk: null };
+  }
+
+  /**
+   * A short detour off a walk, near the year branched from: a real person's
+   * moments around it (in their shoes), or an invented character at a
+   * place's card (its story read first). `skip`: the item of the card whose
+   * story the visitor branches from (a person's detour goes elsewhere when it
+   * can). Written once per view, then kept.
+   */
+  async detour(
+    target: { kind: 'person'; journey: PersonJourney } | { kind: 'card'; poi: Poi }, year: number, from: string, ctx: ScenarioContext,
+    skip: string | null = null,
+  ): Promise<PersonScenarioResponse> {
+    const kind: DetourKind = target.kind;
+    const id = target.kind === 'person' ? target.journey.qid : this.key(target.poi);
+    const key = `detour|${kind}|${id}|${year}|${normalize(from)}|${skip ?? ''}|${contextKey(ctx)}`;
+    const done = this.personCache[key];
+    if (done && done.v === PERSON_VERSION && (done.walk || Date.now() - done.at < EMPTY_RETRY_MS)) {
+      return { status: done.walk ? 'ready' : 'none', walk: done.walk };
+    }
+    if ((this.failed.get(key) ?? 0) > Date.now()) return { status: 'none', walk: null };
+    if (!this.router.canRun('write')) return { status: 'no-ai', walk: null };
+    let write: () => Promise<ScenarioWalk | null>;
+    if (target.kind === 'card') {
+      // The place's own story first: a detour walks through its checked stops.
+      const story = await this.get(target.poi);
+      if (!story.story) return { status: story.status, walk: null };
+      const hit = this.cache[id];
+      if (!hit?.story || hit.v !== STORY_VERSION) return { status: 'pending', walk: null };
+      const stored = hit.story;
+      write = () => this.writeCardDetour(target.poi, stored, year, from, ctx);
+    } else {
+      write = () => this.writePerson(target.journey, ctx, { year, from, skip });
+    }
+    this.enqueue(key, async () => {
+      const walk = await write();
+      this.personCache[key] = { at: Date.now(), v: PERSON_VERSION, walk };
+      console.log(`[story] detour ${kind} ${id} near ${year}: ${walk ? `${walk.steps.length} steps` : 'too few places'}`);
+    });
+    return { status: 'pending', walk: null };
+  }
+
+  /** An invented character's detour through the stops of a place's story nearest to the year branched from. */
+  private async writeCardDetour(poi: Poi, stored: StoredStory, year: number, from: string, ctx: ScenarioContext): Promise<ScenarioWalk | null> {
+    const story = await this.resolve(stored);
+    const sub: Story = { ...story, stops: nearMoment(story.stops, year) };
+    if (sub.stops.length < DETOUR_MIN) return null;
+    const article = await wikipedia.pageText(poi.wiki_lang ?? 'fr', poi.wiki_title!, SCENARIO_ARTICLE_CHARS);
+    if (!article) return null;
+    const user = [
+      `Subject: « ${poi.title} ».`,
+      describeContext(ctx),
+      '',
+      'Stops:',
+      ...sub.stops.map((s, i) => `S${i}. year ${s.year} · ${s.label} · ${s.poi?.title ?? s.name}`),
+      '',
+      sub.people.length ? 'People:' : 'People: none listed.',
+      ...sub.people.map((p, i) => `P${i}. ${p.name} (${p.born ?? '?'}–${p.died ?? ''}), ${p.role}`),
+      '',
+      `Article « ${article.title} » :`,
+      '',
+      article.text,
+      '',
+      `${detourAsk(year, from)} Follow an INVENTED character (person = null, invented = true).`,
+    ].join('\n');
+    // A small model sometimes answers off the list: once more before giving up for a while.
+    for (let tries = 0; tries < 2; tries++) {
+      const answer = await this.router.completeJson('write', SCENARIOS_SYSTEM, user, (v) => ExtractedScenarios.parse(v), 3000);
+      if (!answer) throw new Error('no AI available');
+      const items = answer.value.scenarios.filter((x): x is ScenarioItem => !!x).map((x) => ({ ...x, invented: true }));
+      const sc = buildScenarios(items, sub.stops, sub.people).find((x) => x.invented);
+      if (sc) {
+        const walk = walkOf(toLite(poi), sub, { ...sc, steps: sc.steps.slice(0, DETOUR_MAX) });
+        return { ...walk, id: `${walk.id}|détour|${year}` };
+      }
+    }
+    throw new Error('no usable detour');
   }
 
   private enqueue(key: string, run: () => Promise<void>): void {
@@ -595,15 +699,24 @@ export class StoryService {
   }
 
   /** Someone's life over the stops of the stories they took part in and their own Wikidata moments; null when too few. */
-  private async writePerson(j: PersonJourney, ctx: ScenarioContext): Promise<ScenarioWalk | null> {
+  private async writePerson(
+    j: PersonJourney, ctx: ScenarioContext, detour?: { year: number; from: string; skip: string | null },
+  ): Promise<ScenarioWalk | null> {
     // The card stories already read where they appear: their checked stops become theirs.
     const appears = Object.entries(this.cache)
       .filter(([, e]) => e.v === STORY_VERSION && e.story?.people.some((p) => p.qid === j.qid))
       .slice(0, 8);
     const cards = new Map((await this.store.getPoisByQids(appears.map(([k]) => k)).catch(() => [] as Poi[])).map((p) => [p.wikidata_qid, p]));
-    const stories = await Promise.all(appears.map(async ([k, e]) => ({ title: cards.get(k)?.title ?? k, stops: (await this.resolve(e.story!)).stops })));
-    const stops = personStops(j, stories);
-    if (stops.length < MIN_PERSON_STEPS) return null;
+    const stories = await Promise.all(appears.map(async ([k, e]) => ({ qid: k, title: cards.get(k)?.title ?? k, stops: (await this.resolve(e.story!)).stops })));
+    // A detour keeps the moments around the one branched from, out of the whole life, elsewhere
+    // than the story branched from when the life has enough (it already walks through those).
+    const around = (from: typeof stories) => nearMoment(personStops(j, from, MAX_PERSON_STOPS * 2), detour!.year);
+    const elsewhere = detour?.skip ? around(stories.filter((s) => s.qid !== detour.skip)) : [];
+    const stops = !detour ? personStops(j, stories) : elsewhere.length >= DETOUR_MIN ? elsewhere : around(stories);
+    const limits = detour
+      ? { min: DETOUR_MIN, max: DETOUR_MAX, id: `${j.qid}|détour|${detour.year}` }
+      : { min: MIN_PERSON_STEPS, max: MAX_STEPS };
+    if (stops.length < limits.min) return null;
 
     const info = (await wikidata.queryEntityInfo([j.qid])).get(j.qid);
     const lang = info?.frTitle ? 'fr' : 'en';
@@ -622,6 +735,7 @@ export class StoryService {
       `Article « ${article.title} » :`,
       '',
       article.text,
+      ...(detour ? ['', detourAsk(detour.year, detour.from)] : []),
     ].join('\n');
     const source: Source = { url: article.url, title: `Wikipédia : ${article.title}`, kind: 'wikipedia' };
     // A small model sometimes answers off the list: once more before giving up for a while.
@@ -629,10 +743,10 @@ export class StoryService {
       const answer = await this.router.completeJson('write', PERSON_SYSTEM, user, (v) => ExtractedScenarios.parse(v), 5000);
       if (!answer) throw new Error('no AI available');
       const item = answer.value.scenarios.find((x): x is ScenarioItem => !!x);
-      const walk = item && buildPersonWalk(item, stops, hero, source);
+      const walk = item && buildPersonWalk(item, stops, hero, source, limits);
       if (walk) return walk;
     }
-    throw new Error('no usable life scenario');
+    throw new Error(detour ? 'no usable detour' : 'no usable life scenario');
   }
 
   /**

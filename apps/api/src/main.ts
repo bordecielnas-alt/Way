@@ -380,6 +380,36 @@ app.get<{ Params: { qid: string } }>('/api/people/:qid/scenario', async (req, re
   }
 });
 
+// A short detour off the scenario played: around a person, or at a place's card, near the year branched from.
+const DetourQuery = ScenariosQuery.extend({
+  kind: z.enum(['person', 'card']),
+  id: z.string().min(1).max(200),
+  year: z.coerce.number().int().min(-10_000).max(3000),
+  from: z.string().trim().min(1).max(120),
+  /** The card of the scenario branched from. */
+  card: z.string().max(200).optional(),
+});
+app.get('/api/detour', async (req, reply) => {
+  const q = DetourQuery.safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: q.error.issues });
+  const { kind, id, year, from } = q.data;
+  try {
+    if (kind === 'person') {
+      if (!Qid.safeParse(id).success) return reply.code(400).send({ error: 'requête invalide' });
+      const j = await people.journey(id);
+      if (!j) return reply.code(404).send({ error: 'personne inconnue' });
+      const card = q.data.card ? await store.getPoi(q.data.card) : null;
+      return await stories.detour({ kind, journey: j }, year, from, scenarioContext(q.data), card?.wikidata_qid ?? null);
+    }
+    const poi = await store.getPoi(id);
+    if (!poi) return reply.code(404).send({ error: 'not found' });
+    return await stories.detour({ kind, poi }, year, from, scenarioContext(q.data));
+  } catch (e) {
+    req.log.warn(`detour ${kind} ${id} failed: ${(e as Error).message}`);
+    return reply.code(503).send({ error: 'Wikidata ne répond pas pour le moment.' });
+  }
+});
+
 // Armies of the wars fought during a decade (first year, a multiple of 10).
 app.get('/api/armies', async (req, reply) => {
   const q = z.object({ decade: z.coerce.number().int().min(-3000).max(2030).refine((d) => d % 10 === 0) }).safeParse(req.query);

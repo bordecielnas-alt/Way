@@ -126,12 +126,32 @@ export interface ScenarioWalk {
   source: Source;
   /** The card it was written on; null for a person's life, which crosses cards. */
   from: PoiLite | null;
+  /** What the story led to, beyond the walk: cards to go on from at its end. */
+  after?: WalkLead[];
 }
+
+/** A card the story leads to after the walk (an inquiry, a law, a war). */
+export interface WalkLead {
+  label: string;
+  year: number;
+  poi: PoiLite;
+}
+
+/** Leads at most offered at the end of a walk. */
+const MAX_AFTER = 3;
 
 /** A card's scenario as a walk: its stops and people written out. Pure, for tests. */
 export function walkOf(from: PoiLite, story: Story, sc: StoryScenario): ScenarioWalk {
   const hero = sc.person !== null ? story.people[sc.person] ?? null : null;
+  // Cards the walk already goes through are no leads (a port may be two stops of the story).
+  const seen = new Set<string>([from.id, ...sc.steps.flatMap((st) => story.stops[st.stop]?.poi?.id ?? [])]);
+  const after = story.stops.flatMap((s) => {
+    if (s.phase !== 'after' || !s.poi || seen.has(s.poi.id)) return [];
+    seen.add(s.poi.id);
+    return [{ label: s.label, year: s.year, poi: s.poi }];
+  }).slice(0, MAX_AFTER);
   return {
+    after,
     id: `${from.id}|${sc.title}`,
     title: sc.title,
     premise: sc.premise,
@@ -150,7 +170,10 @@ export function walkOf(from: PoiLite, story: Story, sc: StoryScenario): Scenario
   };
 }
 
-/** A real person's life as a scenario, across the cards where they appear (`pending` while an AI writes it). */
+/** A short detour (2-3 steps) branching off a walk: around a person, or at a place's card, near a year. */
+export type DetourKind = 'person' | 'card';
+
+/** A real person's life as a scenario, across the cards where they appear, or a detour (`pending` while an AI writes it). */
 export interface PersonScenarioResponse {
   status: StoryStatus;
   walk: ScenarioWalk | null;
