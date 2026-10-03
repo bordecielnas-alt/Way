@@ -361,6 +361,11 @@ export class Filters {
     this.syncLenses();
   }
 
+  /** The lens whose filters are exactly the current ones, if any. */
+  get lens(): string | null {
+    return LENSES.find((l) => this.lensButtons.get(l.id)?.getAttribute('aria-pressed') === 'true')?.id ?? null;
+  }
+
   /** A lens is lit while the filters are exactly its own. */
   private syncLenses(): void {
     const f = this.themes;

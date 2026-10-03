@@ -52,6 +52,26 @@ export function quoted(article: string, quote: string): boolean {
 }
 
 /**
+ * Does the article state it, even lightly reworded? The exact quote, or a
+ * sentence (with the next one) holding at least 80 % of the quote's words
+ * and every one of its numbers (dates must not drift). For readings where
+ * small models paraphrase ("Le Titanic est lancé le 31 mai 1911" for "…et le
+ * Titanic le 31 mai 1911"): the fact must still be in the article.
+ */
+export function grounded(article: string, quote: string): boolean {
+  if (quoted(article, quote)) return true;
+  const words = [...new Set(normalize(quote).split(' ').filter((w) => w.length >= 3 || /^\d+$/.test(w)))];
+  if (words.length < 4) return false;
+  const numbers = words.filter((w) => /^\d+$/.test(w));
+  const sentences = article.split(/(?<=[.!?…])\s+|\n+/).map((s) => new Set(normalize(s).split(' ')));
+  return sentences.some((s, i) => {
+    const near = new Set([...s, ...(sentences[i + 1] ?? [])]);
+    const found = words.filter((w) => near.has(w)).length;
+    return found / words.length >= 0.8 && numbers.every((n) => near.has(n));
+  });
+}
+
+/**
  * Picks, for each item, the first matching Wikidata item whose date fits
  * the article's year and the direction of the link. Pure, for tests.
  */

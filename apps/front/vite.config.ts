@@ -41,7 +41,9 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      '/api': api,
+      // Not the string shorthand: it rewrites Host to the API's, and the API refuses
+      // writes whose Origin (this dev server) differs from Host ("origine refusée").
+      '/api': { target: api, changeOrigin: false },
       '/ws': { target: api.replace(/^http/, 'ws'), ws: true },
     },
   },
