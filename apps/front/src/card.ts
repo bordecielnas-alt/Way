@@ -50,7 +50,9 @@ const DOOR_ICONS: Record<DoorKind, string> = { cause: '⏪', effect: '⏩', mean
 const TRAIL_MAX = 12;
 const DOOR_POLL_MS = 1500;
 const DOOR_WAIT_MS = 60_000;
-const STORY_POLL_MS = 3000;
+/** The bones of a story come in seconds: asked often at first, then while an AI labels them. */
+const STORY_POLL_MS = 1500;
+const LABEL_POLL_MS = 3000;
 const STORY_WAIT_MS = 150_000;
 
 /** A card's own scenarios, for the carnet: `pending` while an AI writes them. */
@@ -65,7 +67,7 @@ export interface CardPaths {
 export type PolityKind = 'territory' | 'member' | 'estimated';
 
 export class Card {
-  private token = 0;
+  private tokenValue = 0;
   /** Door destinations fetched while the current card is read (brief §4.5). */
   private prefetched = new Map<string, Poi>();
   /** POI shown, or null for a territory or a closed panel. */
@@ -77,6 +79,8 @@ export class Card {
 
   /** A stop of a card's story: the map and the timeline go there; `openCard`: its own card too, when it has one. */
   onStoryStop: (s: StoryStop, openCard: boolean) => void = () => undefined;
+  /** The story of the card shown, or null: its places drawn on the globe. */
+  onStory: (s: { story: Story; from: PoiLite } | null) => void = () => undefined;
   /** A person of a card's story: followed on the map (Personnages panel). */
   onStoryPerson: (p: StoryPerson) => void = () => undefined;
   /** How the visitor looks at the world now (the walk so far is added by the card). */
@@ -99,6 +103,16 @@ export class Card {
   private scenarioToken = 0;
   /** The path played, to mark the chip when it passes here. */
   private playing: ScenarioWalk | null = null;
+
+  private get token(): number {
+    return this.tokenValue;
+  }
+
+  /** A new card, or none: what the previous one drew on the globe goes. */
+  private set token(v: number) {
+    this.tokenValue = v;
+    this.onStory(null);
+  }
 
   get currentPoi(): string | null {
     return this.root.hidden ? null : this.shown;
@@ -552,12 +566,16 @@ export class Card {
     void this.loadStory(p.id, token, toLite(p));
   }
 
-  /** The story is read once by an AI: poll while it is, then lay it out and ask for scenarios. */
+  /**
+   * The story's bones come in seconds: laid out (and scenarios asked) as soon
+   * as they do, then again when an AI has labelled them.
+   */
   private async loadStory(id: string, token: number, from: PoiLite): Promise<void> {
     const key = `story:${token}`;
     const section = this.root.querySelector<HTMLElement>('.story')!;
     const body = section.querySelector<HTMLElement>('.story-body')!;
     const started = performance.now();
+    let shown = '';
     try {
       for (;;) {
         let res: StoryResponse;
@@ -571,10 +589,20 @@ export class Card {
         if (token !== this.token) return;
         if (res.story) {
           section.hidden = false;
-          this.renderStory(body, res.story);
-          this.story = { id, token, story: res.story, from };
-          void this.loadScenarios();
-          return;
+          const seen = JSON.stringify(res.story.stops.map((s) => [s.label, s.main, s.phase, !!s.poi]));
+          if (seen !== shown) {
+            const first = !shown;
+            shown = seen;
+            const open = body.querySelector<HTMLDetailsElement>('.story-more')?.open ?? false;
+            this.renderStory(body, res.story, !!res.draft, open);
+            this.story = { id, token, story: res.story, from };
+            this.onStory({ story: res.story, from });
+            if (first) void this.loadScenarios();
+          } else if (!res.draft) body.querySelector('.story-labelling')?.remove();
+          if (!res.draft || performance.now() - started > STORY_WAIT_MS) return;
+          setActivity(key, { label: 'IA · rôles des lieux', title: 'L’IA précise le rôle de chaque lieu dans l’histoire', ai: true });
+          await new Promise((r) => setTimeout(r, LABEL_POLL_MS));
+          continue;
         }
         if (res.status !== 'pending' || performance.now() - started > STORY_WAIT_MS) {
           section.hidden = true;
@@ -582,10 +610,10 @@ export class Card {
         }
         if (section.hidden) {
           section.hidden = false;
-          body.innerHTML = `<div class="story-wait">L’IA lit l’article : lieux, moments, personnages…</div>
+          body.innerHTML = `<div class="story-wait">Lecture de l’article : ses lieux, ses moments, ses personnages…</div>
             ${'<div class="door skeleton story-skeleton"></div>'.repeat(3)}`;
         }
-        setActivity(key, { label: 'IA · fil de l’histoire', title: 'L’IA lit l’article pour ses lieux et ses personnages', ai: true });
+        setActivity(key, { label: 'Fil de l’histoire', title: 'Lecture des liens de l’article : lieux et personnages', ai: false });
         await new Promise((r) => setTimeout(r, STORY_POLL_MS));
       }
     } finally {
@@ -593,21 +621,29 @@ export class Card {
     }
   }
 
-  private renderStory(body: HTMLElement, s: Story): void {
+  private renderStory(body: HTMLElement, s: Story, draft: boolean, moreOpen: boolean): void {
     const life = (p: StoryPerson) =>
       p.born !== null || p.died !== null ? `${p.born !== null ? formatYear(p.born) : '?'} – ${p.died !== null ? formatYear(p.died) : ''}` : '';
     const stop = (i: number) => {
       const st = s.stops[i]!;
-      return `<li><button type="button" class="story-stop" data-stop="${i}" title="${st.poi ? 'Aller à cette fiche' : 'Aller à ce lieu'}">
+      return `<li><button type="button" class="story-stop" data-stop="${i}" title="${st.poi ? 'Entrer dans son histoire : sa fiche, ses lieux, ses chemins' : 'Aller à ce lieu'}">
         <span class="story-year">${esc(formatYear(st.year))}</span>
         <span class="story-text"><span class="story-label">${esc(st.label)}</span><span class="story-name">${esc(st.poi?.title ?? st.name)}</span></span>
-        ${st.poi ? '<span class="story-card" aria-label="fiche">›</span>' : '<span class="story-card story-pin" aria-label="lieu">◎</span>'}
+        ${st.poi ? '<span class="story-card story-door" aria-label="entrer dans son histoire">⤷</span>' : '<span class="story-card story-pin" aria-label="lieu">◎</span>'}
       </button></li>`;
     };
+    const main = (st: StoryStop) => st.main !== false;
     const phases = STORY_PHASES.map((ph) => {
-      const idx = s.stops.flatMap((st, i) => (st.phase === ph ? [i] : []));
+      const idx = s.stops.flatMap((st, i) => (st.phase === ph && main(st) ? [i] : []));
       return idx.length ? `<div class="story-phase story-${ph}"><div class="story-phase-title">${STORY_PHASE_LABELS[ph]}</div><ol class="story-stops">${idx.map(stop).join('')}</ol></div>` : '';
     }).join('');
+    // The places the article only cites: folded, in the order of time.
+    const others = s.stops.flatMap((st, i) => (main(st) ? [] : [i]));
+    const more = others.length
+      ? `<details class="story-more"${moreOpen ? ' open' : ''}><summary>+ ${others.length} autre${others.length > 1 ? 's' : ''} lieu${others.length > 1 ? 'x' : ''} cité${others.length > 1 ? 's' : ''} par l’article</summary>
+          <ol class="story-stops">${others.map(stop).join('')}</ol></details>`
+      : '';
+    const doors = s.stops.filter((st) => st.poi).length;
     const people = s.people.length
       ? `<div class="story-phase"><div class="story-phase-title">Personnages <span class="story-aside">· cliquer pour suivre sur la carte</span></div>
           <div class="story-people">${s.people.map((p, i) => `
@@ -616,8 +652,10 @@ export class Card {
               <span class="ruler-text"><span class="ruler-name">${esc(p.name)}</span><span class="ruler-meta">${esc([p.role, life(p)].filter(Boolean).join(' · '))}</span></span>
             </button>`).join('')}</div></div>`
       : '';
-    body.innerHTML = `${phases}${people}
-      <a class="door-source story-source" href="${esc(s.source.url)}" target="_blank" rel="noopener">Lu par IA dans « ${esc(s.source.title.replace(/^Wikipédia : /, ''))} » : vérifier</a>`;
+    body.innerHTML = `${draft ? '<div class="story-labelling">L’IA précise le rôle de chaque lieu…</div>' : ''}
+      ${doors ? `<div class="story-hint">⤷ ${doors} lieu${doors > 1 ? 'x ont' : ' a'} sa propre histoire : entrez-y pour explorer plus loin.</div>` : ''}
+      ${phases}${more}${people}
+      <a class="door-source story-source" href="${esc(s.source.url)}" target="_blank" rel="noopener">Lieux et personnages liés par l’article « ${esc(s.source.title.replace(/^Wikipédia : /, ''))} »${draft ? '' : ', rôles résumés par IA'} : vérifier</a>`;
 
     body.querySelectorAll<HTMLButtonElement>('.story-stop').forEach((b) =>
       b.addEventListener('click', () => this.onStoryStop(s.stops[Number(b.dataset.stop)]!, true)),
@@ -678,8 +716,15 @@ export class Card {
         if (token !== this.scenarioToken || this.story !== shown || shown.token !== this.token) return;
         if (res.scenarios.length) {
           const story = res.story ?? shown.story;
-          this.setPaths(res.scenarios.map((sc) => walkOf(shown.from, story, sc)), 'ready');
-          return;
+          const walks = res.scenarios.map((sc) => walkOf(shown.from, story, sc));
+          if (walks.length !== this.walks.length || this.pathsStatus !== (res.more ? 'pending' : 'ready')) this.setPaths(walks, res.more ? 'pending' : 'ready');
+          if (!res.more || performance.now() - started > STORY_WAIT_MS) {
+            if (res.more) this.setPaths(walks, 'ready');
+            return;
+          }
+          setActivity(key, { label: 'IA · scénarios', title: 'L’IA écrit les chemins suivants', ai: true });
+          await new Promise((r) => setTimeout(r, LABEL_POLL_MS));
+          continue;
         }
         // Scenarios already shown stay until new ones come (none for this view: the old ones still serve).
         if (res.status !== 'pending' || performance.now() - started > STORY_WAIT_MS) {
@@ -688,7 +733,7 @@ export class Card {
         }
         if (this.pathsStatus !== 'pending' && !this.walks.length) this.setPaths([], 'pending');
         setActivity(key, { label: 'IA · scénarios', title: 'L’IA écrit des scénarios pour votre lentille et votre exploration', ai: true });
-        await new Promise((r) => setTimeout(r, STORY_POLL_MS));
+        await new Promise((r) => setTimeout(r, LABEL_POLL_MS));
       }
     } finally {
       setActivity(key, null);

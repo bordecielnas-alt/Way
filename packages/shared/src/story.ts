@@ -32,6 +32,8 @@ export interface StoryStop {
   lon: number;
   /** The Wikidata item as a card, when it has one fitting the story. */
   poi: PoiLite | null;
+  /** One of the story's own places (shown first); false for one its article only cites. Absent: main. */
+  main?: boolean;
 }
 
 export interface StoryPerson {
@@ -84,6 +86,8 @@ export type StoryStatus = 'ready' | 'pending' | 'none' | 'no-ai';
 export interface StoryResponse {
   status: StoryStatus;
   story: Story | null;
+  /** Its places as the article heads them, an AI labelling them meanwhile: ask again. */
+  draft?: boolean;
 }
 
 export interface ScenariosResponse {
@@ -91,6 +95,8 @@ export interface ScenariosResponse {
   scenarios: StoryScenario[];
   /** The reading they walk through (its stops and people are what they number), when ready. */
   story?: Story;
+  /** The first ones, more being written: ask again. */
+  more?: boolean;
 }
 
 /** A moment of a walk, self-contained: the place, the year, what the character lives there and who is around. */
@@ -146,7 +152,7 @@ export function walkOf(from: PoiLite, story: Story, sc: StoryScenario): Scenario
   // Cards the walk already goes through are no leads (a port may be two stops of the story).
   const seen = new Set<string>([from.id, ...sc.steps.flatMap((st) => story.stops[st.stop]?.poi?.id ?? [])]);
   const after = story.stops.flatMap((s) => {
-    if (s.phase !== 'after' || !s.poi || seen.has(s.poi.id)) return [];
+    if (s.phase !== 'after' || s.main === false || !s.poi || seen.has(s.poi.id)) return [];
     seen.add(s.poi.id);
     return [{ label: s.label, year: s.year, poi: s.poi }];
   }).slice(0, MAX_AFTER);

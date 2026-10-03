@@ -27,6 +27,7 @@ import { PoiLayer } from './markers.ts';
 import { PeopleLayer, type Picked } from './people.ts';
 import { Carnet, ScenarioLibrary, type Here, type LeadFrom } from './scenario.ts';
 import { SearchBox } from './search.ts';
+import { StoryLayer } from './storymap.ts';
 import { fetchCached } from './localcache.ts';
 import { loadUiSettings, playSound } from './sounds.ts';
 import { Timeline, type TimeWindow } from './timeline.ts';
@@ -307,6 +308,10 @@ function flyToVisible(lat: number, lon: number, height: number): void {
   viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(lon + dLon, Math.max(-89, lat - dLat), height), duration: 1.6 });
 }
 
+// The open card's story on the globe: its places, doors into their own stories.
+const storyMap = new StoryLayer(viewer);
+card.onStory = (shown) => (shown ? storyMap.show(shown.story) : storyMap.clear());
+
 /** A stop of a card's story: there, at the story's moment (a port's own card would take the timeline to its founding). */
 card.onStoryStop = (s, openCard) => {
   elsewhere();
@@ -498,6 +503,7 @@ async function placePaths(poi: PoiLite): Promise<void> {
     }
   };
   const key = `place:${token}`;
+  let found: ScenarioWalk[] = [];
   try {
     while (performance.now() - started < SCENARIO_WAIT_MS) {
       if (token !== placeToken || carnet.hereKey !== poi.id) return;
@@ -507,17 +513,16 @@ async function placePaths(poi: PoiLite): Promise<void> {
         const res = await get<ScenariosResponse>(`/api/poi/${encodeURIComponent(poi.id)}/scenarios?${viewParams()}`);
         if (token !== placeToken) return;
         if (res?.scenarios.length) {
-          const walks = res.scenarios.map((sc) => walkOf(poi, res.story ?? story.story!, sc));
-          library.add(walks);
-          carnet.updateHere(show(walks, 'ready'));
-          return;
-        }
-        if (!res || res.status !== 'pending') return carnet.updateHere(show([], res?.status ?? 'none'));
+          found = res.scenarios.map((sc) => walkOf(poi, res.story ?? story.story!, sc));
+          library.add(found);
+          carnet.updateHere(show(found, res.more ? 'pending' : 'ready'));
+          if (!res.more) return;
+        } else if (!res || res.status !== 'pending') return carnet.updateHere(show([], res?.status ?? 'none'));
       } else if (!story || story.status !== 'pending') return carnet.updateHere(show([], story?.status ?? 'none'));
       setActivity(key, { label: 'IA · chemins', title: `L’IA trace les chemins de « ${poi.title} »`, ai: true });
       await new Promise((r) => setTimeout(r, SCENARIO_POLL_MS));
     }
-    carnet.updateHere(show([], 'none'));
+    carnet.updateHere(show(found, found.length ? 'ready' : 'none'));
   } finally {
     setActivity(key, null);
   }
@@ -744,6 +749,17 @@ function hover(): void {
     tooltip.lastElementChild!.textContent = figure.presence.text;
     return;
   }
+  const stop = storyMap.pick(at);
+  if (stop) {
+    viewer.canvas.style.cursor = 'pointer';
+    tooltip.hidden = false;
+    tooltip.style.left = `${at.x}px`;
+    tooltip.style.top = `${at.y}px`;
+    tooltip.innerHTML = '<div class="tooltip-title"></div><div class="tooltip-meta"></div>';
+    tooltip.firstElementChild!.textContent = stop.poi?.title ?? stop.name;
+    tooltip.lastElementChild!.textContent = `${stop.label} · ${formatYear(stop.year)}${stop.poi ? ' · ⤷ entrer dans son histoire' : ''}`;
+    return;
+  }
   const alive = livingAt(at);
   if (alive) {
     viewer.canvas.style.cursor = 'pointer';
@@ -807,6 +823,12 @@ handler.setInputAction((c: { position: Cartesian2 }) => {
   if (alive) {
     tooltip.hidden = true;
     openLiving(alive);
+    return;
+  }
+  const stop = storyMap.pick(c.position);
+  if (stop) {
+    tooltip.hidden = true;
+    card.onStoryStop(stop, true);
     return;
   }
   const { poi, cluster } = pois.pick(c.position);

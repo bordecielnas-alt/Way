@@ -2,18 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { walkOf, type PersonJourney, type StoryStop } from '@way/shared';
 import { grounded } from './links.ts';
 import {
-  aliveIn, atSea, buildScenarios, contextKey, describeContext, ExtractedScenarios, ExtractedStory, fitsStory, linkMatches, livedThen,
-  buildPersonWalk, detourAsk, namedIn, namesMatch, nearEnough, nearMoment, personStops, plausibleYear, sameName, textFitsYear,
+  aliveIn, applyLabels, buildScenarios, contextKey, describeContext, ExtractedScenarios, livedThen,
+  buildPersonWalk, detourAsk, namedIn, nearMoment, personStops, plausibleYear, StoryLabels, textFitsYear, yearOf,
 } from './story.ts';
 
 describe('story of a card', () => {
-  it('takes an event of the story’s year, or a place that already existed then', () => {
-    expect(fitsStory({ year: 1912, prop: 'P585' }, 1912)).toBe(true);
-    expect(fitsStory({ year: 1944, prop: 'P585' }, 1912)).toBe(false); // a namesake of another era
-    expect(fitsStory({ year: 1250, prop: 'P571' }, 1912)).toBe(true); // Southampton, founded long before
-    expect(fitsStory({ year: 1950, prop: 'P571' }, 1912)).toBe(false); // founded after: not the place meant
-  });
-
   it('keeps people born before the story ends', () => {
     expect(livedThen({ born: 1850 }, 1912)).toBe(true);
     expect(livedThen({ born: null }, 1912)).toBe(true);
@@ -86,8 +79,8 @@ describe('story of a card', () => {
   });
 
   it('tolerates malformed items in the AI answer', () => {
-    const v = ExtractedStory.parse({ stops: [{ name: 'x' }], people: 'none' });
-    expect(v.stops).toEqual([null]);
+    const v = StoryLabels.parse({ stops: [{ i: 'S0' }, { i: 1, label: 'Port de départ', phase: 'pendant', main: 'oui' }], people: 'none' });
+    expect(v.stops).toEqual([null, { i: 1, label: 'Port de départ', phase: 'during', main: false }]);
     expect(v.people).toEqual([]);
     const w = ExtractedScenarios.parse({ scenarios: [{ title: 'Sans étapes' }, sc(0, false, [step(0), { stop: 'x' } as never])] });
     expect(w.scenarios[0]).toBeNull();
@@ -95,29 +88,39 @@ describe('story of a card', () => {
   });
 });
 
-describe('which item the article means', () => {
-  const links = [
-    { qid: 'Q1', titles: ['Edward John Smith', 'Edward Smith (commandant)'] },
-    { qid: 'Q2', titles: ['Cobh', 'Queenstown (Irlande)'] },
-    { qid: 'Q3', titles: ['Smith'] },
-    { qid: 'Q4', titles: ['Southampton'] },
-  ];
+describe('labels over the bones of a story', () => {
+  const stop = (label: string, main: boolean) => ({ label, phase: 'during' as const, main });
+  const bones = [stop('Histoire', true), stop('Voyage', true), stop('Présentation', false), stop('Postérité', false), stop('Naufrage', true)];
+  const persons = [{ role: 'Ingénieur' }, { role: 'Officier de marine' }];
 
-  it('prefers the article’s own links, under their title or a redirect', () => {
-    expect(linkMatches('Edward Smith', links)).toEqual(['Q1']);
-    expect(linkMatches('Queenstown', links)).toEqual(['Q2']);
-    expect(linkMatches('Southampton', links)).toEqual(['Q4']);
-    expect(linkMatches('Halifax', links)).toEqual([]);
+  it('takes the AI’s parts and main places, keeping the stops in their order (scenarios number them)', () => {
+    const out = applyLabels(bones, persons, {
+      stops: [0, 1, 2, 3, 4].map((i) => ({ i, label: `étape ${i}`, phase: 'before' as const, main: i !== 1 })),
+      people: [{ i: 1, role: 'Commandant du navire', main: true }],
+    });
+    expect(out.stops.map((s) => s.label)).toEqual(['Étape 0', 'Étape 1', 'Étape 2', 'Étape 3', 'Étape 4']);
+    expect(out.stops.map((s) => s.main)).toEqual([true, false, true, true, true]);
+    expect(out.people.map((p) => p.role)).toEqual(['Commandant du navire', 'Ingénieur']);
   });
 
-  it('checks a place against where the geocoders put it', () => {
-    const uk = { lat: 50.9, lon: -1.4 };
-    const newYork = { lat: 40.88, lon: -72.39, prop: 'P571' as const };
-    expect(nearEnough(newYork, uk, false)).toBe(false); // Southampton, New York
-    expect(nearEnough({ lat: 50.91, lon: -1.41, prop: 'P571' }, uk, false)).toBe(true);
-    expect(nearEnough(newYork, null, false)).toBe(false); // a namesake place, nothing to check it against
-    expect(nearEnough(newYork, null, true)).toBe(true);
-    expect(nearEnough({ lat: 41.7, lon: -49.9, prop: 'P585' }, { lat: 45, lon: -40 }, true)).toBe(true); // a sinking far out at sea
+  it('keeps the bones’ own main places when the AI marks too few', () => {
+    const out = applyLabels(bones, persons, { stops: [{ i: 3, label: 'Épave', phase: 'after', main: true }], people: [] });
+    expect(out.stops.map((s) => s.main)).toEqual([true, true, false, false, true]);
+    expect(out.stops[3]).toMatchObject({ label: 'Épave', phase: 'after' });
+  });
+
+  it('dates a place by its sentence, else by the years its section gives most', () => {
+    const m = (year: number | null, section: string, years = year === null ? [] : [year]) => ({ target: 'x', path: [section], field: null, sentence: '', year, years, order: 0 });
+    const all = [m(1912, 'Naufrage'), m(1912, 'Naufrage'), m(1985, 'Naufrage'), m(1909, 'Construction')];
+    const ok = (y: number) => y > 1800;
+    const titanic = { start: 1909, end: 1912 };
+    expect(yearOf(m(1911, 'Construction'), all, ok, titanic)).toBe(1911);
+    expect(yearOf(m(null, 'Naufrage'), all, ok, titanic)).toBe(1912);
+    expect(yearOf(m(12, 'Ailleurs'), all, ok, titanic)).toBe(1909);
+    // "En 2000, une plaque rappelle la défense de 1912": during the story, its own year.
+    expect(yearOf(m(2000, 'Naufrage', [2000, 1912]), all, ok, titanic)).toBe(1912);
+    // Under "Découverte de l'épave": the later year.
+    expect(yearOf(m(1912, 'Découverte de l’épave', [1912, 1985]), all, ok, titanic)).toBe(1985);
   });
 });
 
@@ -129,26 +132,11 @@ describe('what small models get wrong', () => {
     expect(grounded(article, 'Le Titanic est détruit par un incendie en mai.')).toBe(false);
   });
 
-  it('knows a sea from a place, and a namesake from the place asked', () => {
-    expect(atSea('Atlantique Nord, près de Terre-Neuve, Canada')).toBe(true);
-    expect(atSea('Mer du Nord')).toBe(true);
-    expect(atSea('Boulogne-sur-Mer, France')).toBe(false);
-    expect(namesMatch('Cobh, Irlande', 'Cobh, Comté de Cork, Irlande')).toBe(true);
-    expect(namesMatch('Carpathia', 'Saint-Jean, Gaspésie, Québec, Canada')).toBe(false);
-  });
-
   it('drops years far from the subject (copied from the prompt’s examples)', () => {
     const wtc = { date_start: 1966, date_end: 2001 };
     expect(plausibleYear(wtc, -44)).toBe(false);
     expect(plausibleYear(wtc, 1962)).toBe(true);
     expect(plausibleYear(wtc, 2014)).toBe(true);
-  });
-});
-
-describe('people found by search', () => {
-  it('bear the name asked, whole words only', () => {
-    expect(sameName('Robert Ballard', 'Robert Duane Ballard')).toBe(true);
-    expect(sameName('Jack Grimm', 'Jack Grimmer')).toBe(false);
   });
 });
 

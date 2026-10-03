@@ -84,6 +84,74 @@ export async function pageText(lang: string, title: string, chars = 12_000): Pro
   return { title: p.title, url: articleUrl(lang, p.title), text: p.extract.length > chars ? `${p.extract.slice(0, chars)}…` : p.extract };
 }
 
+interface ParseResponse { parse?: { title: string; wikitext?: string } }
+
+/** An article's wikitext (its sections and links as written), following redirects. Null for a missing page. */
+export async function pageWikitext(lang: string, title: string): Promise<{ title: string; url: string; wikitext: string } | null> {
+  const params = new URLSearchParams({ action: 'parse', page: title, prop: 'wikitext', redirects: '1', format: 'json', formatversion: '2' });
+  try {
+    const r = await fetchJson<ParseResponse>(`https://${lang}.wikipedia.org/w/api.php?${params}`);
+    if (!r.parse?.wikitext) return null;
+    return { title: r.parse.title, url: articleUrl(lang, r.parse.title), wikitext: r.parse.wikitext };
+  } catch (e) {
+    if (e instanceof HttpError && e.status === 404) return null;
+    throw e;
+  }
+}
+
+/** A linked article: its Wikidata item, and where it is when it has coordinates ({{coord}} type and size). */
+export interface PageInfo {
+  title: string;
+  qid: string | null;
+  lat: number | null;
+  lon: number | null;
+  /** "city", "landmark", "event", "country", "waterbody"… as the article's {{coord}} says. */
+  type: string | null;
+  /** Its size in meters, when given. */
+  dim: number | null;
+}
+
+interface InfoResponse {
+  query?: {
+    normalized?: { from: string; to: string }[];
+    redirects?: { from: string; to: string }[];
+    pages?: {
+      title: string; missing?: boolean; pageprops?: { wikibase_item?: string };
+      coordinates?: { lat: number; lon: number; globe?: string; type?: string; dim?: string | number; primary?: string | boolean }[];
+    }[];
+  };
+}
+
+/** Linked titles, by the title as asked (redirects and casing followed): 50 at a time, a few in parallel. */
+export async function pagesInfo(lang: string, titles: string[]): Promise<Map<string, PageInfo>> {
+  const out = new Map<string, PageInfo>();
+  const chunks: string[][] = [];
+  for (let i = 0; i < titles.length; i += 50) chunks.push(titles.slice(i, i + 50));
+  const one = async (chunk: string[]) => {
+    const params = new URLSearchParams({
+      action: 'query', titles: chunk.join('|'), prop: 'coordinates|pageprops', ppprop: 'wikibase_item',
+      coprop: 'type|dim|globe', colimit: 'max', redirects: '1', format: 'json', formatversion: '2',
+    });
+    const r = await fetchJson<InfoResponse>(`https://${lang}.wikipedia.org/w/api.php?${params}`);
+    const byTitle = new Map<string, PageInfo>();
+    for (const p of r.query?.pages ?? []) {
+      if (p.missing) continue;
+      const c = p.coordinates?.find((x) => !x.globe || x.globe === 'earth');
+      const dim = c?.dim === undefined ? null : Number(String(c.dim).replace(/km$/, '000').replace(/[^0-9.]/g, '')) || null;
+      byTitle.set(p.title, { title: p.title, qid: p.pageprops?.wikibase_item ?? null, lat: c?.lat ?? null, lon: c?.lon ?? null, type: c?.type ?? null, dim });
+    }
+    const norm = new Map((r.query?.normalized ?? []).map((n) => [n.from, n.to]));
+    const redir = new Map((r.query?.redirects ?? []).map((n) => [n.from, n.to]));
+    for (const asked of chunk) {
+      const n = norm.get(asked) ?? asked;
+      const info = byTitle.get(redir.get(n) ?? n);
+      if (info) out.set(asked, info);
+    }
+  };
+  for (let i = 0; i < chunks.length; i += 4) await Promise.all(chunks.slice(i, i + 4).map(one));
+  return out;
+}
+
 interface LinksResponse {
   continue?: Record<string, string>;
   query?: {
