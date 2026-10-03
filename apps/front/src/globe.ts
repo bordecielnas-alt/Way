@@ -46,6 +46,29 @@ function basemapLayers(name: Basemap): ImageryLayer[] {
 }
 
 const basemap = new Set<ImageryLayer>();
+/** Washed-out white basemap, so coats of arms stand out on the territories. */
+let paper = false;
+
+/** Each basemap layer's own look, kept to come back from paper. */
+const looks = new WeakMap<ImageryLayer, { brightness: number; contrast: number; saturation: number; alpha: number }>();
+
+function applyPaper(l: ImageryLayer): void {
+  if (!looks.has(l)) looks.set(l, { brightness: l.brightness, contrast: l.contrast, saturation: l.saturation, alpha: l.alpha });
+  const own = looks.get(l)!;
+  // Grey, then lifted almost to white: the relief and coasts stay as a faint trace.
+  l.saturation = paper ? 0 : own.saturation;
+  l.brightness = paper ? 2.1 : own.brightness;
+  l.contrast = paper ? 0.45 : own.contrast;
+}
+
+/** White paper under the territories (coats of arms shown), or the usual basemap. */
+export function setPaper(viewer: Viewer, on: boolean): void {
+  if (on === paper) return;
+  paper = on;
+  for (const l of basemap) applyPaper(l);
+  viewer.scene.globe.baseColor = Color.fromCssColorString(on ? '#f4f1ea' : '#0b1624');
+  viewer.scene.requestRender();
+}
 
 /** Layers of the basemap, at the bottom: overlays go just above. */
 export function basemapCount(): number {
@@ -96,6 +119,7 @@ export function setBasemap(viewer: Viewer, name: Basemap): void {
   basemapLayers(name).forEach((l, i) => {
     layers.add(l, i);
     basemap.add(l);
+    applyPaper(l);
   });
   for (const l of old) layers.remove(l, true);
   viewer.scene.requestRender();

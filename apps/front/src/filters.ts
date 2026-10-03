@@ -69,42 +69,39 @@ export class Filters {
     private onLiving: (l: Living) => void,
   ) {
     root.innerHTML = `
-      <div class="filters-head"><span class="filters-title">Lentilles</span></div>
-      <div class="lenses" role="group" aria-label="Lentilles">${LENSES.map(
+      <button type="button" class="filters-fold" aria-expanded="true">
+        <span class="filters-title">Filtres</span><span class="fsec-sum"></span><span class="fsec-chev" aria-hidden="true"></span>
+      </button>
+      <div class="filters-body">
+      ${section('lenses', 'Lentilles', `<div class="lenses" role="group" aria-label="Lentilles">${LENSES.map(
         (l) => `<button type="button" data-lens="${l.id}" title="${l.title}">${l.label}</button>`,
-      ).join('')}</div>
-      <div class="filters-head"><span class="filters-title">Fond des territoires</span></div>
-      <div class="scale" role="group" aria-label="Fond des territoires">${(Object.keys(BACKDROP_LABELS) as Backdrop[]).map(
+      ).join('')}</div>`)}
+      ${section('backdrop', 'Territoires',`<div class="scale" role="group" aria-label="Fond des territoires">${(Object.keys(BACKDROP_LABELS) as Backdrop[]).map(
         (b) => `<button type="button" data-backdrop="${b}" title="${BACKDROP_LABELS[b].title}">${BACKDROP_LABELS[b].label}</button>`,
       ).join('')}</div>
       <div class="faith-legend" hidden>${FAITHS.map(
         (f) => `<span class="faith"><span class="chip-dot" style="background:${FAITH_COLORS[f]}"></span>${FAITH_LABELS[f]}</span>`,
-      ).join('')}<span class="faith"><span class="chip-dot unknown"></span>Inconnue</span></div>
-      <div class="filters-head"><span class="filters-title">Échelle</span></div>
-      <div class="scale" role="group" aria-label="Échelle d’impact">${SCALES.map(
+      ).join('')}<span class="faith"><span class="chip-dot unknown"></span>Inconnue</span></div>`)}
+      ${section('scale', 'Échelle', `<div class="scale" role="group" aria-label="Échelle d’impact">${SCALES.map(
         (s) => `<button type="button" data-scale="${s.value}" title="${s.title}">${s.label}</button>`,
-      ).join('')}</div>
-      <div class="filters-head">
-        <span class="filters-title">Thèmes</span>
-        <span>
+      ).join('')}</div>`)}
+      ${section('themes', 'Thèmes', `<div class="themes-tools">
           <button class="filters-toggle filters-detail" type="button" title="Afficher les catégories de chaque thème">Détail</button>
           <button class="filters-toggle filters-all" type="button">Tout afficher</button>
-        </span>
-      </div>
-      <div class="themes"></div>
-      <div class="filters-head"><span class="filters-title">Monde vivant</span></div>
-      <div class="geo-chips" role="group" aria-label="Monde vivant">${LIVING.map(
+        </div>
+        <div class="themes"></div>`)}
+      ${section('living', 'Monde vivant', `<div class="geo-chips" role="group" aria-label="Monde vivant">${LIVING.map(
         (g) => `<button type="button" class="chip" data-living="${g.key}" title="${g.title}"><span class="chip-dot" style="background:${g.color}"></span>${g.label}</button>`,
       ).join('')}</div>
-      <div class="living-note" hidden></div>
-      <div class="filters-head"><span class="filters-title">Géographie</span></div>
-      <div class="geo-chips" role="group" aria-label="Géographie">${GEOGRAPHY.map(
+      <div class="living-note" hidden></div>`)}
+      ${section('geography', 'Géographie', `<div class="geo-chips" role="group" aria-label="Géographie">${GEOGRAPHY.map(
         (g) => `<button type="button" class="chip" data-geo="${g.key}" title="${g.title}"><span class="chip-dot" style="background:${g.color}"></span>${g.label}</button>`,
-      ).join('')}</div>
-      <div class="filters-head"><span class="filters-title">Blasons</span></div>
-      <div class="scale heraldry" role="group" aria-label="Blasons et drapeaux">${HERALDRY.map(
+      ).join('')}</div>`)}
+      ${section('heraldry', 'Blasons', `<div class="scale heraldry" role="group" aria-label="Blasons et drapeaux">${HERALDRY.map(
         (h) => `<button type="button" data-heraldry="${h.key}" title="${h.title}">${h.label}</button>`,
-      ).join('')}</div>`;
+      ).join('')}</div>`)}
+      </div>`;
+    this.bindFolds();
 
     // ---------- themes, and their categories in detail ----------
     const box = root.querySelector<HTMLElement>('.themes')!;
@@ -171,7 +168,10 @@ export class Filters {
     });
     root.querySelectorAll<HTMLButtonElement>('[data-heraldry]').forEach((b) => {
       const k = b.dataset.heraldry as keyof Heraldry;
-      const sync = () => b.setAttribute('aria-pressed', String(this.heraldry[k]));
+      const sync = () => {
+        b.setAttribute('aria-pressed', String(this.heraldry[k]));
+        this.summarize();
+      };
       sync();
       b.addEventListener('click', () => {
         this.heraldry = { ...this.heraldry, [k]: !this.heraldry[k] };
@@ -181,7 +181,10 @@ export class Filters {
     });
     root.querySelectorAll<HTMLButtonElement>('[data-living]').forEach((b) => {
       const k = b.dataset.living as keyof Living;
-      const sync = () => b.setAttribute('aria-pressed', String(this.living[k]));
+      const sync = () => {
+        b.setAttribute('aria-pressed', String(this.living[k]));
+        this.summarize();
+      };
       sync();
       b.addEventListener('click', () => {
         this.living = { ...this.living, [k]: !this.living[k] };
@@ -191,7 +194,10 @@ export class Filters {
     });
     root.querySelectorAll<HTMLButtonElement>('[data-geo]').forEach((b) => {
       const k = b.dataset.geo as keyof Geography;
-      const sync = () => b.setAttribute('aria-pressed', String(this.geography[k]));
+      const sync = () => {
+        b.setAttribute('aria-pressed', String(this.geography[k]));
+        this.summarize();
+      };
       sync();
       b.addEventListener('click', () => {
         this.geography = { ...this.geography, [k]: !this.geography[k] };
@@ -231,6 +237,58 @@ export class Filters {
     for (const [t, b] of this.themeButtons) set(b, themes.get(t) ?? 0);
     for (const [c, b] of this.catButtons) set(b, cats.get(c) ?? 0);
     set(this.peopleButton, people);
+  }
+
+  /** Folding: the whole panel, and each section (open ones remembered). */
+  private bindFolds(): void {
+    const open = loadFolds();
+    const fold = this.root.querySelector<HTMLButtonElement>('.filters-fold')!;
+    const setPanel = (on: boolean) => {
+      fold.setAttribute('aria-expanded', String(on));
+      this.root.classList.toggle('folded', !on);
+    };
+    setPanel(open.panel !== false);
+    fold.addEventListener('click', () => {
+      const on = this.root.classList.contains('folded');
+      setPanel(on);
+      saveFolds({ ...loadFolds(), panel: on });
+    });
+    this.root.querySelectorAll<HTMLElement>('.fsec').forEach((sec) => {
+      const id = sec.dataset.sec!;
+      const head = sec.querySelector<HTMLButtonElement>('.fsec-head')!;
+      const set = (on: boolean) => {
+        head.setAttribute('aria-expanded', String(on));
+        sec.classList.toggle('open', on);
+      };
+      set(open[id] ?? DEFAULT_OPEN.includes(id));
+      head.addEventListener('click', () => {
+        const on = !sec.classList.contains('open');
+        set(on);
+        saveFolds({ ...loadFolds(), [id]: on });
+      });
+    });
+  }
+
+  /** The current choice of each section, written in its header: a folded section still says what it does. */
+  private summarize(): void {
+    if (!this.legend) return; // still being built
+    const sum = (id: string, text: string) => {
+      const el = this.root.querySelector<HTMLElement>(`.fsec[data-sec="${id}"] .fsec-sum`);
+      if (el) el.textContent = text;
+    };
+    const lens = LENSES.find((l) => this.lensButtons.get(l.id)?.getAttribute('aria-pressed') === 'true');
+    sum('lenses', lens?.label ?? 'Personnalisée');
+    sum('backdrop', BACKDROP_LABELS[this.backdrop].label);
+    sum('scale', SCALES.find((s) => s.value === this.scale)?.label ?? '');
+    const on = THEMES.length - this.themes.hiddenThemes.length;
+    const all = on === THEMES.length && this.themes.people && !this.themes.hiddenCats.length;
+    sum('themes', all ? 'Tous' : `${on}/${THEMES.length}${this.themes.people ? ' · personnages' : ''}`);
+    const count = (n: number) => (n ? `${n} actif${n > 1 ? 's' : ''}` : 'Aucun');
+    sum('living', count(LIVING.filter((g) => this.living[g.key]).length));
+    sum('geography', count(GEOGRAPHY.filter((g) => this.geography[g.key]).length));
+    sum('heraldry', HERALDRY.filter((h) => this.heraldry[h.key]).map((h) => h.label).join(' · ') || 'Aucun');
+    // Folded panel: the lens (else the backdrop) recalls the view.
+    this.root.querySelector<HTMLElement>('.filters-fold .fsec-sum')!.textContent = lens?.label ?? BACKDROP_LABELS[this.backdrop].label;
   }
 
   private toggleTheme(t: Theme): void {
@@ -276,6 +334,7 @@ export class Filters {
 
   private syncScale(): void {
     for (const [v, b] of this.scaleButtons) b.setAttribute('aria-pressed', String(v === this.scale));
+    this.summarize();
   }
 
   private syncBackdrop(): void {
@@ -311,6 +370,36 @@ export class Filters {
         && f.hiddenThemes.length === want.hiddenThemes.length && want.hiddenThemes.every((t) => f.hiddenThemes.includes(t));
       this.lensButtons.get(l.id)!.setAttribute('aria-pressed', String(same));
     }
+    this.summarize();
+  }
+}
+
+/** Sections open the first time: the ready-made views and the themes. */
+const DEFAULT_OPEN = ['lenses', 'themes'];
+const FOLDS_KEY = 'orbis:filters-open';
+
+function section(id: string, title: string, body: string): string {
+  return `<section class="fsec" data-sec="${id}">
+    <button type="button" class="fsec-head" aria-expanded="false">
+      <span class="filters-title">${title}</span><span class="fsec-sum"></span><span class="fsec-chev" aria-hidden="true"></span>
+    </button>
+    <div class="fsec-body">${body}</div>
+  </section>`;
+}
+
+function loadFolds(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(FOLDS_KEY) ?? '{}') as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+function saveFolds(f: Record<string, boolean>): void {
+  try {
+    localStorage.setItem(FOLDS_KEY, JSON.stringify(f));
+  } catch {
+    /* not remembered */
   }
 }
 

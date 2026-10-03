@@ -22,16 +22,22 @@ interface ChatResponse {
   choices?: { message?: { content?: string | null } }[];
 }
 
+/** OpenAI reasoning models (gpt-5…, o1, o3…) refuse `max_tokens` and any temperature but the default. */
+const REASONING = /(^|\/)(gpt-5|o\d)/;
+
 export async function chat(req: ChatRequest): Promise<string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (req.apiKey) headers.Authorization = `Bearer ${req.apiKey}`;
+  const reasoning = REASONING.test(req.model);
   const r = await fetchJson<ChatResponse>(`${req.baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
       model: req.model,
-      temperature: 0.1,
-      max_tokens: req.maxTokens ?? 2500,
+      ...(reasoning
+        // Their thinking counts in the budget: room for it on top of the answer.
+        ? { max_completion_tokens: (req.maxTokens ?? 2500) * 4 }
+        : { temperature: 0.1, max_tokens: req.maxTokens ?? 2500 }),
       messages: [
         { role: 'system', content: req.system },
         { role: 'user', content: req.user },
@@ -44,6 +50,20 @@ export async function chat(req: ChatRequest): Promise<string> {
   const text = r.choices?.[0]?.message?.content;
   if (!text) throw new Error('empty completion');
   return text;
+}
+
+/** Models a key may use, from the OpenAI-compatible `/models` list (empty when unavailable). */
+export async function listModels(baseUrl: string, apiKey?: string): Promise<string[]> {
+  try {
+    const r = await fetchJson<{ data?: { id?: string }[] }>(`${baseUrl.replace(/\/$/, '')}/models`, {
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+      timeoutMs: 15_000,
+      retries: 0,
+    });
+    return (r.data ?? []).map((m) => m.id ?? '').filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 export interface AnthropicChatRequest extends Omit<ChatRequest, 'baseUrl'> {

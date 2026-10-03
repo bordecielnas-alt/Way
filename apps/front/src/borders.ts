@@ -5,6 +5,7 @@ import {
 import {
   formatYear, type Backdrop, type BordersIndex, type BordersPeriod, type Emblem, type EmblemsResponse, type Faith, type FaithsResponse, type PolityLabels,
 } from '@way/shared';
+import { setActivity } from './activity.ts';
 import { bounds, type Area, type Region, type Ring } from './divisions.ts';
 import { letter, nameRoots, shortName, type Lettering } from './lettering.ts';
 import { commonsImage, loadImage } from './media.ts';
@@ -56,7 +57,12 @@ export interface BorderShape extends Area {
   km2: number;
   /** Largest outer ring: where the name is written. */
   main: Ring | null;
+  /** Each separate piece (outer ring and its holes), largest first. */
+  pieces: Piece[];
 }
+
+/** One separate piece of a territory: an island, an exclave, the mainland. */
+interface Piece extends Area { main: boolean }
 
 interface Drawn extends Area {
   fill: string;
@@ -107,6 +113,13 @@ export const FAITH_COLORS: Record<Faith, string> = {
   shinto: '#f09a9a',
   ancient: '#a08466',
   other: '#9a9a9a',
+};
+
+/** Lookups of the realms' details, shown in the timeline's status while they run. */
+const LOOKUP = {
+  names: { label: 'Noms des territoires', title: 'Recherche des noms français des territoires', ai: false },
+  emblems: { label: 'Blasons', title: 'Recherche des blasons et drapeaux des territoires', ai: false },
+  faiths: { label: 'Religions', title: 'Recherche de la religion de chaque territoire', ai: false },
 };
 
 /** Realms are recognized across periods by their Wikidata item, else by name. */
@@ -221,7 +234,11 @@ class BordersTiles {
   /** Set when its layer is gone: tiles still queued are skipped. */
   retired = false;
 
-  constructor(private shapes: Drawn[], private style: Style = 'normal', private names: Named[] = [], private marks: Mark[] = []) {
+  constructor(
+    private shapes: Drawn[], private style: Style = 'normal', private names: Named[] = [], private marks: Mark[] = [],
+    /** White paper underneath: stronger watermarks, names in ink. */
+    private paper = false,
+  ) {
     // A highlight or a territory's regions only cover that territory: Cesium then requests no other tile.
     if (style !== 'normal' && shapes.length) {
       const w = Math.min(...shapes.map((s) => s.west));
@@ -312,7 +329,7 @@ class BordersTiles {
   private drawMarks(g: CanvasRenderingContext2D, west: number, south: number, east: number, north: number, sx: number, sy: number): void {
     for (const m of this.marks) {
       if (m.east < west || m.west > east || m.north < south || m.south > north) continue;
-      const alpha = markAlpha(m.hh * 2 * sy);
+      const alpha = markAlpha(m.hh * 2 * sy) * (this.paper ? 2.2 : 1);
       if (alpha <= 0.01) continue;
       const cos = Math.max(0.2, Math.cos((m.lat * Math.PI) / 180));
       if (m.lon + m.hw / cos < west || m.lon - m.hw / cos > east || m.lat + m.hh < south || m.lat - m.hh > north) continue;
@@ -353,8 +370,13 @@ class BordersTiles {
       g.textAlign = 'center';
       g.textBaseline = 'middle';
       g.lineJoin = 'round';
-      g.fillStyle = style === 'realm' ? `rgba(246, 236, 214, ${0.78 * alpha})` : `rgba(250, 242, 222, ${0.9 * alpha})`;
-      g.strokeStyle = `rgba(20, 16, 12, ${0.5 * alpha})`;
+      if (this.paper) {
+        g.fillStyle = style === 'realm' ? `rgba(46, 34, 24, ${0.8 * alpha})` : `rgba(60, 46, 32, ${0.85 * alpha})`;
+        g.strokeStyle = `rgba(255, 252, 244, ${0.7 * alpha})`;
+      } else {
+        g.fillStyle = style === 'realm' ? `rgba(246, 236, 214, ${0.78 * alpha})` : `rgba(250, 242, 222, ${0.9 * alpha})`;
+        g.strokeStyle = `rgba(20, 16, 12, ${0.5 * alpha})`;
+      }
       g.lineWidth = 9;
       const k = text.size / 100;
       for (const gl of text.glyphs) {
@@ -384,7 +406,10 @@ function decode(p: BordersPeriod, quantum: number): Period {
     let main: Ring | null = null;
     let mainArea = 0;
     const rings: Ring[] = [];
+    const polys: Ring[][] = [];
     for (const poly of f.g) {
+      const own: Ring[] = [];
+      polys.push(own);
       poly.forEach((enc, i) => {
         const ring: Ring = [];
         let x = 0, y = 0;
@@ -394,6 +419,7 @@ function decode(p: BordersPeriod, quantum: number): Period {
           ring.push([x * quantum, y * quantum]);
         }
         rings.push(ring);
+        own.push(ring);
         if (i === 0) {
           const b = bounds([ring]);
           const a = (b.east - b.west) * (b.north - b.south);
@@ -401,9 +427,12 @@ function decode(p: BordersPeriod, quantum: number): Period {
         }
       });
     }
+    const pieces = polys.filter((p) => p.length && p[0]!.length > 2)
+      .map((p): Piece => ({ ...bounds(p), main: p[0] === main }))
+      .sort((a, b) => (b.east - b.west) * (b.north - b.south) - (a.east - a.west) * (a.north - a.south));
     return {
       ...bounds(rings), id: f.id, name: f.name, qid: f.qid, parent: byId.has(f.parent ?? -1) ? f.parent : null,
-      root: rootOf(f.id), km2: f.area, main,
+      root: rootOf(f.id), km2: f.area, main, pieces,
     };
   });
   return { ...p, shapes };
@@ -421,6 +450,37 @@ function inside(s: Area, lon: number, lat: number): boolean {
   }
   return hit;
 }
+
+/**
+ * A point well inside a piece, for its coat of arms: the middle of the widest
+ * stretch of land along a few parallels (a bay or a crescent can leave the
+ * center of the box outside).
+ */
+function innerPoint(p: Area): { lon: number; lat: number } {
+  let best = { lon: (p.west + p.east) / 2, lat: (p.south + p.north) / 2, w: -1 };
+  for (let k = 1; k <= 7; k++) {
+    const lat = p.south + ((p.north - p.south) * k) / 8;
+    const xs: number[] = [];
+    for (const ring of p.rings) {
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const [xi, yi] = ring[i]!;
+        const [xj, yj] = ring[j]!;
+        if (yi > lat !== yj > lat) xs.push(((xj - xi) * (lat - yi)) / (yj - yi) + xi);
+      }
+    }
+    xs.sort((a, b) => a - b);
+    // Even-odd: inside between crossings 0-1, 2-3…; the middle parallels win a tie.
+    for (let i = 0; i + 1 < xs.length; i += 2) {
+      const w = (xs[i + 1]! - xs[i]!) * (1 - Math.abs(k - 4) * 0.04);
+      if (w > best.w) best = { lon: (xs[i]! + xs[i + 1]!) / 2, lat, w };
+    }
+  }
+  return { lon: best.lon, lat: best.lat };
+}
+
+/** Pieces of one realm that get a coat of arms of their own: the largest ones (smaller ones fade out anyway). */
+const MAX_MARKED_PIECES = 40;
+const MIN_PIECE_DEG = 0.05;
 
 /**
  * Historical borders draped on the globe as an imagery layer: yearly
@@ -453,6 +513,7 @@ export class BordersLayer {
   private letterings = new Map<string, Lettering | null>();
   /** Coats of arms in watermark (Blasons → Territoires). */
   private heraldry = false;
+  private paper = false;
   private backdrop: Backdrop = 'political';
   /** Emblem file -> its dominant color (null: no real color). */
   private tints = loadTints();
@@ -466,8 +527,8 @@ export class BordersLayer {
   private emblemImages = new Map<string, HTMLImageElement | null>();
   private emblemsTimer: number | undefined;
   private redrawTimer: number | undefined;
-  /** Each realm's watermark: centered behind the middle of its name, over all of its pieces. */
-  private anchors: { key: string; qid: string | null; lon: number; lat: number; main: Area; area: Area }[] = [];
+  /** Watermarks: one per piece of each realm, the main one centered behind the middle of its name. */
+  private anchors: { key: string; qid: string | null; lon: number; lat: number; piece: Piece }[] = [];
   /** Watermarks have their own layer, under the realms' colors: an emblem arriving redraws only them. */
   private marksLayer: ImageryLayer | null = null;
 
@@ -689,7 +750,7 @@ export class BordersLayer {
         const text = ring ? this.lettering(`r:${r.qid}:${r.label}`, ring, r.label, 'region') : null;
         if (text) names.push({ text, style: 'region' });
       }
-      const layer = new ImageryLayer(new BordersTiles(drawn, 'regions', names) as unknown as ImageryProvider);
+      const layer = new ImageryLayer(new BordersTiles(drawn, 'regions', names, [], this.paper) as unknown as ImageryProvider);
       layer.show = this.visible;
       this.viewer.imageryLayers.add(layer);
       this.regionsLayer = layer;
@@ -719,7 +780,6 @@ export class BordersLayer {
     const drawn: Drawn[] = [];
     const names: Named[] = [];
     const anchors: typeof this.anchors = [];
-    const marked = new Set<string>();
     // Big realms first: small ones inside or across them stay visible.
     const byId = new Map(period.shapes.map((s) => [s.id, s]));
     const ordered = [...period.shapes].sort((a, b) => (a.parent === null ? 0 : 1) - (b.parent === null ? 0 : 1) || b.km2 - a.km2);
@@ -746,11 +806,15 @@ export class BordersLayer {
           const label = this.displayName(s.name);
           const text = this.lettering(`${s.id}:${label}`, s.main, label, 'realm');
           if (text) names.push({ text, style: 'realm' });
-          // One watermark per realm, over its largest piece, centered behind the middle of its name.
-          if (text?.glyphs.length && !marked.has(realmKey(s))) {
-            marked.add(realmKey(s));
-            const mid = text.glyphs[Math.floor(text.glyphs.length / 2)]!;
-            anchors.push({ key: realmKey(s), qid: s.qid, lon: mid.lon, lat: mid.lat, main: bounds([s.main]), area: s });
+          // A watermark on each piece of the realm (islands, exclaves): the main one
+          // centered behind the middle of its name, the others in their own middle.
+          const mid = text?.glyphs.length ? text.glyphs[Math.floor(text.glyphs.length / 2)]! : null;
+          let n = 0;
+          for (const piece of s.pieces) {
+            if (!piece.main && (piece.east - piece.west < MIN_PIECE_DEG || piece.north - piece.south < MIN_PIECE_DEG)) continue;
+            if (n++ >= MAX_MARKED_PIECES) break;
+            const at = piece.main && mid ? mid : innerPoint(piece);
+            anchors.push({ key: realmKey(s), qid: s.qid, lon: at.lon, lat: at.lat, piece });
           }
         }
       } else {
@@ -758,7 +822,7 @@ export class BordersLayer {
         drawn.push({ ...s, fill: '', stroke: tint ? withAlpha(lighter(tint, 0.7), 0.35) : `hsla(${h}, 40%, 88%, 0.35)`, inner: true });
       }
     }
-    const layer = new ImageryLayer(new BordersTiles(drawn, 'normal', names) as unknown as ImageryProvider, { alpha: 0 });
+    const layer = new ImageryLayer(new BordersTiles(drawn, 'normal', names, [], this.paper) as unknown as ImageryProvider, { alpha: 0 });
     layer.show = this.visible;
     // Just above the basemap: points, regions and outlines stay on top.
     this.viewer.imageryLayers.add(layer, this.layer ? this.viewer.imageryLayers.indexOf(this.layer) + 1 : undefined);
@@ -784,6 +848,7 @@ export class BordersLayer {
         this.show();
         this.onPeriod(); // French names can match more armies to their country
       }
+      setActivity('names', res.pending > 0 && attempt < 12 ? LOOKUP.names : null);
       if (res.pending > 0 && attempt < 12) {
         this.namesTimer = window.setTimeout(() => void this.loadNames(from, attempt + 1), 5_000);
       }
@@ -796,6 +861,7 @@ export class BordersLayer {
   setBackdrop(b: Backdrop): void {
     if (b === this.backdrop) return;
     this.backdrop = b;
+    if (b !== 'religion') setActivity('faiths', null);
     // Asked again each time: faiths looked up since then show up.
     if (b === 'religion' && this.current) void this.loadFaiths(this.current.from);
     this.show();
@@ -830,6 +896,7 @@ export class BordersLayer {
       if (changed) this.show();
       // Still being looked up: asked again, less and less often. Found: asked again from time to
       // time anyway, the server keeps checking them in the background (like the emblems).
+      setActivity('faiths', res.pending > 0 && attempt < 40 ? LOOKUP.faiths : null);
       const wait = res.pending > 0 && attempt < 40 ? Math.min(20_000, 4_000 + attempt * 1_000) : 180_000;
       this.faithsTimer = window.setTimeout(() => {
         if (document.visibilityState === 'visible') void this.loadFaiths(from, res.pending > 0 ? attempt + 1 : 0);
@@ -838,6 +905,13 @@ export class BordersLayer {
     } catch {
       /* realms stay grey */
     }
+  }
+
+  /** White paper under the territories: names turn to ink and watermarks grow stronger. */
+  setPaper(on: boolean): void {
+    if (on === this.paper) return;
+    this.paper = on;
+    this.show();
   }
 
   /** Shows or hides the coats of arms in watermark. */
@@ -912,24 +986,24 @@ export class BordersLayer {
         if (a.key === this.quietRealm) continue;
         const img = this.emblemImage(a.qid);
         if (!img) continue;
-        // Large enough to cover the realm's main piece from its center, keeping its shape.
+        // Large enough to cover its piece from its center, keeping its shape, and clipped to that piece alone.
+        const p = a.piece;
         const cos = Math.max(0.2, Math.cos((a.lat * Math.PI) / 180));
         const aspect = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1;
-        const needH = Math.max(a.lat - a.main.south, a.main.north - a.lat);
-        const needW = Math.max(a.lon - a.main.west, a.main.east - a.lon) * cos;
+        const needH = Math.max(a.lat - p.south, p.north - a.lat);
+        const needW = Math.max(a.lon - p.west, p.east - a.lon) * cos;
         const hh = Math.max(needH, needW / aspect) * 1.1;
-        const rings = a.area.rings;
         marks.push({
-          img: faded(img), lon: a.lon, lat: a.lat, hh, hw: hh * aspect, rings,
-          west: a.area.west, south: a.area.south, east: a.area.east, north: a.area.north,
-          boxes: rings.map((r) => bounds([r])),
+          img: faded(img), lon: a.lon, lat: a.lat, hh, hw: hh * aspect, rings: p.rings,
+          west: p.west, south: p.south, east: p.east, north: p.north,
+          boxes: p.rings.map((r) => bounds([r])),
         });
       }
     }
     const old = this.marksLayer;
     this.marksLayer = null;
     if (marks.length && this.layer) {
-      const layer = new ImageryLayer(new BordersTiles([], 'normal', [], marks) as unknown as ImageryProvider);
+      const layer = new ImageryLayer(new BordersTiles([], 'normal', [], marks, this.paper) as unknown as ImageryProvider);
       layer.show = this.visible;
       this.viewer.imageryLayers.add(layer, this.viewer.imageryLayers.indexOf(this.layer));
       this.marksLayer = layer;
@@ -955,6 +1029,7 @@ export class BordersLayer {
       }
       // Still being looked up: asked again, less and less often. Found: asked again from time to
       // time anyway, the server completes the emblems in the background.
+      setActivity('emblems', res.pending > 0 && attempt < 40 ? LOOKUP.emblems : null);
       const wait = res.pending > 0 && attempt < 40 ? Math.min(20_000, 5_000 + attempt * 1_000) : 180_000;
       this.emblemsTimer = window.setTimeout(() => {
         if (document.visibilityState === 'visible') void this.loadEmblems(from, res.pending > 0 ? attempt + 1 : 0);

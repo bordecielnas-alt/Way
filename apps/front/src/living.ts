@@ -7,6 +7,7 @@ import {
   cityAt, FLOWS, flowsIn, flowView, histToAstro, type CityRow, type Flow, type FlowDef, type FlowKind, type FlowsResponse,
   type FlowStatus,
 } from '@way/shared';
+import { setActivity } from './activity.ts';
 import { findRoute, pointOn, withEffort, WaterGrid, type Pt, type Route } from './routes.ts';
 
 // Monde vivant: cities that swell and shrink with the timeline, and flows
@@ -244,6 +245,7 @@ export class LivingLayer {
         : noAi ? `${noAi > 1 ? `${noAi} flux` : 'Un flux'} de cette période ${noAi > 1 ? 'attendent' : 'attend'} une IA pour être lu${noAi > 1 ? 's' : ''} (Réglages → clés).`
           : '',
     );
+    setActivity('flows', pending ? { label: 'IA · monde vivant', title: 'L’IA lit Wikipédia pour tracer les flux de la période', ai: true } : null);
     if (pending) this.pollTimer = window.setTimeout(() => void this.askFlows(), 6000);
     this.update();
   }

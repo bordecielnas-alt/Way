@@ -2,6 +2,7 @@ import {
   ACTIVITY_LABELS, CATEGORY_LABELS, DOOR_KINDS, type Army, type JourneyStop, type PersonJourney, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
   type PoiLite, type PolityInfo, type PolityRulerInfo, toLite, FLOW_LABELS, type CityRow, type Flow, type FlowDef, type FlowStage,
 } from '@way/shared';
+import { setActivity } from './activity.ts';
 import { CATEGORY_COLORS } from './icons.ts';
 import { fetchCached } from './localcache.ts';
 import { formatPop } from './living.ts';
@@ -501,6 +502,15 @@ export class Card {
 
   /** Doors arrive progressively: poll until every kind is known. */
   private async loadDoors(id: string, token: number): Promise<void> {
+    const key = `doors:${token}`;
+    try {
+      await this.pollDoors(id, token, key);
+    } finally {
+      setActivity(key, null);
+    }
+  }
+
+  private async pollDoors(id: string, token: number, key: string): Promise<void> {
     const section = this.root.querySelector<HTMLElement>('.doors')!;
     const list = section.querySelector<HTMLElement>('.door-list')!;
     const shown = new Set<DoorKind>();
@@ -529,6 +539,7 @@ export class Card {
         if (shown.size === 0) section.hidden = true;
         return;
       }
+      setActivity(key, { label: 'IA · causes et conséquences', title: 'L’IA lit les articles pour trouver causes et conséquences', ai: true });
       await new Promise((r) => setTimeout(r, DOOR_POLL_MS));
     }
   }

@@ -11,6 +11,7 @@ import {
   cellsForRect, formatPoiDate, formatYear, isGlobalSearchRes, MAX_YEAR, MIN_YEAR, rectAreaKm2, resolutionForArea, ringAround, CATEGORY_LABELS,
   ALL_THEMES, type Backdrop, type Category, type PoiLite, type SubdivisionsResponse, type ThemeFilter, type ViewMessage,
 } from '@way/shared';
+import { currentActivity, onActivity, setActivity } from './activity.ts';
 import { BordersLayer, realmKey, type BorderShape } from './borders.ts';
 import { Card } from './card.ts';
 import { Connection } from './connection.ts';
@@ -18,7 +19,7 @@ import { bounds, contains, divide, type Area, type Region } from './divisions.ts
 import { Filters, importanceFloor, type Heraldry, type Scale } from './filters.ts';
 import { GeographyLayer, NO_GEOGRAPHY, type Geography } from './geography.ts';
 import { formatPop, LivingLayer, NO_LIVING, type Living, type LivingPick } from './living.ts';
-import { cameraState, createGlobe, restoreCamera, setBasemap, viewRect, type Basemap, type CameraState } from './globe.ts';
+import { cameraState, createGlobe, restoreCamera, setBasemap, setPaper, viewRect, type Basemap, type CameraState } from './globe.ts';
 import { PoiLayer } from './markers.ts';
 import { PeopleLayer, type Picked } from './people.ts';
 import { fetchCached } from './localcache.ts';
@@ -180,6 +181,7 @@ const filters = new Filters(
   (backdrop) => {
     save({ backdrop });
     borders.setBackdrop(backdrop);
+    syncPaper();
   },
   saved.scale ?? 'selection',
   (scale) => {
@@ -191,6 +193,7 @@ const filters = new Filters(
     save({ heraldry });
     borders.setHeraldry(heraldry.territories);
     people.setHeraldry(heraldry.armies);
+    syncPaper();
   },
   { ...NO_GEOGRAPHY, ...saved.geography },
   (g) => {
@@ -212,6 +215,14 @@ borders.setBackdrop(filters.backdrop);
 borders.setHeraldry(filters.heraldry.territories);
 people.setHeraldry(filters.heraldry.armies);
 pois.setFilter(filters.shown);
+syncPaper();
+
+/** Coats of arms on the territories: the basemap turns to white paper so they stand out. */
+function syncPaper(): void {
+  const on = filters.heraldry.territories && filters.backdrop !== 'none';
+  setPaper(viewer, on);
+  borders.setPaper(on);
+}
 
 /** Semantic zoom: the camera height and the impact scale set the importance floor. */
 function applyZoom(): void {
@@ -266,17 +277,28 @@ function travel(p: PoiLite): void {
 let online = false;
 let pending = 0;
 let ai = 0;
-/** Discreet: nothing when idle, a dot while points arrive, an hourglass while the AI searches. */
+/**
+ * Discreet: nothing when idle, a dot and a short word while points or details
+ * are looked up, an hourglass while an AI reads (the zone, a card's doors,
+ * the Monde vivant flows).
+ */
 function renderStatus(): void {
-  if (!online) timeline.setStatus('offline', 'Hors ligne, reconnexion…');
-  else if (ai > 0) timeline.setStatus('ai', '', 'L’IA cherche d’autres faits sur cette zone');
-  else if (pending > 0) timeline.setStatus('busy', '', 'Recherche de points sur cette zone');
-  else timeline.setStatus('idle', '', '');
+  setActivity('zone-ai', online && ai > 0 ? { label: 'IA · faits de la zone', title: 'L’IA cherche d’autres faits sur cette zone', ai: true } : null);
+  setActivity('zone', online && pending > 0 ? { label: 'Points de la zone', title: 'Recherche de points sur cette zone', ai: false } : null);
 }
+function showActivity(): void {
+  if (!online) return timeline.setStatus('offline', 'Hors ligne, reconnexion…');
+  const a = currentActivity();
+  if (!a) return timeline.setStatus('idle', '', '');
+  const more = a.more ? ` (+${a.more})` : '';
+  timeline.setStatus(a.ai ? 'ai' : 'busy', a.label + more, a.title);
+}
+onActivity(showActivity);
 const conn = new Connection({
   onState: (s) => {
     online = s === 'open';
     renderStatus();
+    showActivity();
   },
   onMessage: (msg) => {
     if (msg.type === 'pois') {
