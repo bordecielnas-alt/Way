@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { walkOf, type PersonJourney, type StoryStop } from '@way/shared';
 import { grounded } from './links.ts';
 import {
   aliveIn, atSea, buildScenarios, contextKey, describeContext, ExtractedScenarios, ExtractedStory, fitsStory, linkMatches, livedThen,
-  namedIn, namesMatch, nearEnough, plausibleYear, sameName, textFitsYear,
+  buildPersonWalk, namedIn, namesMatch, nearEnough, personStops, plausibleYear, sameName, textFitsYear,
 } from './story.ts';
 
 describe('story of a card', () => {
@@ -148,5 +149,62 @@ describe('people found by search', () => {
   it('bear the name asked, whole words only', () => {
     expect(sameName('Robert Ballard', 'Robert Duane Ballard')).toBe(true);
     expect(sameName('Jack Grimm', 'Jack Grimmer')).toBe(false);
+  });
+});
+
+describe('scenarios played on their own', () => {
+  const stop = (name: string, year: number, poi: StoryStop['poi'] = null): StoryStop =>
+    ({ phase: 'during', name, label: 'Escale', year, lat: 50, lon: -1, poi });
+  const andrews = { qid: 'Q1', name: 'Thomas Andrews', role: 'Architecte', born: 1873, died: 1912, image: null };
+
+  it('writes a card’s scenario out as a self-contained walk', () => {
+    const from = { id: 'p1', title: 'Titanic' } as Parameters<typeof walkOf>[0];
+    const story = { stops: [stop('Belfast', 1909), stop('Southampton', 1912)], people: [andrews], source: { url: 'u', title: 't', kind: 'wikipedia' as const }, provider: 'x' };
+    const w = walkOf(from, story, { title: 'Le chantier', premise: 'Vous êtes Thomas Andrews.', person: 0, invented: false, steps: [{ stop: 1, text: 'Un.', cast: [0, 4] }, { stop: 9, text: 'Hors liste.', cast: [] }] });
+    expect(w.id).toBe('p1|Le chantier');
+    expect(w.hero?.name).toBe('Thomas Andrews');
+    expect(w.steps).toHaveLength(1);
+    expect(w.steps[0]).toMatchObject({ place: 'Southampton', year: 1912, text: 'Un.' });
+    expect(w.steps[0]!.cast.map((p) => p.qid)).toEqual(['Q1']);
+  });
+
+  const journey: PersonJourney = {
+    qid: 'Q1', name: 'Thomas Andrews', description: 'architecte naval', image: null, born: 1873.1, died: 1912.3,
+    stops: [
+      { kind: 'birth', label: 'Comber', qid: null, lat: 54.5, lon: -5.7, start: 1873.1, end: null },
+      { kind: 'travel', label: 'en route', qid: null, lat: 54, lon: -5, start: 1890, end: null },
+      { kind: 'work', label: 'Harland & Wolff', qid: null, lat: 54.6, lon: -5.9, start: 1889.5, end: 1912 },
+      { kind: 'stay', label: 'Inconnu', qid: null, lat: null, lon: null, start: 1900, end: null },
+    ],
+  };
+
+  it('gathers the places of a life: card stories within their lifetime, then their placed Wikidata moments', () => {
+    const stops = personStops(journey, [{ title: 'Titanic', stops: [stop('Southampton', 1912), stop('Épave retrouvée', 1985)] }]);
+    expect(stops.map((s) => `${s.place} ${s.year}`)).toEqual(['Comber 1873', 'Harland & Wolff 1889', 'Southampton 1912']);
+    expect(stops[2]!.card).toBe('Titanic');
+    expect(stops[0]!.label).toBe('Naissance');
+  });
+
+  it('tells a moment once when the story and Wikidata both place it', () => {
+    const atSea = { ...journey, stops: [...journey.stops, { kind: 'death' as const, label: 'Atlantique Nord', qid: null, lat: 50.2, lon: -1.1, start: 1912.3, end: null }] };
+    expect(personStops(atSea, [{ title: 'Titanic', stops: [stop('Naufrage', 1912)] }]).map((s) => s.place)).toEqual(['Comber', 'Harland & Wolff', 'Naufrage']);
+  });
+
+  it('keeps births, deaths and story stops first when there are too many places', () => {
+    const many = personStops(journey, [{ title: 'Titanic', stops: [stop('Southampton', 1912)] }], 2);
+    expect(many.map((s) => s.place)).toEqual(['Comber', 'Southampton']);
+  });
+
+  it('walks a life through listed places only, in order, while they lived, three steps at least', () => {
+    const stops = personStops(journey, [{ title: 'Titanic', stops: [stop('Southampton', 1912)] }]);
+    const source = { url: 'u', title: 't', kind: 'wikipedia' as const };
+    const item = (steps: { stop: number; text: string }[]) =>
+      ({ title: 'Une vie', premise: 'Vous êtes Thomas Andrews.', person: null, invented: false, steps: steps.map((s) => ({ ...s, cast: [] })) });
+    const w = buildPersonWalk(item([{ stop: 2, text: 'En 1912, vous embarquez.' }, { stop: 0, text: 'Vous naissez.' }, { stop: 1, text: 'Vous entrez au chantier.' }, { stop: 7, text: 'Hors liste.' }]), stops, andrews, source);
+    expect(w?.steps.map((s) => s.place)).toEqual(['Comber', 'Harland & Wolff', 'Southampton']);
+    expect(w?.from).toBeNull();
+    expect(w?.id).toBe('Q1|Une vie');
+    // A text about another year does not fit its stop; two steps are not a walk.
+    expect(buildPersonWalk(item([{ stop: 0, text: 'En 1950, rien.' }, { stop: 1, text: 'Un.' }, { stop: 2, text: 'Deux.' }]), stops, andrews, source)).toBeNull();
   });
 });

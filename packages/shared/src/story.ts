@@ -89,4 +89,69 @@ export interface StoryResponse {
 export interface ScenariosResponse {
   status: StoryStatus;
   scenarios: StoryScenario[];
+  /** The reading they walk through (its stops and people are what they number), when ready. */
+  story?: Story;
+}
+
+/** A moment of a walk, self-contained: the place, the year, what the character lives there and who is around. */
+export interface WalkStep {
+  /** As the story names it, e.g. "Southampton". */
+  place: string;
+  /** Its part in the story, e.g. "Port de départ". */
+  label: string;
+  year: number;
+  lat: number;
+  lon: number;
+  /** The place's card, when it has one. */
+  poi: PoiLite | null;
+  text: string;
+  cast: StoryPerson[];
+}
+
+/**
+ * A scenario ready to be played on its own, whatever card is open: the
+ * player keeps it going (or paused) while the visitor explores elsewhere.
+ * Written over a card's story, or across the cards of a real person's life.
+ */
+export interface ScenarioWalk {
+  /** Stable across readings: the card's id (or the person's item) and the title. */
+  id: string;
+  title: string;
+  premise: string;
+  invented: boolean;
+  /** The real person followed, if any. */
+  hero: StoryPerson | null;
+  steps: WalkStep[];
+  /** The article it was written from. */
+  source: Source;
+  /** The card it was written on; null for a person's life, which crosses cards. */
+  from: PoiLite | null;
+}
+
+/** A card's scenario as a walk: its stops and people written out. Pure, for tests. */
+export function walkOf(from: PoiLite, story: Story, sc: StoryScenario): ScenarioWalk {
+  const hero = sc.person !== null ? story.people[sc.person] ?? null : null;
+  return {
+    id: `${from.id}|${sc.title}`,
+    title: sc.title,
+    premise: sc.premise,
+    invented: sc.invented,
+    hero,
+    from,
+    source: story.source,
+    steps: sc.steps.flatMap((st) => {
+      const s = story.stops[st.stop];
+      if (!s) return [];
+      return [{
+        place: s.poi?.title ?? s.name, label: s.label, year: s.year, lat: s.lat, lon: s.lon, poi: s.poi, text: st.text,
+        cast: st.cast.flatMap((c) => (story.people[c] ? [story.people[c]!] : [])),
+      }];
+    }),
+  };
+}
+
+/** A real person's life as a scenario, across the cards where they appear (`pending` while an AI writes it). */
+export interface PersonScenarioResponse {
+  status: StoryStatus;
+  walk: ScenarioWalk | null;
 }

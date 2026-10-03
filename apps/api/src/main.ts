@@ -3,9 +3,9 @@ import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
 import { z } from 'zod';
-import { ClientMessage, THEMES, type ServerMessage } from '@way/shared';
+import { ClientMessage, THEMES, type ScenarioContext, type ServerMessage } from '@way/shared';
 import {
-  cacheBudget, createMedia, normalizeCache, CACHE_MAX_GB, createBorders, createFlows, createPeople, createStories, createPolities, createSoundFiles, SOUND_MAX_BYTES, SOUND_TYPES, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, type JobBus,
+  cacheBudget, createMedia, normalizeCache, CACHE_MAX_GB, createBorders, createFlows, createPeople, createStories, createPolities, createSoundFiles, SOUND_MAX_BYTES, SOUND_TYPES, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, findCards, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, type JobBus,
 } from '@way/core';
 import { Auth, COOKIE, readCookie } from './auth.ts';
 import { ViewService, type View } from './views.ts';
@@ -219,18 +219,33 @@ const ScenariosQuery = z.object({
   people: z.enum(['0', '1']).default('1'),
   trail: z.union([z.string().max(300), z.array(z.string().max(300)).max(12)]).optional(),
 });
+function scenarioContext(q: z.infer<typeof ScenariosQuery>): ScenarioContext {
+  const trail = q.trail === undefined ? [] : Array.isArray(q.trail) ? q.trail : [q.trail];
+  return {
+    lens: q.lens || null,
+    themes: THEMES.filter((t) => q.themes.split(',').includes(t)),
+    people: q.people === '1',
+    trail: trail.slice(-6),
+  };
+}
 app.get<{ Params: { id: string } }>('/api/poi/:id/scenarios', async (req, reply) => {
   const q = ScenariosQuery.safeParse(req.query);
   if (!q.success) return reply.code(400).send({ error: q.error.issues });
   const poi = await store.getPoi(req.params.id);
   if (!poi) return reply.code(404).send({ error: 'not found' });
-  const trail = q.data.trail === undefined ? [] : Array.isArray(q.data.trail) ? q.data.trail : [q.data.trail];
-  return stories.scenarios(poi, {
-    lens: q.data.lens || null,
-    themes: THEMES.filter((t) => q.data.themes.split(',').includes(t)),
-    people: q.data.people === '1',
-    trail: trail.slice(-6),
-  });
+  return stories.scenarios(poi, scenarioContext(q.data));
+});
+
+// The search bar: cards (events, places, works) by name; people have their own search.
+app.get('/api/search', async (req, reply) => {
+  const q = z.object({ q: z.string().trim().min(2).max(100) }).safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: 'requête invalide' });
+  try {
+    return { pois: await findCards(q.data.q, store) };
+  } catch (e) {
+    req.log.warn(`card search failed: ${(e as Error).message}`);
+    return reply.code(503).send({ error: 'Wikidata ne répond pas pour le moment.' });
+  }
 });
 
 // Kingdom card: the territory's name in the snapshot and the timeline year.
@@ -346,6 +361,21 @@ app.get<{ Params: { qid: string } }>('/api/people/:qid', async (req, reply) => {
     return j;
   } catch (e) {
     req.log.warn(`journey of ${req.params.qid} failed: ${(e as Error).message}`);
+    return reply.code(503).send({ error: 'Wikidata ne répond pas pour le moment.' });
+  }
+});
+
+// A real person's life as a scenario, across the cards they appear in, for the visitor's view.
+app.get<{ Params: { qid: string } }>('/api/people/:qid/scenario', async (req, reply) => {
+  if (!Qid.safeParse(req.params.qid).success) return reply.code(400).send({ error: 'requête invalide' });
+  const q = ScenariosQuery.safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: q.error.issues });
+  try {
+    const j = await people.journey(req.params.qid);
+    if (!j) return reply.code(404).send({ error: 'personne inconnue' });
+    return await stories.personScenario(j, scenarioContext(q.data));
+  } catch (e) {
+    req.log.warn(`life scenario of ${req.params.qid} failed: ${(e as Error).message}`);
     return reply.code(503).send({ error: 'Wikidata ne répond pas pour le moment.' });
   }
 });

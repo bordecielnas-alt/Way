@@ -2,7 +2,7 @@ import {
   ACTIVITY_LABELS, CATEGORY_LABELS, DOOR_KINDS, type Army, type JourneyStop, type PersonJourney, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
   type PoiLite, type PolityInfo, type PolityRulerInfo, toLite, FLOW_LABELS, type CityRow, type Flow, type FlowDef, type FlowStage,
   STORY_PHASES, STORY_PHASE_LABELS, type Story, type StoryPerson, type StoryResponse, type StoryStop,
-  LENSES, THEME_LABELS, THEMES, type ScenarioContext, type ScenariosResponse, type StoryScenario,
+  LENSES, THEME_LABELS, THEMES, walkOf, type ScenarioContext, type ScenariosResponse, type ScenarioWalk,
 } from '@way/shared';
 import { setActivity } from './activity.ts';
 import { CATEGORY_COLORS } from './icons.ts';
@@ -83,17 +83,18 @@ export class Card {
   onStoryPerson: (p: StoryPerson) => void = () => undefined;
   /** How the visitor looks at the world now (the walk so far is added by the card). */
   scenarioContext: () => Omit<ScenarioContext, 'trail'> = () => ({ lens: null, themes: [...THEMES], people: true });
-  /** A scenario step played: map, timeline and its key people go there. */
-  onScenarioStep: (sc: StoryScenario, step: number, story: Story) => void = () => undefined;
-  /** The scenario stopped; `restore`: cancelled, the view comes back to where it was. */
-  onScenarioEnd: (restore: boolean) => void = () => undefined;
-  /** The story shown on the current card, and its scenarios. */
-  private story: { id: string; token: number; story: Story } | null = null;
-  private scenarios: StoryScenario[] = [];
+  /** A scenario of the card started (or a step of it): the scenario player takes it from there. */
+  onPlayScenario: (walk: ScenarioWalk, step: number) => void = () => undefined;
+  /** Scenarios shown on a card, remembered for the search bar. */
+  onScenarios: (walks: ScenarioWalk[]) => void = () => undefined;
+  /** Scenarios turned off in the filters: none asked for, none shown. */
+  private scenariosOn = true;
+  /** The story shown on the current card, and its scenarios as walks. */
+  private story: { id: string; token: number; story: Story; from: PoiLite } | null = null;
+  private walks: ScenarioWalk[] = [];
   private scenarioToken = 0;
-  /** Index of the scenario being played, and its step. */
-  private playing: number | null = null;
-  private step = 0;
+  /** The scenario played (by the player), to mark it on the card. */
+  private playing: { id: string; step: number; paused: boolean } | null = null;
 
   get currentPoi(): string | null {
     return this.root.hidden ? null : this.shown;
@@ -142,7 +143,6 @@ export class Card {
   }
 
   async open(id: string): Promise<void> {
-    this.endScenario(false);
     const token = ++this.token;
     this.shown = id;
     this.root.hidden = false;
@@ -186,7 +186,6 @@ export class Card {
     target: { name: string } | { qid: string; name?: string }, shownName: string, year: number, hint: string | null = null,
     kind: PolityKind = 'qid' in target ? 'estimated' : 'territory',
   ): Promise<PolityInfo | null> {
-    this.endScenario(false);
     const token = ++this.token;
     const region = kind !== 'territory';
     this.hint = hint;
@@ -232,7 +231,6 @@ export class Card {
    * life as dated places; a moment clicked takes the map there.
    */
   openPerson(j: PersonJourney, now: string, onStop: (s: JourneyStop) => void): void {
-    this.endScenario(false);
     this.token++;
     this.shown = null;
     this.root.hidden = false;
@@ -281,7 +279,6 @@ export class Card {
 
   /** Card of an army: its war, side and battles in order. */
   openArmy(a: Army, now: string, onBattle: (b: Army['battles'][number]) => void): void {
-    this.endScenario(false);
     this.token++;
     this.shown = null;
     this.root.hidden = false;
@@ -315,7 +312,6 @@ export class Card {
 
   /** Card of a city of the Villes layer: its population at the moment, and the figures it comes from. */
   openCity(c: CityRow, pop: number, sure: number, year: number): void {
-    this.endScenario(false);
     this.token++;
     this.shown = null;
     this.root.hidden = false;
@@ -350,7 +346,6 @@ export class Card {
 
   /** Card of a flow (trade route, epidemic, diffusion): its places in order; one clicked takes the map there. */
   openFlow(def: FlowDef, flow: Flow, stage: number, onStage: (s: FlowStage) => void): void {
-    this.endScenario(false);
     this.token++;
     this.shown = null;
     this.root.hidden = false;
@@ -467,7 +462,6 @@ export class Card {
   }
 
   close(): void {
-    this.endScenario(false);
     this.token++;
     this.root.hidden = true;
     document.body.classList.remove('card-open');
@@ -480,6 +474,7 @@ export class Card {
 
   private render(p: Poi, token: number): void {
     this.story = null;
+    this.walks = [];
     this.remember(p);
     const conf = CONFIDENCE[p.confidence];
     // Say where the text comes from whenever it is not a French Wikipedia intro.
@@ -541,11 +536,11 @@ export class Card {
     }
     this.root.querySelector('.card-scroll')!.scrollTop = 0;
     void this.loadDoors(p.id, token);
-    void this.loadStory(p.id, token);
+    void this.loadStory(p.id, token, toLite(p));
   }
 
   /** The story is read once by an AI: poll while it is, then lay it out and ask for scenarios. */
-  private async loadStory(id: string, token: number): Promise<void> {
+  private async loadStory(id: string, token: number, from: PoiLite): Promise<void> {
     const key = `story:${token}`;
     const section = this.root.querySelector<HTMLElement>('.story')!;
     const body = section.querySelector<HTMLElement>('.story-body')!;
@@ -564,7 +559,7 @@ export class Card {
         if (res.story) {
           section.hidden = false;
           this.renderStory(body, res.story);
-          this.story = { id, token, story: res.story };
+          this.story = { id, token, story: res.story, from };
           void this.loadScenarios();
           return;
         }
@@ -620,15 +615,45 @@ export class Card {
     body.querySelectorAll<HTMLImageElement>('.story-person img').forEach((img) => img.addEventListener('error', () => img.remove()));
   }
 
-  /** The filters changed: scenarios are written again for the new view (not while one is played). */
+  /** The filters changed: scenarios are written again for the new view (the one played goes on, it is the player's). */
   refreshScenarios(): void {
-    if (this.story && this.story.token === this.token && this.playing === null) void this.loadScenarios();
+    if (this.story && this.story.token === this.token) void this.loadScenarios();
+  }
+
+  /** Scenarios turned on or off in the filters: off, none is asked for any more and the section goes. */
+  setScenariosOn(on: boolean): void {
+    if (on === this.scenariosOn) return;
+    this.scenariosOn = on;
+    const box = this.root.querySelector<HTMLElement>('.story-scenarios');
+    if (!on) {
+      this.scenarioToken++;
+      if (box) {
+        box.hidden = true;
+        box.innerHTML = '';
+      }
+      this.walks = [];
+    } else this.refreshScenarios();
+  }
+
+  /** The player's scenario and step, marked on the card when it is one of its own. */
+  syncScenario(playing: { id: string; step: number; paused: boolean } | null): void {
+    this.playing = playing;
+    this.root.querySelectorAll<HTMLElement>('.story-scenario').forEach((el) => {
+      const walk = this.walks[Number(el.dataset.scenario)];
+      const mine = !!walk && playing?.id === walk.id;
+      el.classList.toggle('playing', mine);
+      el.querySelectorAll<HTMLButtonElement>('.story-step').forEach((b) => b.classList.toggle('active', mine && Number(b.dataset.step) === playing!.step));
+      const go = el.querySelector<HTMLButtonElement>('.story-go');
+      if (go) go.textContent = !mine ? 'Partir ▸' : playing!.paused ? `Reprendre (étape ${playing!.step + 1}) ▸` : 'En cours ●';
+      const state = el.querySelector<HTMLElement>('.story-sc-state');
+      if (state) state.hidden = !mine;
+    });
   }
 
   /** Scenarios for the visitor's view (lens, themes, the cards read before), written once per view by an AI. */
   private async loadScenarios(): Promise<void> {
     const shown = this.story;
-    if (!shown) return;
+    if (!shown || !this.scenariosOn) return;
     const box = this.root.querySelector<HTMLElement>('.story-scenarios');
     if (!box) return;
     const token = ++this.scenarioToken;
@@ -652,7 +677,8 @@ export class Card {
         if (token !== this.scenarioToken || this.story !== shown || shown.token !== this.token) return;
         if (res.scenarios.length) {
           box.hidden = false;
-          this.renderScenarios(box, shown.story, res.scenarios, view);
+          const story = res.story ?? shown.story;
+          this.renderScenarios(box, res.scenarios.map((sc) => walkOf(shown.from, story, sc)), view);
           return;
         }
         // Scenarios already shown stay until new ones come (none for this view: the old ones still serve).
@@ -674,80 +700,46 @@ export class Card {
     }
   }
 
-  private renderScenarios(box: HTMLElement, s: Story, scenarios: StoryScenario[], view: string): void {
-    this.scenarios = scenarios;
-    const castNames = (cast: number[]) => cast.map((c) => s.people[c]?.name).filter(Boolean).join(', ');
+  private renderScenarios(box: HTMLElement, walks: ScenarioWalk[], view: string): void {
+    this.walks = walks;
+    this.onScenarios(walks);
     box.innerHTML = `<div class="story-phase-title">Scénarios <span class="story-aside">· ${esc(view)}, imaginés par l’IA d’après l’article</span></div>
-      ${scenarios.map((sc, k) => {
-        const hero = sc.person !== null ? s.people[sc.person] : undefined;
-        return `
+      ${walks.map((w, k) => `
         <details class="story-scenario" data-scenario="${k}">
           <summary>
-            <span class="story-sc-kind ${sc.invented ? 'invented' : 'real'}">${sc.invented ? 'Personnage inventé' : `Personnage réel${hero ? ` · ${esc(hero.name)}` : ''}`}</span>
-            <span class="story-sc-title">🎭 ${esc(sc.title)}</span>
-            <span class="story-sc-premise">${esc(sc.premise)}</span>
+            <span class="story-sc-badges">
+              <span class="story-sc-kind ${w.invented ? 'invented' : 'real'}">${w.invented ? 'Personnage inventé' : `Personnage réel${w.hero ? ` · ${esc(w.hero.name)}` : ''}`}</span>
+              <span class="story-sc-len">${w.steps.length} étapes</span>
+              <span class="story-sc-state" hidden>● en cours</span>
+            </span>
+            <span class="story-sc-title">🎭 ${esc(w.title)}</span>
+            <span class="story-sc-premise">${esc(w.premise)}</span>
           </summary>
-          <ol class="story-steps">${sc.steps.map((st, j) => {
-            const where = s.stops[st.stop]!;
-            const cast = castNames(st.cast);
-            return `<li><button type="button" class="story-step" data-step="${j}">
-              <span class="story-step-head">${j + 1}. ${esc(where.poi?.title ?? where.name)} · ${esc(formatYear(where.year))}</span>
+          <ol class="story-steps">${w.steps.map((st, j) => {
+            const cast = st.cast.map((p) => p.name).join(', ');
+            return `<li><button type="button" class="story-step" data-step="${j}" title="Jouer le scénario depuis cette étape">
+              <span class="story-step-head">${j + 1}. ${esc(st.place)} · ${esc(formatYear(st.year))}</span>
               <span class="story-step-text">${esc(st.text)}</span>
               ${cast ? `<span class="story-step-cast">Avec ${esc(cast)}</span>` : ''}
             </button></li>`;
           }).join('')}</ol>
           <div class="story-sc-actions">
             <button type="button" class="story-go">Partir ▸</button>
-            <button type="button" class="story-cancel" hidden>✕ Annuler le scénario</button>
-            ${hero ? `<button type="button" class="story-follow" data-person="${sc.person}">Suivre ${esc(hero.name)}</button>` : ''}
+            ${w.hero ? `<button type="button" class="story-follow">Suivre ${esc(w.hero.name)}</button>` : ''}
           </div>
-        </details>`;
-      }).join('')}`;
+        </details>`).join('')}`;
 
     box.querySelectorAll<HTMLElement>('.story-scenario').forEach((el) => {
-      const k = Number(el.dataset.scenario);
-      el.querySelectorAll<HTMLButtonElement>('.story-step').forEach((b) => b.addEventListener('click', () => this.playStep(k, Number(b.dataset.step))));
-      const go = el.querySelector<HTMLButtonElement>('.story-go')!;
-      go.addEventListener('click', () => {
-        const n = this.playing === k ? this.step + 1 : 0;
-        this.playStep(k, n < scenarios[k]!.steps.length ? n : 0);
+      const w = walks[Number(el.dataset.scenario)]!;
+      el.querySelectorAll<HTMLButtonElement>('.story-step').forEach((b) => b.addEventListener('click', () => this.onPlayScenario(w, Number(b.dataset.step))));
+      // Starting one pauses the scenario played elsewhere, kept aside: nothing is lost.
+      el.querySelector('.story-go')!.addEventListener('click', () => {
+        const mine = this.playing?.id === w.id;
+        this.onPlayScenario(w, mine ? this.playing!.step : 0);
       });
-      el.querySelector('.story-cancel')!.addEventListener('click', () => this.endScenario(true));
-      el.querySelector('.story-follow')?.addEventListener('click', () => this.onStoryPerson(s.people[scenarios[k]!.person!]!));
+      el.querySelector('.story-follow')?.addEventListener('click', () => this.onStoryPerson(w.hero!));
     });
-  }
-
-  /** A scenario step: the map, the timeline and the key people go there; the card stays. */
-  private playStep(k: number, j: number): void {
-    const shown = this.story;
-    const sc = this.scenarios[k];
-    if (!shown || !sc?.steps[j]) return;
-    this.playing = k;
-    this.step = j;
-    this.root.querySelectorAll<HTMLElement>('.story-scenario').forEach((el) => {
-      const mine = Number(el.dataset.scenario) === k;
-      el.classList.toggle('playing', mine);
-      el.querySelectorAll<HTMLButtonElement>('.story-step').forEach((b) => b.classList.toggle('active', mine && Number(b.dataset.step) === j));
-      el.querySelector<HTMLButtonElement>('.story-cancel')!.hidden = !mine;
-      const go = el.querySelector<HTMLButtonElement>('.story-go')!;
-      const n = sc.steps.length;
-      go.textContent = !mine ? 'Partir ▸' : j + 1 < n ? `Étape suivante (${j + 2}/${n}) ▸` : 'Recommencer ↺';
-    });
-    this.onScenarioStep(sc, j, shown.story);
-  }
-
-  /** Stops the scenario played: its people leave the map; `restore` (Annuler) also brings the view back. */
-  private endScenario(restore: boolean): void {
-    if (this.playing === null) return;
-    this.playing = null;
-    this.step = 0;
-    this.root.querySelectorAll<HTMLElement>('.story-scenario').forEach((el) => {
-      el.classList.remove('playing');
-      el.querySelectorAll('.story-step.active').forEach((b) => b.classList.remove('active'));
-      el.querySelector<HTMLButtonElement>('.story-cancel')!.hidden = true;
-      el.querySelector<HTMLButtonElement>('.story-go')!.textContent = 'Partir ▸';
-    });
-    this.onScenarioEnd(restore);
+    this.syncScenario(this.playing);
   }
 
   /** Doors arrive progressively: poll until every kind is known. */
