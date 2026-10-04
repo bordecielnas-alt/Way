@@ -15,6 +15,7 @@ import {
 } from '@way/shared';
 import { currentActivity, onActivity, setActivity } from './activity.ts';
 import { BordersLayer, realmKey, type BorderShape } from './borders.ts';
+import { CameraGuide, type Zone } from './camera.ts';
 import { Card, type CardPaths } from './card.ts';
 import { CastLayer, type CastMember } from './cast.ts';
 import { Connection } from './connection.ts';
@@ -25,7 +26,7 @@ import { formatPop, LivingLayer, NO_LIVING, type Living, type LivingPick } from 
 import { cameraState, createGlobe, restoreCamera, setBasemap, setPaper, viewRect, type Basemap, type CameraState } from './globe.ts';
 import { PoiLayer } from './markers.ts';
 import { PeopleLayer, type Picked } from './people.ts';
-import { Carnet, ScenarioLibrary, type Here, type LeadFrom, type StepDoors } from './scenario.ts';
+import { Carnet, ScenarioLibrary, stepDecisions, type Here, type LeadFrom, type StepDoors } from './scenario.ts';
 import { SearchBox } from './search.ts';
 import { StoryLayer } from './storymap.ts';
 import { EntityMenu } from './entity.ts';
@@ -67,6 +68,30 @@ let basemap: Basemap = saved.basemap ?? 'natural-earth';
 const viewer = createGlobe(document.getElementById('globe')!, basemap);
 if (saved.camera) restoreCamera(viewer, saved.camera);
 else viewer.camera.setView({ destination: Cartesian3.fromDegrees(20, 30, 9_000_000) }); // the Mediterranean world
+
+/** The part of the map the panels leave visible: where the camera brings the places it goes to. */
+function mapZone(): Zone {
+  const canvas = viewer.scene.canvas;
+  const [w, h] = [canvas.clientWidth, canvas.clientHeight];
+  const box = (el: Element | null) => {
+    if (!(el instanceof HTMLElement) || el.hidden) return null;
+    const css = getComputedStyle(el);
+    if (css.display === 'none' || css.visibility === 'hidden') return null;
+    const r = el.getBoundingClientRect();
+    return r.width && r.height ? r : null;
+  };
+  const phone = w <= 640;
+  const film = box(document.querySelector('.carnet.playing .film'));
+  const card = box(document.getElementById('card'));
+  const bar = box(document.querySelector('.carnet .film-bar'));
+  const left = phone ? 0 : box(document.getElementById('filters'))?.right ?? 0;
+  // A phone: the film lies over the bottom of the map, the card over all of it.
+  const right = phone ? w : Math.min(w, film?.left ?? w, card?.left ?? w);
+  const top = box(document.getElementById('search'))?.bottom ?? 0;
+  const bottom = Math.min(h, box(document.getElementById('timeline'))?.top ?? h, bar?.top ?? h, phone ? film?.top ?? h : h);
+  return { left: left + 8, top: top + 8, right: right - 8, bottom: bottom - 8 };
+}
+const camera = new CameraGuide(viewer, mapZone);
 
 if (import.meta.env.DEV) (window as unknown as { __viewer: unknown }).__viewer = viewer; // debugging aid
 
@@ -127,7 +152,7 @@ people.onGoTo = (qid) => {
   }
   window.setTimeout(() => {
     const at = people.whereIs(qid);
-    if (at) viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(at.lon, at.lat, 2_500_000), duration: 1.6 });
+    if (at) camera.to(at, { min: 300_000, max: 4_000_000 });
   }, 400);
 };
 
@@ -137,7 +162,7 @@ function openFigure(f: Picked): void {
   pois.select(null);
   const goTo = (year: number, lat: number | null, lon: number | null) => {
     timeline.glideTo(year);
-    if (lat !== null && lon !== null) viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(lon, lat, 1_500_000), duration: 1.6 });
+    if (lat !== null && lon !== null) camera.to({ lat, lon }, { min: 300_000, max: 4_000_000 });
   };
   if (f.kind === 'person') {
     playSound('person');
@@ -171,7 +196,7 @@ function openLiving(l: LivingPick): void {
   playSound(l.def.kind === 'trade' ? 'trade' : l.def.kind === 'epidemic' ? 'disaster' : 'religion');
   card.openFlow(l.def, l.flow, l.stage, (s) => {
     timeline.glideTo(s.year);
-    viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(s.lon, s.lat, 2_500_000), duration: 1.6 });
+    camera.to(s, { min: 500_000, max: 5_000_000 });
   });
 }
 
@@ -272,43 +297,17 @@ basemapButtons.forEach((b) =>
 syncBasemap();
 
 // ---------- card ----------
+/** Set once the carnet exists: a card closed from the column's tab gives the step back. */
+let cardClosed = (): void => undefined;
 const card = new Card(
   document.getElementById('card')!,
   () => {
     pois.select(null);
     clearTerritory();
+    cardClosed();
   },
   travel,
 );
-/**
- * Looks straight down on a point from `height`, the point in the middle of
- * the map left visible between the filters and the card (not under the card).
- */
-function flyToVisible(lat: number, lon: number, height: number): void {
-  const canvas = viewer.scene.canvas;
-  const rect = (id: string) => {
-    const el = document.getElementById(id);
-    return el && !el.hidden ? el.getBoundingClientRect() : null;
-  };
-  // A path played: its film along the bottom, the panels on the left step aside; the map left visible is above it.
-  const film = document.querySelector('.carnet.playing .film')?.getBoundingClientRect();
-  const phone = canvas.clientWidth <= 640;
-  const left = film || phone ? 0 : rect('filters')?.right ?? 0;
-  const right = phone ? canvas.clientWidth : rect('card')?.left ?? canvas.clientWidth;
-  const shiftPx = canvas.clientWidth / 2 - (left + right) / 2;
-  const f = viewer.camera.frustum as { fov?: number; aspectRatio?: number };
-  const aspect = f.aspectRatio ?? canvas.clientWidth / Math.max(1, canvas.clientHeight);
-  const fov = f.fov ?? Math.PI / 3;
-  const fovX = aspect >= 1 ? fov : 2 * Math.atan(Math.tan(fov / 2) * aspect);
-  const metersPerPx = (2 * height * Math.tan(fovX / 2)) / Math.max(1, canvas.clientWidth);
-  // The camera moves east of the point, so the point shows left of the center.
-  const dLon = (shiftPx * metersPerPx) / (111_320 * Math.max(0.1, Math.cos(CesiumMath.toRadians(lat))));
-  // The camera moves south, the point shows above the film.
-  const shiftPy = film ? canvas.clientHeight / 2 - film.top / 2 : 0;
-  const dLat = Math.min(30, (shiftPy * metersPerPx) / 111_320);
-  viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(lon + dLon, Math.max(-89, lat - dLat), height), duration: 1.6 });
-}
-
 // The open card's story on the globe: its places, doors into their own stories.
 const storyMap = new StoryLayer(viewer);
 /** The story of the card shown, drawn again when no path plays (a path draws its own steps). */
@@ -326,7 +325,7 @@ card.onStoryStop = (s, openCard) => {
   elsewhere();
   clearTerritory();
   timeline.glideTo(s.year);
-  flyToVisible(s.lat, s.lon, s.poi ? 600_000 : 1_200_000);
+  camera.to(s, { min: 100_000, max: 2_500_000 });
   if (!s.poi) return;
   pois.upsert([s.poi]);
   pois.select(s.poi.id);
@@ -345,8 +344,9 @@ card.onStoryPerson = (p) => {
 const cast = new CastLayer(viewer);
 const library = new ScenarioLibrary();
 const carnet = new Carnet(document.getElementById('scenario')!, () => library.all);
-/** Where the visitor was when the first path started: quitting brings them back. */
+/** Where the visitor was when the first path started; once quit, the bar offers to go back there. */
 let beforeScenario: { year: number; camera: CameraState } | null = null;
+let returnTo: { year: number; camera: CameraState } | null = null;
 const viewContext = () => ({
   lens: filters.lens,
   themes: THEMES.filter((t) => !filters.themes.hiddenThemes.includes(t)),
@@ -377,25 +377,42 @@ card.onPathsChanged = (at) => {
   carnet.updateHere(cardHere(at));
 };
 card.onPersonPaths = (p) => carnet.showHere(personHere(p));
+card.onPlay = (w) => {
+  const known = carnet.pathOf(w.id);
+  carnet.play(w, known && !known.done ? known.step : 0);
+};
+card.pathState = (id) => carnet.pathOf(id);
+carnet.cardTitle = () => card.currentTitle;
+card.waitRoles = () => !!carnet.playing && !carnet.isPaused && !document.body.classList.contains('carnet-card');
+cardClosed = () => carnet.refreshCard();
+carnet.onTab = (tab) => {
+  if (tab === 'card') card.refreshScenarios();
+};
 carnet.onChange = () => card.syncScenario(carnet.playing?.walk ?? null);
-carnet.onStep = (walk, j) => {
+carnet.onRoute = (walk, j, options) => storyMap.showWalk(walk.steps, j, options);
+carnet.onStep = (walk, j, first) => {
   const step = walk.steps[j]!;
   beforeScenario ??= { year: (timeline.moment.tStart + timeline.moment.tEnd) / 2, camera: cameraState(viewer) };
+  returnTo = null;
   clearTerritory();
   playSound(step.poi?.category ?? 'person');
-  timeline.glideTo(step.year);
-  storyMap.showWalk(walk.steps, j);
-  // The card beside the film follows the step: its place's card, else the card the path was written on.
-  // A phone has no room beside: the map shows above the film, the card waits.
+  timeline.glideTo(step.when ?? step.year);
+  // The card of the step's place waits in the column's tab: its place's card, else the card the path was written on.
+  // A phone has no room for it: the map shows above the film.
   const beside = step.poi ?? walk.from;
   if (window.innerWidth <= 640) {
     if (card.currentPoi) card.close();
   } else if (beside) {
     pois.upsert([beside]);
-    if (card.currentPoi !== beside.id) void card.open(beside.id);
+    if (card.currentPoi !== beside.id) void card.open(beside.id).then(() => carnet.refreshCard());
   }
-  // Once the card is laid out: the map flies to the part left visible.
-  requestAnimationFrame(() => flyToVisible(step.lat, step.lon, 900_000));
+  // Once the column is laid out: a path started is framed whole, then the map moves only when a step leaves the view.
+  requestAnimationFrame(() => {
+    if (first) {
+      camera.resetHeight();
+      camera.frame(walk.steps, { min: 250_000, max: 7_000_000 }, step);
+    } else camera.to(step, { min: 150_000, max: 4_000_000 });
+  });
   // The protagonist stands on the spot: "Vous" for an invented one, the real person otherwise.
   const members: CastMember[] = step.cast.map((p) => ({ name: p.name, role: p.role, image: p.image, you: p.qid === walk.hero?.qid }));
   if (walk.invented) members.unshift({ name: 'Vous', role: walk.title, image: null, you: true });
@@ -411,9 +428,14 @@ carnet.onPause = () => {
 carnet.onEnd = (restore) => {
   cast.clear();
   storyBack();
-  const back = beforeScenario;
+  returnTo = restore ? beforeScenario : null;
   beforeScenario = null;
-  if (!restore || !back) return;
+};
+/** Asked from the bar once a path is quit: the map and the timeline go back to where they were before it. */
+carnet.onReturn = () => {
+  const back = returnTo;
+  returnTo = null;
+  if (!back) return;
   timeline.glideTo(back.year);
   viewer.camera.flyTo({
     destination: Cartesian3.fromDegrees(back.camera.lon, back.camera.lat, back.camera.height),
@@ -440,7 +462,7 @@ entities.onPersonPaths = (p) => carnet.showHere(personHere(p));
 entities.onLife = (p) => void lifeScenario(p, !!carnet.playing && !carnet.isPaused);
 entities.onOpenCard = (poi) => carnet.onOpenCard(poi);
 entities.onPlacePaths = (poi) => void placePaths(poi);
-entities.onFlyTo = (lat, lon) => flyToVisible(lat, lon, 600_000);
+entities.onFlyTo = (lat, lon) => camera.to({ lat, lon }, { min: 50_000, max: 2_000_000, force: true });
 card.onEntity = (el, e) => entities.show(el, e);
 carnet.onEntity = (el, e) => entities.show(el, e);
 carnet.doorsFor = (poi) => doorsOf(poi);
@@ -515,7 +537,11 @@ function stepUrl(walk: ScenarioWalk, j: number, prefetch: boolean): string | nul
   if (walk.hero) params.set('hero', walk.hero.qid);
   params.set('invented', walk.invented ? '1' : '0');
   params.set('stop', String(st.stop));
-  params.set('walk', walk.steps.flatMap((s) => (s.stop === undefined ? [] : [s.stop])).join(','));
+  // The stops lived before a turning point's walk come first: the writer picks up from them.
+  params.set('walk', [...(walk.prelude ?? []), ...walk.steps.flatMap((s) => (s.stop === undefined ? [] : [s.stop]))].join(','));
+  if (st.beat) params.set('beat', st.beat.slice(0, 120));
+  for (const d of stepDecisions(walk, j)) params.append('chose', d.slice(0, 120));
+  for (const f of st.forks ?? []) if (f.steps[0]?.stop !== undefined) params.append('fork', `${f.steps[0].stop}:${f.label}`.slice(0, 140));
   if (prefetch) params.set('prefetch', '1');
   return `/api/step?${params}`;
 }
@@ -535,11 +561,11 @@ async function writeStep(walk: ScenarioWalk, j: number): Promise<void> {
         if (!r.ok) throw new Error(String(r.status));
         res = (await r.json()) as StepResponse;
       } catch {
-        res = { status: 'none', text: null, cast: [], choices: [], facts: [], quote: null, gallery: [], near: [] };
+        res = { status: 'none', text: null, cast: [], choices: [], next: null, facts: [], quote: null, gallery: [], near: [] };
       }
       if (token !== stepToken) return;
       if (res.text) {
-        carnet.setStepText(walk.id, j, { text: res.text, cast: res.cast, choices: res.choices, facts: res.facts, quote: res.quote, gallery: res.gallery, near: res.near });
+        carnet.setStepText(walk.id, j, { text: res.text, cast: res.cast, choices: res.choices, next: res.next, facts: res.facts, quote: res.quote, gallery: res.gallery, near: res.near });
         // The next step, written while this one is read.
         const next = stepUrl(carnet.playing?.walk ?? walk, j + 1, true);
         if (next && !walk.steps[j + 1]?.text) void fetch(next).catch(() => undefined);
@@ -709,7 +735,7 @@ function travel(p: PoiLite): void {
   pois.upsert([p]);
   pois.select(p.id);
   timeline.glideTo(p.date_start);
-  pois.flyTo(p, { journey: true });
+  camera.to(p, { min: 80_000, max: 2_500_000 });
   void card.open(p.id);
 }
 
@@ -956,6 +982,12 @@ handler.setInputAction((c: { position: Cartesian2 }) => {
     openLiving(alive);
     return;
   }
+  const option = storyMap.pickOption(c.position);
+  if (option) {
+    tooltip.hidden = true;
+    carnet.takeOption(option.key);
+    return;
+  }
   const walked = storyMap.pickStep(c.position);
   if (walked) {
     tooltip.hidden = true;
@@ -974,7 +1006,8 @@ handler.setInputAction((c: { position: Cartesian2 }) => {
     tooltip.hidden = true;
     playSound(poi.category);
     showPoi(poi.id);
-    pois.flyTo(poi);
+    // Clicked, it shows: the camera only moves if the card now covers it.
+    requestAnimationFrame(() => camera.to(poi));
   } else if (cluster) {
     // Zoom onto the cluster's members.
     const pts = (cluster as Entity[]).map((e) => e.position!.getValue(viewer.clock.currentTime)!).filter(Boolean);

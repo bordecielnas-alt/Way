@@ -56,7 +56,7 @@ export function citySize(pop: number): number {
   return 3 + 2.6 * Math.log10(Math.max(1, pop / 5000));
 }
 
-function greatCircle(a: Pt, b: Pt, n: number): Pt[] {
+export function greatCircle(a: Pt, b: Pt, n: number): Pt[] {
   const r = Math.PI / 180;
   const v = ([lat, lon]: Pt) => [Math.cos(lat * r) * Math.cos(lon * r), Math.cos(lat * r) * Math.sin(lon * r), Math.sin(lat * r)] as const;
   const va = v(a), vb = v(b);

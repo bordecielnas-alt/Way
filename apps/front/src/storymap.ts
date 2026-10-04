@@ -1,14 +1,29 @@
 import {
-  Cartesian2, Cartesian3, Color, DistanceDisplayCondition, HorizontalOrigin, LabelCollection, LabelStyle, NearFarScalar,
-  PointPrimitiveCollection, VerticalOrigin, type Viewer,
+  Cartesian2, Cartesian3, Color, DistanceDisplayCondition, HorizontalOrigin, LabelCollection, LabelStyle, Material, NearFarScalar,
+  PointPrimitiveCollection, PolylineCollection, VerticalOrigin, type Viewer,
 } from 'cesium';
 import type { Story, StoryPhase, StoryStop, WalkStep } from '@way/shared';
+import { greatCircle } from './living.ts';
 
 // The places of the open card's story on the globe: its own places as
 // named points (gold where it happened, blue its origins, rose what it led
 // to), the places its article only cites as small dots. A place with its
 // own card is ringed: a door into its own story. Cleared with the card.
-// While a path plays, its steps instead, numbered, the one played in gold.
+// While a path plays, its steps instead, numbered, the one played in gold,
+// the route lived drawn plain, the route ahead dashed; from the step played,
+// where it may go: the way on (an arrow), its turning points (blue dashes)
+// and the places of its detours, each clickable.
+
+/** Where a path may go from the step played. */
+export interface RouteOption {
+  key: string;
+  kind: 'next' | 'fork' | 'detour';
+  label: string;
+  lat: number;
+  lon: number;
+}
+
+const OPTION_COLORS: Record<RouteOption['kind'], string> = { next: '#f2c66d', fork: '#7fb3e0', detour: '#f4ead6' };
 
 const PHASE_COLORS: Record<StoryPhase, string> = { before: '#5b8fd1', during: '#d9a441', after: '#d673b1' };
 /** Names of the main places show from this far (meters), the dots from farther. */
@@ -17,18 +32,61 @@ const LABEL_FAR = 9_000_000;
 export class StoryLayer {
   private points: PointPrimitiveCollection;
   private labels: LabelCollection;
+  private lines: PolylineCollection;
+  private options: RouteOption[] = [];
   private stops: StoryStop[] = [];
   private steps: WalkStep[] = [];
 
   constructor(private viewer: Viewer) {
     this.points = viewer.scene.primitives.add(new PointPrimitiveCollection());
     this.labels = viewer.scene.primitives.add(new LabelCollection({ scene: viewer.scene }));
+    this.lines = viewer.scene.primitives.add(new PolylineCollection());
   }
 
-  /** The steps of the path played, numbered; `at`: the one played. */
-  showWalk(steps: WalkStep[], at: number): void {
+  private line(a: { lat: number; lon: number }, b: { lat: number; lon: number }, material: Material, width: number): void {
+    const pts = greatCircle([a.lat, a.lon], [b.lat, b.lon], 32);
+    if (pts.length < 2) return;
+    this.lines.add({ positions: pts.map(([lat, lon]) => Cartesian3.fromDegrees(lon, lat, 600)), width, material });
+  }
+
+  /** The steps of the path played, numbered; `at`: the one played; `options`: where it may go from there. */
+  showWalk(steps: WalkStep[], at: number, options: RouteOption[] = []): void {
     this.clear();
     this.steps = steps;
+    this.options = options;
+    const gold = Color.fromCssColorString('#d9a441');
+    const ivory = Color.fromCssColorString('#f4ead6');
+    steps.forEach((s, j) => {
+      const b = steps[j + 1];
+      if (!b || (b.lat === s.lat && b.lon === s.lon)) return;
+      const lived = j < at;
+      this.line(s, b, lived ? Material.fromType('Color', { color: gold.withAlpha(0.7) }) : Material.fromType('PolylineDash', { color: ivory.withAlpha(0.35), dashLength: 12 }), lived ? 2.5 : 1.5);
+    });
+    const here = steps[at];
+    if (here) {
+      options.forEach((o, k) => {
+        const color = Color.fromCssColorString(OPTION_COLORS[o.kind]);
+        const far = o.lat !== here.lat || o.lon !== here.lon;
+        if (far) {
+          this.line(here, o, o.kind === 'next' ? Material.fromType('PolylineArrow', { color: color.withAlpha(0.95) })
+            : Material.fromType('PolylineDash', { color: color.withAlpha(o.kind === 'fork' ? 0.9 : 0.6), dashLength: o.kind === 'fork' ? 14 : 6 }), o.kind === 'next' ? 9 : o.kind === 'fork' ? 3 : 2);
+        }
+        if (o.kind === 'next' || !far) return;
+        const position = Cartesian3.fromDegrees(o.lon, o.lat, 1500);
+        this.points.add({
+          position, id: { option: k }, pixelSize: o.kind === 'fork' ? 11 : 8, color: color.withAlpha(0.95),
+          outlineColor: Color.fromCssColorString('#07090d').withAlpha(0.85), outlineWidth: 2,
+          scaleByDistance: new NearFarScalar(3e5, 1.3, 2e7, 0.7), disableDepthTestDistance: 5e6,
+        });
+        this.labels.add({
+          position, id: { option: k }, text: `${o.kind === 'fork' ? '⑂ ' : '↪ '}${o.label}`,
+          font: '600 12px "Inter Variable", system-ui, sans-serif',
+          fillColor: color, outlineColor: Color.fromCssColorString('#07090d').withAlpha(0.9), outlineWidth: 3, style: LabelStyle.FILL_AND_OUTLINE,
+          verticalOrigin: VerticalOrigin.BOTTOM, horizontalOrigin: HorizontalOrigin.CENTER, pixelOffset: new Cartesian2(0, -10),
+          distanceDisplayCondition: new DistanceDisplayCondition(0, 2e7), disableDepthTestDistance: 5e6,
+        });
+      });
+    }
     steps.forEach((s, j) => {
       const position = Cartesian3.fromDegrees(s.lon, s.lat, 1500);
       const on = j === at;
@@ -90,8 +148,10 @@ export class StoryLayer {
   clear(): void {
     this.stops = [];
     this.steps = [];
+    this.options = [];
     this.points.removeAll();
     this.labels.removeAll();
+    this.lines.removeAll();
     this.viewer.scene.requestRender();
   }
 
@@ -101,6 +161,14 @@ export class StoryLayer {
     const hit = this.viewer.scene.pick(at) as { id?: { step?: number } } | undefined;
     const j = hit?.id?.step;
     return typeof j === 'number' && this.steps[j] ? { j, step: this.steps[j]! } : null;
+  }
+
+  /** Where the path may go, under the cursor (a turning point, a detour's place), if any. */
+  pickOption(at: Cartesian2): RouteOption | null {
+    if (!this.options.length) return null;
+    const hit = this.viewer.scene.pick(at) as { id?: { option?: number } } | undefined;
+    const k = hit?.id?.option;
+    return typeof k === 'number' ? this.options[k] ?? null : null;
   }
 
   /** The story's place under the cursor, if any. */

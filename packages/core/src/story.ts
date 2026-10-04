@@ -2,9 +2,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import {
-  ACTIVITY_LABELS, distanceKm, histToAstro, LENSES, MAX_YEAR, MIN_YEAR, STORY_PHASES, THEME_LABELS, THEMES, toLite,
+  ACTIVITY_LABELS, dateToDecimal, distanceKm, formatDay, histToAstro, LENSES, MAX_YEAR, MIN_YEAR, STORY_PHASES, THEME_LABELS, THEMES, toLite,
   type ActivityKind, type Category, type DetourKind, type PersonJourney, type PersonScenarioResponse, type Poi, type PoiLite, type ScenarioContext, type ScenarioWalk,
-  type CardLink, type ScenariosResponse, type Source, type StepChoice, type StepResponse, walkOf, type WalkStep, type Story, type StoryPerson, type StoryResponse, type StoryScenario, type StoryStop,
+  type CardLink, type ScenarioFork, type ScenariosResponse, type Source, type StepChoice, type StepResponse, walkOf, type WalkStep, type Story, type StoryPerson, type StoryResponse, type StoryScenario, type StoryStop,
 } from '@way/shared';
 import { people, wikidata, wikipedia, type DatedRow, type EntityInfo } from '@way/providers';
 import { grounded, normalize } from './links.ts';
@@ -26,7 +26,7 @@ import type { Store } from './store/types.ts';
 
 /** Bump when the reading changes: stories are read again. */
 const STORY_VERSION = 14;
-const SCENARIOS_VERSION = 13;
+const SCENARIOS_VERSION = 15;
 const PERSON_VERSION = 4;
 /** What scenario writers read of an article besides the stops' own sentences: its start. */
 const SCENARIO_ARTICLE_CHARS = 5_000;
@@ -46,19 +46,25 @@ const MAX_CAST = 4;
 /** Steps of a scenario: one per stop the character lives, as many as the story allows (their texts come later). */
 const MAX_STEPS = 15;
 const MIN_PLAN_STEPS = 8;
-/** A step written on arrival: the places offered for its choices, the choices kept, the texts kept on disk. */
+/** Turning points planned with a walk, and the stops of each. */
+const MAX_FORKS = 2;
+const FORK_STOPS = 4;
+/** Two steps of a walk the same year closer than this are one stop (the port and its town). */
+const SAME_STEP_KM = 15;
+/** A step written on arrival: the places of the story offered for its detours, the texts kept on disk. */
 const STEP_CANDIDATES = 5;
-const MAX_CHOICES = 3;
 /** Links read in a card's introduction, and the articles whose links are kept. */
 const MAX_LINKS_LEAD = 40;
 const LINKS_KEEP = 300;
 /** Bump when steps are written differently: they are written again. */
-const STEP_VERSION = 7;
+const STEP_VERSION = 8;
 /** A step's facts, pictures, and the cards close by at its moment (years either side, km, how many known cards looked at). */
 const MAX_FACTS = 4;
 const GALLERY_MAX = 8;
-const NEAR_YEARS = 3;
-const NEAR_KM = 300;
+const NEAR_YEARS = 1;
+const NEAR_KM = 200;
+/** Detours a step's writer may offer besides the planned route and its turning points. */
+const MAX_DETOURS = 2;
 /** Close by at the same moment: events, not towns or institutions; lasting a few years at most. */
 const NEAR_CATEGORIES = new Set<Category>(['battle', 'event', 'disaster', 'discovery', 'exploration']);
 const NEAR_SPAN = 10;
@@ -136,7 +142,14 @@ const ScenarioItem = z.object({
     /** Written later, on arrival (a life's walk still comes with its texts). */
     text: z.string().trim().max(400).catch(''),
     cast: z.array(Index.catch(-1)).max(8).catch([]),
+    beat: z.string().trim().max(120).optional().catch(undefined),
   }).nullable().catch(null)).max(MAX_STEPS + 4),
+  forks: z.array(z.object({
+    at: Index,
+    label: z.string().trim().min(3).max(90),
+    person: Index.nullish().catch(null),
+    stops: z.array(Index.catch(-1)).min(1).max(FORK_STOPS + 2),
+  }).nullable().catch(null)).max(4).optional().catch(undefined),
 });
 export const ExtractedScenarios = z.object({
   scenarios: z.array(ScenarioItem.nullable().catch(null)).max(6).catch([]),
@@ -153,6 +166,7 @@ const Target = z.union([z.string(), z.number()]).transform((v, c) => {
 });
 const StepAnswer = z.object({
   text: z.string().trim().min(80).max(3600),
+  next: z.string().trim().min(3).max(90).nullable().catch(null).default(null),
   cast: z.array(Index.catch(-1)).max(8).catch([]),
   facts: z.array(z.string().trim().min(6).max(180).nullable().catch(null)).max(8).catch([]).transform((a) => a.filter((x): x is string => !!x)),
   quote: z.string().trim().min(20).max(400).nullable().catch(null).default(null),
@@ -167,23 +181,26 @@ Scenarios come in a set of ${MAX_SCENARIOS} (you may be asked for one of them at
 - the last one follows an INVENTED character, a typical person of the time and place the article describes, chosen for the angle (person = null, invented = true): e.g. for a merchant, a cargo agent or a shipowner's clerk rather than a tourist.
   If fewer than ${REAL_SCENARIOS} people are listed, write invented characters instead.
 The angle is mandatory: it decides who is followed, what the premise says and which stops they go through. When a card explored before connects to this subject, the premise starts from that link (e.g. coming from a port, the character left from it or works for it).
-For each scenario: title (French, a few words), premise (French, one sentence in the second person, "Vous êtes...", saying the character's angle), person, invented, steps (one per stop this character lives, in the order of time, across the phases the character lived: ${MIN_PLAN_STEPS} to ${MAX_STEPS} when the stops allow, never fewer than 3; mostly main stops, others where the character's angle leads there; each: stop = the number of one of the stops; text = "" (written later); cast = the numbers of the listed people the article places there at that moment (on board, on site), the protagonist included when real, at most ${MAX_CAST}; nobody who was not yet born, already dead, or elsewhere).
+A scenario is a story, not a tour: the character wants something or must do something (their goal, said in the premise), the stops are where that goal meets the events, and the stakes rise toward the turning point of the story.
+For each scenario: title (French, a few words), premise (French, one or two sentences in the second person, "Vous êtes...", saying who the character is, from the angle, and what they want or must do), person, invented, steps (one per stop this character lives, in the order of time, to the day when the stops give dates, across the phases the character lived: ${MIN_PLAN_STEPS} to ${MAX_STEPS} when the stops allow, never fewer than 3; mostly main stops, others where the character's angle leads there; each: stop = the number of one of the stops; text = "" (written later); beat = in French, 4 to 12 words, what is at stake for the character at that moment, from the stop's sentence (e.g. "Tenir l'horaire voulu par Ismay", "Le message du Baltic signale des glaces"); cast = the numbers of the listed people the article places there at that moment (on board, on site), the protagonist included when real, at most ${MAX_CAST}; nobody who was not yet born, already dead, or elsewhere), forks.
+forks: 1 or 2 turning points where the story could go another way, each at a different step: at = the stop number of the step where the choice is made; label = in French, 3 to 9 words, the action that turns away (e.g. "Monter dans le canot 6 avec Molly Brown", "Rester à terre à Queenstown"); person = the number of a listed person present there whom the visitor follows from then on (null to stay in the same shoes; with a REAL protagonist, a fork always follows someone else: what the protagonist did is history); stops = 1 to ${FORK_STOPS} listed stops that other way goes through, in the order of time, none of the scenario's own later steps.
 Rules, all mandatory:
 - Only the stops and people listed.
-- A real person only at steps of their adult life where the article involves them.
+- A real person only at steps of their adult life where the article involves them, and only where they physically are at that moment: never at a destination they did not reach, never after their death.
 - A step happens in its stop's year: choose the stop whose year is when the character lives that moment (a 1985 discovery is never on a 1912 stop), within a real person's lifetime (given with the people).
 Answer with a single JSON object: {"scenarios": [...]}.`;
 
 const STEP_SYSTEM = `You write ONE step of an interactive scenario for a visitor of a historical globe, in someone's shoes, when the visitor gets there.
-You get how the visitor looks at the world (the angle to take), the scenario (title, premise, protagonist, the steps already lived), this step's place and year, the passage of the subject's article about it (its section), the start of the article detailing that part when there is one, the place's own article summary, the people (P0, P1...: ★ marks those the passage names), places of the story it may lead to next (C0, C1...), and other subjects close by at the same moment (K0, K1...).
+You get how the visitor looks at the world (the angle to take), the scenario (title, premise with the character's goal, protagonist, the steps already lived, the decisions the visitor took), this step's place, date and stake, the passage of the subject's article about it (its section), the start of the article detailing that part when there is one, the place's own article summary, the people (P0, P1...: ★ marks those the passage names), where the planned route goes next and the turning points offered here, places of the story off the route (C0, C1...), and other subjects close by at the same moment (K0, K1...).
 Write:
-- text: in French, in the second person ("vous"), 8 to 10 sentences: what the protagonist lives at this place in that year. Every sentence carries something the texts give: a date or an hour, a number, a name, a decision, an order, words someone said, what the place looks like. Show the people the passage names (★) at what they do there, by their name, and the protagonist meeting, watching or hearing them. Pick up from the steps already lived. Forbidden: sentences about hopes and dreams, wondering what comes next, excitement and anxiety, the atmosphere in general, a summary of the whole story;
+- text: in French, in the second person ("vous"), 4 to 6 sentences, in three beats: the scene (where and when, what the protagonist sees and hears, concrete), what happens (who does what, by their name: the people the passage names, ★, at what they do), and the decision now facing the protagonist, about this step's stake, between the planned way on and the turning points offered (name where each leads). Pick up from the steps already lived, and let the visitor's last decision show (what it changed, whom it brought). Forbidden: listing facts for their own sake (they go in facts), sentences about hopes and dreams, excitement and anxiety, the atmosphere in general, a summary of the whole story;
+- next: in French, 3 to 9 words, the protagonist's action that takes the planned route on (e.g. "Donner l'ordre d'appareiller pour Cherbourg"); null when the route ends here;
 - facts: 3 to ${MAX_FACTS} short facts in French (each under 120 characters, with a date, a time or a number), taken from the passage, the detailed article or the summary, e.g. "10 avril 1912, 12 h : départ de Southampton";
 - quote: ONE sentence copied word for word from the passage (not the summary), the most vivid one; null if none fits;
 - cast: the numbers of the listed people present there at that moment (P0, P1...) as the texts place them, at most ${MAX_CAST}; never someone only because they are listed;
-- choices: 1 to ${MAX_CHOICES} turns the story may take from here: label (French, 3 to 9 words, an action, e.g. "Suivre les rescapés jusqu'à New York", "Monter à la cabine radio avec Jack Phillips"), to = "C" and the number of a place of the story (it becomes the next step), "P" and the number of a person present here (a short detour in their shoes, then back; the label names them), or "K" and the number of another subject close by (a short detour there, then back; the label names it). When someone is present, one choice goes toward them.
-Rules, all mandatory: never invent events, dates or deeds the texts do not support (the character may be imagined, the history may not); the step happens in its year; a real person only within their lifetime and roles they held then.
-Answer with a single JSON object: {"text": "...", "facts": [...], "quote": "..." or null, "cast": [...], "choices": [{"label": "...", "to": "P0"}]}.`;
+- choices: 0 to ${MAX_DETOURS} short detours from here, before going on: label (French, 3 to 9 words, an action naming where or whom, e.g. "Monter à la cabine radio avec Jack Phillips"), to = "P" and the number of a person present here (a few moments in their shoes, then back), "C" and the number of a place of the story off the route (one step there, then the route goes on), or "K" and the number of another subject close by (a short detour there, then back). When someone the passage names is present, one detour goes toward them.
+Rules, all mandatory: never invent events, dates or deeds the texts do not support (the character may be imagined, the history may not); when the texts do not say what a real protagonist does here, they watch, listen and decide, they do not act; the step happens at its date; a real person only within their lifetime and roles they held then.
+Answer with a single JSON object: {"text": "...", "next": "..." or null, "facts": [...], "quote": "..." or null, "cast": [...], "choices": [{"label": "...", "to": "P0"}]}.`;
 
 const PERSON_SYSTEM = `You write ONE interactive scenario for a visitor of a historical globe: a walk through the life of a REAL person, step by step, in their shoes.
 You get how the visitor looks at the world (with the angle to take), the checked places of that person's life (S0, S1...: from Wikidata, and from the stories of subjects they took part in), and their Wikipedia article.
@@ -235,6 +252,78 @@ export function textFitsYear(text: string, year: number): boolean {
   return years.length === 0 || years.some((y) => Math.abs(y - year) <= 1);
 }
 
+const MONTHS: Record<string, number> = {
+  janvier: 1, fevrier: 2, mars: 3, avril: 4, mai: 5, juin: 6, juillet: 7, aout: 8, septembre: 9, octobre: 10, novembre: 11, decembre: 12,
+  january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+};
+const MONTH_WORDS = Object.keys(MONTHS).join('|');
+const DAY_FIRST = new RegExp(`\\b(1er|\\d{1,2})\\s+(${MONTH_WORDS})\\s+(\\d{3,4})\\b`, 'gi');
+const MONTH_FIRST = new RegExp(`\\b(${MONTH_WORDS})\\s+(\\d{1,2}),?\\s+(\\d{3,4})\\b`, 'gi');
+const fold = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+
+/**
+ * The day a sentence gives for a moment of that year ("le 10 avril 1912",
+ * "April 10, 1912"), as a decimal year; null when it gives none. Pure, for tests.
+ */
+export function dayOf(text: string, year: number): number | null {
+  if (year < 1) return null;
+  const flat = fold(text);
+  for (const m of flat.matchAll(DAY_FIRST)) {
+    if (Number(m[3]) === year) return dateToDecimal(year, MONTHS[m[2]!]!, m[1] === '1er' ? 1 : Number(m[1]));
+  }
+  for (const m of flat.matchAll(MONTH_FIRST)) {
+    if (Number(m[3]) === year) return dateToDecimal(year, MONTHS[m[1]!]!, Number(m[2]));
+  }
+  return null;
+}
+
+/**
+ * Steps in the order of time: by year; within a year by day where the stops
+ * give it, a step without one keeping the day of the step before it in the
+ * plan; then as planned (the input's order: the planner knows the story's
+ * order better than the article's links). A step at the same spot as the one
+ * just before it the same year is one stop too many (the port, then its town). Pure, for tests.
+ */
+export function orderSteps<T extends { stop: number }>(steps: T[], stops: { year: number; when?: number | null; lat?: number; lon?: number }[]): T[] {
+  const byYear = new Map<number, { st: T; k: number }[]>();
+  steps.forEach((st, k) => {
+    const s = stops[st.stop];
+    if (!s) return;
+    const y = histToAstro(s.year);
+    byYear.set(y, [...(byYear.get(y) ?? []), { st, k }]);
+  });
+  const out: T[] = [];
+  const at = (st: T): LatLon | null => {
+    const s = stops[st.stop]!;
+    return s.lat !== undefined && s.lon !== undefined ? { lat: s.lat, lon: s.lon } : null;
+  };
+  for (const y of [...byYear.keys()].sort((a, b) => a - b)) {
+    let last = -Infinity;
+    const keyed = byYear.get(y)!.map(({ st, k }) => {
+      const w = stops[st.stop]!.when;
+      if (w != null) last = w;
+      return { st, k, key: w ?? last };
+    }).sort((a, b) => a.key - b.key || a.k - b.k);
+    // A step without a day far out of the way between the two around it is where the story ends
+    // up, not where it passes (New York between Queenstown and the iceberg): last of its year.
+    const ends: typeof keyed = [];
+    for (let i = 1; i < keyed.length - 1; i++) {
+      const [a, b, c] = [at(keyed[i - 1]!.st), at(keyed[i]!.st), at(keyed[i + 1]!.st)];
+      if (stops[keyed[i]!.st.stop]!.when != null || !a || !b || !c) continue;
+      const [around, direct] = [distanceKm(a, b) + distanceKm(b, c), distanceKm(a, c)];
+      if (around > 1.5 * direct + 500 && around - direct > 2000) ends.push(...keyed.splice(i--, 1));
+    }
+    for (const { st } of [...keyed, ...ends]) {
+      const s = stops[st.stop]!;
+      const before = out.length ? stops[out[out.length - 1]!.stop]! : null;
+      const same = before && histToAstro(before.year) === y && s.lat !== undefined && s.lon !== undefined && before.lat !== undefined && before.lon !== undefined
+        && distanceKm(before as LatLon, s as LatLon) < SAME_STEP_KM;
+      if (!same) out.push(st);
+    }
+  }
+  return out;
+}
+
 /** Index of the listed person a text names by their surname (the longest match), if any. Pure, for tests. */
 export function namedIn(text: string, persons: { name: string }[]): number | undefined {
   const words = new Set(tokens(text));
@@ -252,16 +341,50 @@ export function namedIn(text: string, persons: { name: string }[]): number | und
 /** Age from which a real protagonist acts in a step. */
 const ADULT = 15;
 
+type Persons = { name: string; born: number | null; died: number | null }[];
+type PlanStops = { year: number; when?: number | null; lat?: number; lon?: number }[];
+
+/**
+ * A plan's turning points that hold: at one of its steps (one per step, two
+ * at most), through listed stops from that moment on that are none of the
+ * walk's later steps, in the order of time; following someone listed (whom
+ * the label names, else the number given) where they live then. A real
+ * protagonist's turning points always follow someone else: what they did is
+ * history. Pure, for tests.
+ */
+export function buildForks(
+  forks: NonNullable<ScenarioItem['forks']>, steps: { stop: number }[], stops: PlanStops, persons: Persons, hero: number | null,
+): ScenarioFork[] {
+  const out: ScenarioFork[] = [];
+  for (const f of forks) {
+    const at = f ? steps.findIndex((st) => st.stop === f.at) : -1;
+    if (!f || at < 0 || out.some((o) => o.at === f.at) || out.length >= MAX_FORKS) continue;
+    const named = namedIn(f.label, persons);
+    const given = f.person ?? null;
+    const who = named ?? (given !== null && persons[given] ? given : null);
+    const person = who !== null && who !== hero ? who : null;
+    if (hero !== null && person === null) continue;
+    const here = stops[f.at]!;
+    const from = histToAstro(here.year);
+    // Another way on: none of the walk's own stops, nothing before that moment.
+    const walked = new Set(steps.map((st) => st.stop));
+    const lives = (i: number) => (person !== null ? aliveIn(persons[person]!, stops[i]!.year, ADULT) : true);
+    const after = (s: PlanStops[number]) => histToAstro(s.year) > from || (histToAstro(s.year) === from && (s.when == null || here.when == null || s.when >= here.when));
+    const ok = [...new Set(f.stops)].filter((i) => stops[i] && !walked.has(i) && after(stops[i]!) && lives(i));
+    const route = orderSteps(ok.map((stop) => ({ stop })), stops).slice(0, FORK_STOPS).map((x) => x.stop);
+    if (route.length) out.push({ at: f.at, label: cap(f.label), person, stops: route });
+  }
+  return out;
+}
+
 /**
  * Scenarios that only walk through kept stops, steps in the order of time,
  * at least two of them; the cast among the people alive then (Ballard, born
  * in 1942, is not on the quay in 1912), a real protagonist only at steps of
  * their adult life; up to two following real people (one each), then
- * invented characters, three at most. Pure, for tests.
+ * invented characters, three at most; their turning points. Pure, for tests.
  */
-export function buildScenarios(
-  items: ScenarioItem[], stops: { year: number }[], persons: { name: string; born: number | null; died: number | null }[],
-): StoryScenario[] {
+export function buildScenarios(items: ScenarioItem[], stops: PlanStops, persons: Persons): StoryScenario[] {
   const real: StoryScenario[] = [];
   const invented: StoryScenario[] = [];
   const followed = new Set<number>();
@@ -271,21 +394,24 @@ export function buildScenarios(
     if (!sc.invented && person === null) continue;
     const isReal = person !== null;
     const seen = new Set<number>();
-    const steps = sc.steps.flatMap((st) => {
+    const kept = sc.steps.flatMap((st) => {
       if (!st || !stops[st.stop] || seen.has(st.stop)) return [];
       const year = stops[st.stop]!.year;
       if ((isReal && !aliveIn(persons[person]!, year, ADULT)) || (st.text && !textFitsYear(st.text, year))) return [];
       seen.add(st.stop);
       const cast = [...new Set(st.cast.filter((c) => c >= 0 && c < persons.length && aliveIn(persons[c]!, year)))].slice(0, MAX_CAST);
-      return [{ stop: st.stop, text: st.text, cast }];
-    }).sort((a, b) => histToAstro(stops[a.stop]!.year) - histToAstro(stops[b.stop]!.year) || a.stop - b.stop).slice(0, MAX_STEPS);
+      return [{ stop: st.stop, text: st.text, cast, ...(st.beat ? { beat: cap(st.beat) } : {}) }];
+    });
+    const steps = orderSteps(kept, stops).slice(0, MAX_STEPS);
     if (steps.length < 2) continue;
+    const forks = buildForks(sc.forks ?? [], steps, stops, persons, person);
+    const base = { title: sc.title, premise: sc.premise, steps, ...(forks.length ? { forks } : {}) };
     if (isReal) {
       if (followed.has(person) || real.length >= REAL_SCENARIOS) continue;
       followed.add(person);
-      real.push({ title: sc.title, premise: sc.premise, steps, person, invented: false });
+      real.push({ ...base, person, invented: false });
     } else if (sc.invented) {
-      invented.push({ title: sc.title, premise: sc.premise, steps, person: null, invented: true });
+      invented.push({ ...base, person: null, invented: true });
     }
   }
   return [...real, ...invented.slice(0, MAX_SCENARIOS - real.length)];
@@ -299,19 +425,27 @@ export function buildScenarios(
  * and its sinking). Pure, for tests.
  */
 export function fillPlan(
-  sc: StoryScenario, stops: { year: number; main?: boolean }[], persons: { born: number | null; died: number | null }[], min = MIN_PLAN_STEPS,
+  sc: StoryScenario, stops: (PlanStops[number] & { main?: boolean })[], persons: { born: number | null; died: number | null }[], min = MIN_PLAN_STEPS,
   prefer: (stop: number) => boolean = () => false,
 ): StoryScenario {
   if (sc.steps.length >= min || sc.steps.length === 0) return sc;
   const years = sc.steps.map((st) => histToAstro(stops[st.stop]!.year));
   const [from, to] = [Math.min(...years), Math.max(...years)];
   const hero = sc.person !== null ? persons[sc.person] : undefined;
-  const taken = new Set(sc.steps.map((st) => st.stop));
+  const taken = new Set([...sc.steps.map((st) => st.stop), ...(sc.forks ?? []).flatMap((f) => f.stops)]);
   const extra = stops.flatMap((st, i) => {
     const y = histToAstro(st.year);
     return st.main !== false && !taken.has(i) && y >= from && y <= to && (!hero || aliveIn(hero, st.year, ADULT)) ? [{ stop: i, text: '', cast: [] as number[] }] : [];
   }).sort((a, b) => Number(prefer(b.stop)) - Number(prefer(a.stop))).slice(0, min - sc.steps.length);
-  const steps = [...sc.steps, ...extra].sort((a, b) => histToAstro(stops[a.stop]!.year) - histToAstro(stops[b.stop]!.year) || a.stop - b.stop);
+  // The plan's steps keep their order; one added goes after the planned step the story tells just before it.
+  const rank = (st: { stop: number }) => {
+    const k = sc.steps.indexOf(st as StoryScenario['steps'][number]);
+    if (k >= 0) return k;
+    let after = -1;
+    sc.steps.forEach((p, j) => { if (p.stop < st.stop) after = j; });
+    return after + 0.5 + st.stop / 1e6;
+  };
+  const steps = orderSteps([...sc.steps, ...extra].sort((a, b) => rank(a) - rank(b)), stops);
   return { ...sc, steps };
 }
 
@@ -481,7 +615,7 @@ export function passageAround(section: string, paragraph: string, chars = SECTIO
 
 /** Sentences that tell nothing: hopes, wonders, the heart beating, the air full of tension. */
 const FILLER = /(vous vous demandez|vous demandant|espoirs?\b|esp[ée]rance|r[êe]ves?\b|r[êe]vez|excitation|appr[ée]hension|adr[ée]naline|c[œo]e?ur (battant|lourd|serr[ée])|une vie meilleure|nouvelle vie|ce qui vous attend|ce que l'avenir|l'avenir vous|tension (palpable|dans l'air)|l'atmosph[èe]re est|dans l'air\b(?! (froid|glac|frais))|vous ne pouvez vous emp[êe]cher)/i;
-const MIN_SENTENCES = 5;
+const MIN_SENTENCES = 3;
 
 /** A step's text without its filler sentences, as long as enough remain. Pure, for tests. */
 export function withoutFiller(text: string): string {
@@ -503,7 +637,7 @@ export function namedAll(text: string, persons: { name: string }[]): number[] {
 /** A stop of a card's story as a step to walk, its text to be written. Pure, for tests. */
 export function stepOf(story: Pick<Story, 'stops'>, i: number): WalkStep | null {
   const s = story.stops[i];
-  return s ? { place: s.poi?.title ?? s.name, label: s.label, year: s.year, lat: s.lat, lon: s.lon, poi: s.poi, text: '', cast: [], stop: i, image: s.image ?? null } : null;
+  return s ? { place: s.poi?.title ?? s.name, label: s.label, year: s.year, when: s.when ?? null, lat: s.lat, lon: s.lon, poi: s.poi, text: '', cast: [], stop: i, image: s.image ?? null } : null;
 }
 
 /** What a step is asked from: the scenario, the stop, the stops of the whole walk in order. */
@@ -513,10 +647,27 @@ export interface StepAsk {
   hero: string | null;
   invented: boolean;
   stop: number;
-  /** The walk's stops in order (the step's own included): those before it were lived, the others are no choices. */
+  /**
+   * The walk's stops in order (the step's own included), after those lived on
+   * the walk it forks from: those before it were lived, the one after it is
+   * the planned way on, the others are no detours.
+   */
   walk: number[];
+  /** What is at stake there, as planned. */
+  beat: string | null;
+  /** The turns the visitor took so far, oldest first. */
+  decisions: string[];
+  /** Turning points offered at this step: their label and the first stop they lead to. */
+  forks: { label: string; stop: number }[];
   /** Asked ahead, for the next step: after whatever the visitor waits for. */
   prefetch: boolean;
+}
+
+/** What a step's text depends on besides its scenario and stop: the way on, the turns offered and taken. Pure, for tests. */
+export function stepKey(ask: Pick<StepAsk, 'stop' | 'walk' | 'decisions' | 'forks'>): string {
+  const at = ask.walk.lastIndexOf(ask.stop);
+  const next = at >= 0 ? ask.walk[at + 1] ?? '' : '';
+  return `n${next}|f${ask.forks.map((f) => f.stop).join(',')}|${normalize(ask.decisions.join(' ')).slice(-160)}`;
 }
 
 /** The sentence linking each stop and person, kept for the AI: the labels and scenarios are written from them. */
@@ -540,6 +691,7 @@ interface StepEntry {
   /** Who is there: the story's people, or someone the step's passage names. */
   cast: StoryPerson[];
   choices: { label: string; stop?: number; card?: PoiLite; person?: StoryPerson }[];
+  next?: string | null;
   facts?: string[];
   quote?: string | null;
   gallery?: string[];
@@ -599,9 +751,14 @@ export function yearOf(
   return [...counts].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0] ?? fallback;
 }
 
+/** Stops with their day, read from their sentence for stories read before days were. */
+function dated(s: Pick<StoredStory, 'stops' | 'notes'>): StoryStop[] {
+  return s.stops.map((st, i) => (st.when !== undefined ? st : { ...st, when: dayOf(s.notes.stops[i] ?? '', st.year) }));
+}
+
 /** Stops as told to the writers: number, year, part, place, ★ when main, the article's sentence. */
 function stopLines(stops: StoryStop[], notes: string[] | null): string[] {
-  return stops.map((s, i) => `S${i}. ${s.main === false ? '' : '★ '}year ${s.year} · ${s.label} · ${s.poi?.title ?? s.name}${notes?.[i] ? ` — « ${notes[i]!.slice(0, NOTE_CHARS)} »` : ''}`);
+  return stops.map((s, i) => `S${i}. ${s.main === false ? '' : '★ '}${s.when != null ? formatDay(s.when) : `year ${s.year}`} · ${s.label} · ${s.poi?.title ?? s.name}${notes?.[i] ? ` — « ${notes[i]!.slice(0, NOTE_CHARS)} »` : ''}`);
 }
 
 export class StoryService {
@@ -822,7 +979,7 @@ export class StoryService {
    * card as a detour). Written once per scenario and view, then kept.
    */
   async step(poi: Poi, ask: StepAsk, ctx: ScenarioContext): Promise<StepResponse> {
-    const none = (status: StepResponse['status']): StepResponse => ({ status, text: null, cast: [], choices: [], facts: [], quote: null, gallery: [], near: [] });
+    const none = (status: StepResponse['status']): StepResponse => ({ status, text: null, cast: [], choices: [], next: null, facts: [], quote: null, gallery: [], near: [] });
     const storyKey = this.key(poi);
     let hit = this.cache[storyKey];
     if (!hit || hit.v !== STORY_VERSION) {
@@ -832,7 +989,7 @@ export class StoryService {
     }
     const stored = hit.story;
     if (!stored || !stored.stops[ask.stop]) return none('none');
-    const key = `step${STEP_VERSION}|${storyKey}|${hit.at}|${normalize(ask.title)}|${ask.stop}|${contextKey(ctx)}`;
+    const key = `step${STEP_VERSION}|${storyKey}|${hit.at}|${normalize(ask.title)}|${ask.stop}|${stepKey(ask)}|${contextKey(ctx)}`;
     const done = this.stepCache[key];
     if (done) return this.stepOut(stored, done);
     if ((this.failed.get(key) ?? 0) > Date.now()) return none('none');
@@ -852,6 +1009,7 @@ export class StoryService {
       status: 'ready',
       text: e.text,
       cast: e.cast,
+      next: e.next ?? null,
       choices: e.choices.flatMap((c): StepChoice[] => {
         if (c.card) return [{ label: c.label, poi: c.card }];
         if (c.person) return [{ label: c.label, person: c.person }];
@@ -920,9 +1078,12 @@ export class StoryService {
     const s = story.stops[ask.stop]!;
     const lang = poi.wiki_lang ?? 'fr';
     const hero = ask.hero ? story.people.find((p) => p.qid === ask.hero) ?? null : null;
-    const at = ask.walk.indexOf(ask.stop);
+    const at = ask.walk.lastIndexOf(ask.stop);
     const lived = (at >= 0 ? ask.walk.slice(0, at) : ask.walk).flatMap((i) => (story.stops[i] ? [story.stops[i]!] : []));
-    const candidates = choiceCandidates(story.stops, ask.stop, ask.walk, hero ? (y) => aliveIn(hero, y, ADULT) : undefined);
+    const next = at >= 0 && ask.walk[at + 1] !== undefined ? story.stops[ask.walk[at + 1]!] ?? null : null;
+    const forks = ask.forks.flatMap((f) => (story.stops[f.stop] ? [{ label: f.label, to: story.stops[f.stop]! }] : []));
+    // Detours go off the route: neither the walk nor its turning points.
+    const candidates = choiceCandidates(story.stops, ask.stop, [...ask.walk, ...ask.forks.map((f) => f.stop)], hero ? (y) => aliveIn(hero, y, ADULT) : undefined);
     const exclude = new Set([poi.id, ...story.stops.flatMap((x) => (x.poi ? [x.poi.id] : []))]);
     const paragraph = stored.notes.paragraphs?.[ask.stop] || (stored.notes.stops[ask.stop] ?? '');
     // The whole section telling this moment, not only the paragraph linking the place: its people, its pictures, its detailed article.
@@ -945,16 +1106,19 @@ export class StoryService {
       .map((x) => x.p).slice(0, STEP_PEOPLE);
     const named = new Set(namedAll(passage, persons).map((i) => persons[i]!.qid));
     const note = (i: number) => (stored.notes.stops[i] ?? '').slice(0, NOTE_CHARS);
+    const when = (x: StoryStop) => (x.when != null ? formatDay(x.when) : String(x.year));
+    const where = (x: StoryStop) => `${when(x)} · ${x.label} · ${x.poi?.title ?? x.name}`;
     const user = [
       `Subject: « ${poi.title} ».`,
       describeContext(ctx),
       '',
       `Scenario: « ${ask.title} ». ${ask.premise}`,
       hero ? `Protagonist: ${hero.name} (${hero.born ?? '?'}–${hero.died ?? ''}), ${hero.role}.` : 'Protagonist: an invented character, the visitor ("vous").',
-      lived.length ? `Steps already lived: ${lived.map((x) => `${x.year} ${x.poi?.title ?? x.name} (${x.label})`).join(' → ')}.` : 'This is the first step.',
-      at >= 0 && at === ask.walk.length - 1 ? 'This is the last planned step: the choices may open what comes after.' : '',
+      lived.length ? `Steps already lived: ${lived.map((x) => `${when(x)} ${x.poi?.title ?? x.name} (${x.label})`).join(' → ')}.` : 'This is the first step.',
+      ask.decisions.length ? `Decisions the visitor took, oldest first: ${ask.decisions.map((d) => `« ${d} »`).join(' → ')}. The last one led here.` : 'No decision taken yet.',
       '',
-      `This step: year ${s.year} · ${s.label} · ${s.poi?.title ?? s.name}.`,
+      `This step: ${where(s)}.`,
+      ask.beat ? `Its stake for the protagonist: ${ask.beat}.` : '',
       `The passage of the article « ${poi.wiki_title} » about it: « ${passage} »`,
       detailed ? `The article detailing that part (« ${detailed.title} »), its start: « ${detailed.text} »` : '',
       summary ? `The place's own article (« ${summary.title} »), summary: « ${summary.extract.slice(0, SUMMARY_CHARS)} »` : '',
@@ -962,8 +1126,11 @@ export class StoryService {
       persons.length ? 'People (★: named in the passage):' : 'People: none listed.',
       ...persons.map((p, i) => `P${i}. ${named.has(p.qid) ? '★ ' : ''}${p.name} (${p.born ?? '?'}–${p.died ?? ''}), ${p.role}`),
       '',
-      candidates.length ? 'Places of the story it may lead to next:' : 'No place of the story to lead to.',
-      ...candidates.map((i, k) => `C${k}. year ${story.stops[i]!.year} · ${story.stops[i]!.label} · ${story.stops[i]!.poi?.title ?? story.stops[i]!.name} — « ${note(i)} »`),
+      next ? `The planned route goes on to: ${where(next)} — « ${note(ask.walk[at + 1]!)} »` : 'The planned route ends here: the decision is about what comes after.',
+      ...(forks.length ? ['Turning points offered here (the text names where each leads):', ...forks.map((f, k) => `F${k}. « ${f.label} » → ${where(f.to)}`)] : []),
+      '',
+      candidates.length ? 'Places of the story off the route (a detour of one step):' : 'No place of the story off the route.',
+      ...candidates.map((i, k) => `C${k}. ${where(story.stops[i]!)} — « ${note(i)} »`),
       near.length ? 'Other subjects close by at the same moment (a choice may leave for one, as a detour):' : '',
       ...near.map((c, k) => `K${k}. ${c.title} (${c.date_start}${c.date_end && c.date_end !== c.date_start ? `–${c.date_end}` : ''}) — a choice toward it names it`),
     ].join('\n');
@@ -980,6 +1147,7 @@ export class StoryService {
     return {
       at: Date.now(),
       text: withoutFiller(v.text),
+      next: next ? v.next && cap(v.next) : null,
       cast,
       choices: v.choices.flatMap((c) => {
         if (!c) return [];
@@ -993,7 +1161,7 @@ export class StoryService {
         if (!id || seen.has(id)) return [];
         seen.add(id);
         return [card ? { label: cap(c.label), card } : person ? { label: cap(c.label), person } : { label: cap(c.label), stop }];
-      }).slice(0, MAX_CHOICES),
+      }).slice(0, MAX_DETOURS),
       facts: v.facts.slice(0, MAX_FACTS),
       // Word for word, or nothing: a quote the article does not hold is no quote.
       quote: v.quote && (grounded(passage, v.quote) || grounded(paragraph, v.quote)) ? v.quote : null,
@@ -1073,7 +1241,9 @@ export class StoryService {
       const answer = await this.router.completeJson('write', SCENARIOS_SYSTEM, user, (v) => ExtractedScenarios.parse(v), 3000);
       if (!answer) throw new Error('no AI available');
       const items = answer.value.scenarios.filter((x): x is ScenarioItem => !!x).map((x) => ({ ...x, invented: true }));
+      // A detour is short and goes back: no turning points of its own.
       const sc = buildScenarios(items, sub.stops, sub.people).find((x) => x.invented);
+      if (sc) delete sc.forks;
       if (sc) {
         const walk = walkOf(toLite(poi), sub, { ...sc, steps: sc.steps.slice(0, DETOUR_MAX) });
         const steps = walk.steps.map((st) => ({ ...st, stop: st.stop === undefined ? undefined : near[st.stop]?.i }));
@@ -1166,7 +1336,7 @@ export class StoryService {
       const year = yearOf(m, mentions, plausible, subject);
       const card = cards.get(info.qid!);
       const stop: StoryStop = {
-        phase: phaseOf({ ...m, year }, subject), name: info.title, label: labelOf(m), year,
+        phase: phaseOf({ ...m, year }, subject), name: info.title, label: labelOf(m), year, when: dayOf(m.sentence, year),
         lat: Math.round(info.lat! * 1e4) / 1e4, lon: Math.round(info.lon! * 1e4) / 1e4, poi: card ? toLite(card) : null, main: rank < MAIN_STOPS, image: info.image,
       };
       return { stop, row: rowOf.get(info.qid!) ?? null, note: m.sentence, paragraph: m.paragraph, section: m.field ?? m.path[0] ?? 'Introduction', told: m.order };
@@ -1207,13 +1377,14 @@ export class StoryService {
    * while the rest are written).
    */
   private async write(poi: Poi, story: StoredStory, ctx: ScenarioContext, first: (s: StoryScenario[]) => void): Promise<StoryScenario[]> {
+    const stops = dated(story);
     const article = await wikipedia.pageText(poi.wiki_lang ?? 'fr', poi.wiki_title!, SCENARIO_ARTICLE_CHARS).catch(() => null);
     const user = [
       `Subject: « ${poi.title} ».`,
       describeContext(ctx),
       '',
       'Stops:',
-      ...stopLines(story.stops, story.notes.stops),
+      ...stopLines(stops, story.notes.stops),
       '',
       story.people.length ? 'People:' : 'People: none listed.',
       // Lifetimes, so a step is not put before someone's birth (Ballard at the 1912 sinking).
@@ -1238,7 +1409,7 @@ export class StoryService {
       const who = sc.person !== null ? story.people[sc.person]?.name.split(' ').at(-1) : undefined;
       return !!who && (story.notes.paragraphs?.[i] ?? story.notes.stops[i] ?? '').includes(who);
     };
-    const build = () => buildScenarios(items, story.stops, story.people).map((sc) => fillPlan(sc, story.stops, story.people, MIN_PLAN_STEPS, names(sc)));
+    const build = () => buildScenarios(items, stops, story.people).map((sc) => fillPlan(sc, stops, story.people, MIN_PLAN_STEPS, names(sc)));
     if (build().length) first(build());
     // Whatever is still missing (a second real person, a failed request), alone, a few times at most.
     for (let tries = 0; tries < MAX_SCENARIOS; tries++) {
@@ -1320,7 +1491,7 @@ export class StoryService {
     const { rows, notes: _n, labelled: _l, ...story } = s;
     return {
       ...story,
-      stops: story.stops.map((stop, i) => {
+      stops: dated(s).map((stop, i) => {
         const p = rows[i] && byQid.get(rows[i]!.qid);
         return { ...stop, poi: p ? toLite(p) : null };
       }),
