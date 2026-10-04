@@ -10,7 +10,7 @@ import { people, wikidata, wikipedia, type DatedRow, type EntityInfo } from '@wa
 import { grounded, normalize } from './links.ts';
 import { buildPois } from './pipeline.ts';
 import type { ProviderRouter } from './router.ts';
-import { bestMention, isPlace, labelOf, leadLinks, type Mention, mentionsOf, phaseOf, rankMentions } from './skeleton.ts';
+import { bestMention, isPlace, labelOf, leadLinks, type Mention, mentionsOf, phaseOf, rankMentions, sectionOf } from './skeleton.ts';
 import type { Store } from './store/types.ts';
 
 // The story of a subject, beyond the five doors, read from the card's
@@ -53,10 +53,10 @@ const MAX_CHOICES = 3;
 const MAX_LINKS_LEAD = 40;
 const LINKS_KEEP = 300;
 /** Bump when steps are written differently: they are written again. */
-const STEP_VERSION = 5;
+const STEP_VERSION = 7;
 /** A step's facts, pictures, and the cards close by at its moment (years either side, km, how many known cards looked at). */
 const MAX_FACTS = 4;
-const GALLERY_MAX = 6;
+const GALLERY_MAX = 8;
 const NEAR_YEARS = 3;
 const NEAR_KM = 300;
 /** Close by at the same moment: events, not towns or institutions; lasting a few years at most. */
@@ -70,6 +70,12 @@ const NEAR_LOOKUP = 4000;
 const STEPS_KEEP = 6000;
 /** What the step writer reads of the place's own article. */
 const SUMMARY_CHARS = 1200;
+/** And of the subject's: its section around the step's paragraph, and the start of the article detailing it. */
+const SECTION_CHARS = 4500;
+const DETAILED_CHARS = 3500;
+/** People offered to a step: those its passage names first, then the story's. */
+const STEP_PEOPLE = 14;
+const SECTION_LINKS = 60;
 /** A person's life: stops offered to the AI, and the fewest steps worth a walk. */
 const MAX_PERSON_STOPS = 20;
 const MIN_PERSON_STEPS = 3;
@@ -136,17 +142,17 @@ export const ExtractedScenarios = z.object({
   scenarios: z.array(ScenarioItem.nullable().catch(null)).max(6).catch([]),
 });
 export type ScenarioItem = z.infer<typeof ScenarioItem>;
-/** "C2" (a place of the story), "K1" (another card), or 2 (a place). */
+/** "C2" (a place of the story), "K1" (another card), "P0" (someone present), or 2 (a place). */
 const Target = z.union([z.string(), z.number()]).transform((v, c) => {
-  const m = String(v).trim().match(/^([CK]?)\s*(\d+)$/i);
+  const m = String(v).trim().match(/^([CKP]?)\s*(\d+)$/i);
   if (!m) {
     c.addIssue({ code: 'custom', message: 'no target' });
     return z.NEVER;
   }
-  return { kind: (m[1]!.toUpperCase() || 'C') as 'C' | 'K', i: Number(m[2]) };
+  return { kind: (m[1]!.toUpperCase() || 'C') as 'C' | 'K' | 'P', i: Number(m[2]) };
 });
 const StepAnswer = z.object({
-  text: z.string().trim().min(80).max(2800),
+  text: z.string().trim().min(80).max(3600),
   cast: z.array(Index.catch(-1)).max(8).catch([]),
   facts: z.array(z.string().trim().min(6).max(180).nullable().catch(null)).max(8).catch([]).transform((a) => a.filter((x): x is string => !!x)),
   quote: z.string().trim().min(20).max(400).nullable().catch(null).default(null),
@@ -169,15 +175,15 @@ Rules, all mandatory:
 Answer with a single JSON object: {"scenarios": [...]}.`;
 
 const STEP_SYSTEM = `You write ONE step of an interactive scenario for a visitor of a historical globe, in someone's shoes, when the visitor gets there.
-You get how the visitor looks at the world (the angle to take), the scenario (title, premise, protagonist, the steps already lived), this step's place and year, the article's paragraph about it, the place's own article summary, the people of the story, places of the story it may lead to next (C0, C1...), and other subjects close by at the same moment (K0, K1...).
+You get how the visitor looks at the world (the angle to take), the scenario (title, premise, protagonist, the steps already lived), this step's place and year, the passage of the subject's article about it (its section), the start of the article detailing that part when there is one, the place's own article summary, the people (P0, P1...: ★ marks those the passage names), places of the story it may lead to next (C0, C1...), and other subjects close by at the same moment (K0, K1...).
 Write:
-- text: in French, in the second person ("vous"), 8 to 10 sentences: what the protagonist lives at this place in that year, with the concrete facts the paragraph and the summary give (dates, times, numbers, names, decisions, what the place looks like, sounds, crowds, weather when given), picking up from the steps already lived; no filler about feelings, no summary of the whole story;
-- facts: 3 to ${MAX_FACTS} short facts in French (each under 120 characters, with a date, a time or a number), taken from the paragraph or the summary, e.g. "10 avril 1912, 12 h : départ de Southampton";
-- quote: ONE sentence copied word for word from the article's paragraph (not the summary), the most vivid one; null if none fits;
-- cast: the numbers of the listed people present there at that moment (P0, P1...), at most ${MAX_CAST};
-- choices: 0 to ${MAX_CHOICES} turns the story may take from here, when there is a real alternative: label (French, 3 to 9 words, an action, e.g. "Suivre les rescapés jusqu'à New York", "Rejoindre le Carpathia"), to = "C" and the number of a place of the story (it becomes the next step), or "K" and the number of another subject close by (a short detour there, then back).
+- text: in French, in the second person ("vous"), 8 to 10 sentences: what the protagonist lives at this place in that year. Every sentence carries something the texts give: a date or an hour, a number, a name, a decision, an order, words someone said, what the place looks like. Show the people the passage names (★) at what they do there, by their name, and the protagonist meeting, watching or hearing them. Pick up from the steps already lived. Forbidden: sentences about hopes and dreams, wondering what comes next, excitement and anxiety, the atmosphere in general, a summary of the whole story;
+- facts: 3 to ${MAX_FACTS} short facts in French (each under 120 characters, with a date, a time or a number), taken from the passage, the detailed article or the summary, e.g. "10 avril 1912, 12 h : départ de Southampton";
+- quote: ONE sentence copied word for word from the passage (not the summary), the most vivid one; null if none fits;
+- cast: the numbers of the listed people present there at that moment (P0, P1...) as the texts place them, at most ${MAX_CAST}; never someone only because they are listed;
+- choices: 1 to ${MAX_CHOICES} turns the story may take from here: label (French, 3 to 9 words, an action, e.g. "Suivre les rescapés jusqu'à New York", "Monter à la cabine radio avec Jack Phillips"), to = "C" and the number of a place of the story (it becomes the next step), "P" and the number of a person present here (a short detour in their shoes, then back; the label names them), or "K" and the number of another subject close by (a short detour there, then back; the label names it). When someone is present, one choice goes toward them.
 Rules, all mandatory: never invent events, dates or deeds the texts do not support (the character may be imagined, the history may not); the step happens in its year; a real person only within their lifetime and roles they held then.
-Answer with a single JSON object: {"text": "...", "facts": [...], "quote": "..." or null, "cast": [...], "choices": [{"label": "...", "to": "C0"}]}.`;
+Answer with a single JSON object: {"text": "...", "facts": [...], "quote": "..." or null, "cast": [...], "choices": [{"label": "...", "to": "P0"}]}.`;
 
 const PERSON_SYSTEM = `You write ONE interactive scenario for a visitor of a historical globe: a walk through the life of a REAL person, step by step, in their shoes.
 You get how the visitor looks at the world (with the angle to take), the checked places of that person's life (S0, S1...: from Wikidata, and from the stories of subjects they took part in), and their Wikipedia article.
@@ -458,6 +464,42 @@ export function namesOverlap(label: string, title: string): boolean {
   return normalize(title.replace(/\([^)]*\)/g, ' ')).split(' ').some((w) => w.length >= 4 && words.has(w));
 }
 
+/**
+ * Of a section, what a step reads: around its paragraph (where the section
+ * holds it), `chars` at most, at sentence bounds. Pure, for tests.
+ */
+export function passageAround(section: string, paragraph: string, chars = SECTION_CHARS): string {
+  const flat = section.replace(/\s+/g, ' ').trim();
+  if (flat.length <= chars) return flat;
+  const at = paragraph ? flat.indexOf(paragraph.replace(/\s+/g, ' ').trim().slice(0, 80)) : -1;
+  const start = at < 0 ? 0 : Math.max(0, Math.min(at - Math.floor(chars / 3), flat.length - chars));
+  const cut = flat.slice(start, start + chars);
+  const from = start === 0 ? 0 : cut.search(/[.!?] /) + 2;
+  const to = cut.lastIndexOf('. ');
+  return cut.slice(Math.max(0, from), to > chars / 2 ? to + 1 : undefined).trim();
+}
+
+/** Sentences that tell nothing: hopes, wonders, the heart beating, the air full of tension. */
+const FILLER = /(vous vous demandez|vous demandant|espoirs?\b|esp[ée]rance|r[êe]ves?\b|r[êe]vez|excitation|appr[ée]hension|adr[ée]naline|c[œo]e?ur (battant|lourd|serr[ée])|une vie meilleure|nouvelle vie|ce qui vous attend|ce que l'avenir|l'avenir vous|tension (palpable|dans l'air)|l'atmosph[èe]re est|dans l'air\b(?! (froid|glac|frais))|vous ne pouvez vous emp[êe]cher)/i;
+const MIN_SENTENCES = 5;
+
+/** A step's text without its filler sentences, as long as enough remain. Pure, for tests. */
+export function withoutFiller(text: string): string {
+  const sentences = text.match(/[^.!?…]+(?:[.!?…]+[»"]?|$)/g)?.map((s) => s.trim()).filter(Boolean) ?? [text];
+  const kept = sentences.filter((s) => !FILLER.test(s));
+  return kept.length >= MIN_SENTENCES ? kept.join(' ') : text;
+}
+
+/** Indexes of the listed people a text names by their surname. Pure, for tests. */
+export function namedAll(text: string, persons: { name: string }[]): number[] {
+  const words = new Set(tokens(text));
+  return persons.flatMap((p, i) => {
+    const t = tokens(p.name);
+    const surname = t[t.length - 1];
+    return surname && surname.length >= 3 && words.has(surname) ? [i] : [];
+  });
+}
+
 /** A stop of a card's story as a step to walk, its text to be written. Pure, for tests. */
 export function stepOf(story: Pick<Story, 'stops'>, i: number): WalkStep | null {
   const s = story.stops[i];
@@ -495,8 +537,9 @@ interface PersonEntry { at: number; v: number; walk: ScenarioWalk | null }
 interface StepEntry {
   at: number;
   text: string;
-  cast: number[];
-  choices: { label: string; stop?: number; card?: PoiLite }[];
+  /** Who is there: the story's people, or someone the step's passage names. */
+  cast: StoryPerson[];
+  choices: { label: string; stop?: number; card?: PoiLite; person?: StoryPerson }[];
   facts?: string[];
   quote?: string | null;
   gallery?: string[];
@@ -808,9 +851,10 @@ export class StoryService {
     return {
       status: 'ready',
       text: e.text,
-      cast: e.cast.flatMap((c) => (story.people[c] ? [story.people[c]!] : [])),
+      cast: e.cast,
       choices: e.choices.flatMap((c): StepChoice[] => {
         if (c.card) return [{ label: c.label, poi: c.card }];
+        if (c.person) return [{ label: c.label, person: c.person }];
         const step = c.stop === undefined ? null : stepOf(story, c.stop);
         return step ? [{ label: c.label, step }] : [];
       }),
@@ -838,13 +882,37 @@ export class StoryService {
     return nearCards([...found, ...more.filter((p) => !found.some((f) => f.id === p.id))], s, exclude);
   }
 
-  /** The pictures of a step: the place's article's, then the subject's when it has few. */
-  private async galleryOf(lang: string, s: StoryStop, subject: string | null): Promise<string[]> {
-    const own = await wikipedia.pageImages(lang, s.name, GALLERY_MAX).catch(() => [] as string[]);
-    const more = own.length < 3 && subject ? await wikipedia.pageImages(lang, subject, GALLERY_MAX).catch(() => [] as string[]) : [];
+  /**
+   * The pictures of a step: those of the subject's section telling this
+   * moment (the liner leaving Southampton), then the place's article's, then
+   * the subject's when still few.
+   */
+  private async galleryOf(lang: string, s: StoryStop, subject: string | null, files: string[]): Promise<string[]> {
+    const [moment, own] = await Promise.all([
+      wikipedia.fileThumbs(lang, files.slice(0, 20)).catch(() => [] as string[]),
+      wikipedia.pageImages(lang, s.name, GALLERY_MAX).catch(() => [] as string[]),
+    ]);
+    const more = moment.length + own.length < 3 && subject ? await wikipedia.pageImages(lang, subject, GALLERY_MAX).catch(() => [] as string[]) : [];
     const file = (u: string) => decodeURIComponent(u.split('/').at(-1) ?? u).replace(/^\d+px-/, '');
     const seen = new Set(s.image ? [file(s.image)] : []);
-    return [...own, ...more].filter((u) => !seen.has(file(u)) && seen.add(file(u))).slice(0, GALLERY_MAX);
+    // The moment's own pictures first; the place's article then shows a few (its churches and forts tell little of it).
+    return [...moment, ...own.slice(0, moment.length ? 3 : GALLERY_MAX), ...more].filter((u) => !seen.has(file(u)) && seen.add(file(u))).slice(0, GALLERY_MAX);
+  }
+
+  /** The people a passage links to (Wikidata humans alive that year), in the order of the text. */
+  private async passagePeople(lang: string, links: string[], year: number): Promise<StoryPerson[]> {
+    const asked = links.slice(0, SECTION_LINKS);
+    const infos = await wikipedia.pagesInfo(lang, asked);
+    // People have no coordinates.
+    const qids = [...new Set([...infos.values()].flatMap((i) => (i.qid && i.lat === null ? [i.qid] : [])))];
+    const hits = await people.peopleByQids(qids);
+    const seen = new Set<string>();
+    return asked.flatMap((l) => {
+      const h = hits.find((x) => x.qid === infos.get(l)?.qid);
+      if (!h || seen.has(h.qid) || /^Q\d+$/.test(h.name) || !aliveIn(h, year)) return [];
+      seen.add(h.qid);
+      return [{ qid: h.qid, name: h.name, role: cap((h.description ?? 'Personnage de l’histoire').slice(0, 60)), born: h.born, died: h.died, image: h.image }];
+    });
   }
 
   private async writeStep(poi: Poi, stored: StoredStory, ask: StepAsk, ctx: ScenarioContext): Promise<StepEntry> {
@@ -856,12 +924,26 @@ export class StoryService {
     const lived = (at >= 0 ? ask.walk.slice(0, at) : ask.walk).flatMap((i) => (story.stops[i] ? [story.stops[i]!] : []));
     const candidates = choiceCandidates(story.stops, ask.stop, ask.walk, hero ? (y) => aliveIn(hero, y, ADULT) : undefined);
     const exclude = new Set([poi.id, ...story.stops.flatMap((x) => (x.poi ? [x.poi.id] : []))]);
-    const [summary, gallery, near] = await Promise.all([
-      wikipedia.pageSummary(lang, s.name).catch(() => null),
-      this.galleryOf(lang, s, poi.wiki_title),
-      this.nearAt(s, exclude),
-    ]);
     const paragraph = stored.notes.paragraphs?.[ask.stop] || (stored.notes.stops[ask.stop] ?? '');
+    // The whole section telling this moment, not only the paragraph linking the place: its people, its pictures, its detailed article.
+    const page = await wikipedia.pageWikitext(lang, poi.wiki_title!).catch(() => null);
+    const section = page ? sectionOf(page.wikitext, stored.notes.sections[ask.stop] ?? null) : null;
+    const passage = (section && passageAround(section.text, paragraph)) || paragraph;
+    const detailedTitle = section?.detailed.find((t) => normalize(t) !== normalize(poi.wiki_title ?? ''));
+    const [summary, gallery, near, met, detailed] = await Promise.all([
+      wikipedia.pageSummary(lang, s.name).catch(() => null),
+      this.galleryOf(lang, s, poi.wiki_title, section?.files ?? []),
+      this.nearAt(s, exclude),
+      this.passagePeople(lang, section?.links ?? [], s.year).catch(() => [] as StoryPerson[]),
+      detailedTitle ? wikipedia.pageText(lang, detailedTitle, DETAILED_CHARS).catch(() => null) : Promise.resolve(null),
+    ]);
+    // Those the passage names first, then the section's, then the story's people of that time; the protagonist always.
+    const all = [...met, ...story.people.filter((p) => p.qid === hero?.qid || aliveIn(p, s.year))]
+      .filter((p, i, a) => a.findIndex((q) => q.qid === p.qid) === i);
+    const inPassage = new Set(namedAll(passage, all));
+    const persons = all.map((p, i) => ({ p, i })).sort((a, b) => Number(inPassage.has(b.i)) - Number(inPassage.has(a.i)) || a.i - b.i)
+      .map((x) => x.p).slice(0, STEP_PEOPLE);
+    const named = new Set(namedAll(passage, persons).map((i) => persons[i]!.qid));
     const note = (i: number) => (stored.notes.stops[i] ?? '').slice(0, NOTE_CHARS);
     const user = [
       `Subject: « ${poi.title} ».`,
@@ -873,38 +955,48 @@ export class StoryService {
       at >= 0 && at === ask.walk.length - 1 ? 'This is the last planned step: the choices may open what comes after.' : '',
       '',
       `This step: year ${s.year} · ${s.label} · ${s.poi?.title ?? s.name}.`,
-      `The article's paragraph about it: « ${paragraph} »`,
+      `The passage of the article « ${poi.wiki_title} » about it: « ${passage} »`,
+      detailed ? `The article detailing that part (« ${detailed.title} »), its start: « ${detailed.text} »` : '',
       summary ? `The place's own article (« ${summary.title} »), summary: « ${summary.extract.slice(0, SUMMARY_CHARS)} »` : '',
       '',
-      story.people.length ? 'People of the story:' : 'People: none listed.',
-      ...story.people.map((p, i) => `P${i}. ${p.name} (${p.born ?? '?'}–${p.died ?? ''}), ${p.role}`),
+      persons.length ? 'People (★: named in the passage):' : 'People: none listed.',
+      ...persons.map((p, i) => `P${i}. ${named.has(p.qid) ? '★ ' : ''}${p.name} (${p.born ?? '?'}–${p.died ?? ''}), ${p.role}`),
       '',
       candidates.length ? 'Places of the story it may lead to next:' : 'No place of the story to lead to.',
       ...candidates.map((i, k) => `C${k}. year ${story.stops[i]!.year} · ${story.stops[i]!.label} · ${story.stops[i]!.poi?.title ?? story.stops[i]!.name} — « ${note(i)} »`),
       near.length ? 'Other subjects close by at the same moment (a choice may leave for one, as a detour):' : '',
       ...near.map((c, k) => `K${k}. ${c.title} (${c.date_start}${c.date_end && c.date_end !== c.date_start ? `–${c.date_end}` : ''}) — a choice toward it names it`),
     ].join('\n');
-    const answer = await this.router.completeJson('write', STEP_SYSTEM, user, (v) => StepAnswer.parse(v), 2600);
+    const answer = await this.router.completeJson('write', STEP_SYSTEM, user, (v) => StepAnswer.parse(v), 3200);
     if (!answer) throw new Error('no AI available');
     const v = answer.value;
+    // Present: those the sources name, never someone only because listed (the first three of the list, every time).
+    const told = new Set(namedAll(`${passage} ${detailed?.text ?? ''}`, persons));
+    const inText = namedAll(v.text, persons);
+    const cast = [...new Set([...v.cast, ...inText])]
+      .filter((c) => persons[c] && aliveIn(persons[c]!, s.year) && (told.has(c) || persons[c]!.qid === hero?.qid))
+      .slice(0, MAX_CAST).map((c) => persons[c]!);
     const seen = new Set<string>();
     return {
       at: Date.now(),
-      text: v.text,
-      cast: [...new Set(v.cast)].filter((c) => story.people[c] && aliveIn(story.people[c]!, s.year)).slice(0, MAX_CAST),
+      text: withoutFiller(v.text),
+      cast,
       choices: v.choices.flatMap((c) => {
         if (!c) return [];
         const stop = c.to.kind === 'C' ? candidates[c.to.i] : undefined;
         const card = c.to.kind === 'K' ? near[c.to.i] : undefined;
+        const person = c.to.kind === 'P' ? persons[c.to.i] : undefined;
         if (card && !namesOverlap(c.label, card.title)) return [];
-        const id = stop !== undefined ? `C${stop}` : card ? `K${card.id}` : null;
+        // Someone met here, other than the protagonist, whom the label names.
+        if (person && (person.qid === hero?.qid || !told.has(c.to.i) || !namesOverlap(c.label, person.name))) return [];
+        const id = stop !== undefined ? `C${stop}` : card ? `K${card.id}` : person ? `P${person.qid}` : null;
         if (!id || seen.has(id)) return [];
         seen.add(id);
-        return [card ? { label: cap(c.label), card } : { label: cap(c.label), stop }];
+        return [card ? { label: cap(c.label), card } : person ? { label: cap(c.label), person } : { label: cap(c.label), stop }];
       }).slice(0, MAX_CHOICES),
       facts: v.facts.slice(0, MAX_FACTS),
       // Word for word, or nothing: a quote the article does not hold is no quote.
-      quote: v.quote && grounded(paragraph, v.quote) ? v.quote : null,
+      quote: v.quote && (grounded(passage, v.quote) || grounded(paragraph, v.quote)) ? v.quote : null,
       gallery,
       near,
     };

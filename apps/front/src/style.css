@@ -539,6 +539,11 @@ body.carnet-open .filters, body.carnet-open .people, body.carnet-open .basemap {
 }
 .film-choice:hover, .film-choice:focus-visible { border-color: var(--gold); background: rgba(217, 164, 65, 0.28); outline: none; }
 .film-choice.on { border-color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
+.film-choice-face {
+  display: inline-grid; place-items: center; width: 20px; height: 20px; margin: -3px 2px -3px -4px; vertical-align: middle; border-radius: 50%;
+  overflow: hidden; background: rgba(255, 255, 255, 0.08); font-family: var(--serif); font-size: 11px; color: var(--gold);
+}
+.film-choice-face img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
 .film-end { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(217, 164, 65, 0.3); }
 .film-end-title { font-size: 12px; color: var(--gold); }
 .film-forks { min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding-left: 12px; border-left: 1px solid var(--panel-border); }

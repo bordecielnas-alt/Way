@@ -3,7 +3,7 @@ import { walkOf, type PersonJourney, type PoiLite, type StoryStop } from '@way/s
 import { grounded } from './links.ts';
 import {
   aliveIn, applyLabels, buildScenarios, contextKey, describeContext, ExtractedScenarios, livedThen,
-  buildPersonWalk, choiceCandidates, detourAsk, ExtractedStep, fillPlan, namesOverlap, nearCards, namedIn, nearMoment, personStops, plausibleYear, stepOf, StoryLabels, textFitsYear, yearOf,
+  buildPersonWalk, choiceCandidates, detourAsk, ExtractedStep, fillPlan, namedAll, namesOverlap, nearCards, namedIn, nearMoment, passageAround, withoutFiller, personStops, plausibleYear, stepOf, StoryLabels, textFitsYear, yearOf,
 } from './story.ts';
 
 describe('story of a card', () => {
@@ -286,5 +286,39 @@ describe('around a step', () => {
     expect(v.facts).toEqual(['11 avril 1912 : escale à Queenstown']);
     expect(v.quote).toBeNull();
     expect(v.choices).toEqual([{ label: 'Rejoindre le Carpathia', to: { kind: 'K', i: 1 } }, { label: 'Rester à bord', to: { kind: 'C', i: 2 } }, null]);
+  });
+});
+
+describe('a step read from its whole passage', () => {
+  it('takes the passage around the step’s paragraph, at sentence bounds', () => {
+    const section = Array.from({ length: 40 }, (_, i) => `Phrase numéro ${i} du récit.`).join(' ');
+    const out = passageAround(section, 'Phrase numéro 30 du récit.', 200);
+    expect(out).toContain('Phrase numéro 30');
+    expect(out.length).toBeLessThanOrEqual(200);
+    expect(out).toMatch(/^Phrase numéro \d+ du récit\.$|^Phrase.*\.$/);
+    expect(passageAround('Court.', 'x', 200)).toBe('Court.');
+  });
+
+  it('finds the people a text names by their surname', () => {
+    const persons = [{ name: 'Edward Smith' }, { name: 'Jack Phillips' }, { name: 'Cyril Evans' }];
+    expect(namedAll('Vous voyez Phillips penché sur le poste, un message d’Evans arrive.', persons)).toEqual([1, 2]);
+  });
+
+  it('reads a choice toward someone present', () => {
+    const v = ExtractedStep.parse({
+      text: 'Vous débarquez à Cobh au petit matin, sous la pluie, avec les derniers passagers qui montent à bord du paquebot.',
+      choices: [{ label: 'Suivre Jack Phillips à la radio', to: 'P1' }],
+    });
+    expect(v.choices).toEqual([{ label: 'Suivre Jack Phillips à la radio', to: { kind: 'P', i: 1 } }]);
+  });
+});
+
+describe('a step without filler', () => {
+  it('drops the sentences that tell nothing, when enough remain', () => {
+    const facts = ['À 18 h 35, le Nomadic accoste.', 'Le commandant Smith donne l’ordre.', 'À 20 h 10, le paquebot appareille.', '274 passagers montent.', 'La mer est calme.'];
+    const text = [facts[0], 'Vous vous demandez ce qui vous attend.', ...facts.slice(1), 'Le cœur battant, vous montez.'].join(' ');
+    expect(withoutFiller(text)).toBe(facts.join(' '));
+    // Too little would remain: kept as written.
+    expect(withoutFiller('Vous rêvez. Le paquebot part.')).toBe('Vous rêvez. Le paquebot part.');
   });
 });
