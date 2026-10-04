@@ -185,6 +185,27 @@ export function mentionsOf(wikitext: string): Mention[] {
   return out;
 }
 
+/** The links of an article's introduction (before its first heading), once each: the words linked and the article. Pure, for tests. */
+export function leadLinks(wikitext: string): { target: string; label: string }[] {
+  const lead = cleanWikitext(wikitext.split(/^==[^=]/m)[0] ?? '');
+  const seen = new Set<string>();
+  const out: { target: string; label: string }[] = [];
+  for (const line of lead.split('\n')) {
+    // The infobox's fields are no sentence of the text.
+    if (/^@@/.test(line.trim())) continue;
+    for (const m of line.matchAll(LINK)) {
+      const target = m[1]!.split('#')[0]!.trim().replace(/_/g, ' ');
+      const label = (m[2] ?? m[1]!).trim();
+      if (!target || NAMESPACE.test(target) || target.startsWith(':') || label.length < 3) continue;
+      const key = target.charAt(0).toUpperCase() + target.slice(1);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ target: key, label });
+    }
+  }
+  return out;
+}
+
 const BEFORE = /(origine|contexte|gen[èe]se|conception|projet|construction|fondation|pr[ée]paration|pr[ée]lude|ant[ée]c[ée]dent|naissance|jeunesse|formation|lancement|armement|essais|background|origin|design|construct|found|prelude|early life|planning|launch)/i;
 const AFTER = /(post[ée]rit[ée]|h[ée]ritage|suites?\b|cons[ée]quence|apr[èe]s|enqu[êe]te|comm[ée]mor|m[ée]moire|m[ée]morial|[ée]pave|d[ée]couverte|hommage|r[ée]percussion|bilan|proc[èe]s|reconstruction|tourisme|r[ée]plique|centenaire|legacy|aftermath|investigation|wreck|memorial|consequence|later|trial|rescap|survivor)/i;
 const BEFORE_FIELDS = /(chantier|constructeur|architecte|commanditaire|propri[ée]taire|armateur|fondateur|builder|architect|owner|lancement|quille)/i;

@@ -3,14 +3,14 @@ import { dirname } from 'node:path';
 import { z } from 'zod';
 import {
   ACTIVITY_LABELS, distanceKm, histToAstro, LENSES, MAX_YEAR, MIN_YEAR, STORY_PHASES, THEME_LABELS, THEMES, toLite,
-  type ActivityKind, type DetourKind, type PersonJourney, type PersonScenarioResponse, type Poi, type PoiLite, type ScenarioContext, type ScenarioWalk,
-  type ScenariosResponse, type Source, type StepResponse, walkOf, type WalkStep, type Story, type StoryPerson, type StoryResponse, type StoryScenario, type StoryStop,
+  type ActivityKind, type Category, type DetourKind, type PersonJourney, type PersonScenarioResponse, type Poi, type PoiLite, type ScenarioContext, type ScenarioWalk,
+  type CardLink, type ScenariosResponse, type Source, type StepChoice, type StepResponse, walkOf, type WalkStep, type Story, type StoryPerson, type StoryResponse, type StoryScenario, type StoryStop,
 } from '@way/shared';
 import { people, wikidata, wikipedia, type DatedRow, type EntityInfo } from '@way/providers';
-import { normalize } from './links.ts';
+import { grounded, normalize } from './links.ts';
 import { buildPois } from './pipeline.ts';
 import type { ProviderRouter } from './router.ts';
-import { bestMention, isPlace, labelOf, type Mention, mentionsOf, phaseOf, rankMentions } from './skeleton.ts';
+import { bestMention, isPlace, labelOf, leadLinks, type Mention, mentionsOf, phaseOf, rankMentions } from './skeleton.ts';
 import type { Store } from './store/types.ts';
 
 // The story of a subject, beyond the five doors, read from the card's
@@ -48,7 +48,25 @@ const MAX_STEPS = 15;
 const MIN_PLAN_STEPS = 8;
 /** A step written on arrival: the places offered for its choices, the choices kept, the texts kept on disk. */
 const STEP_CANDIDATES = 5;
-const MAX_CHOICES = 2;
+const MAX_CHOICES = 3;
+/** Links read in a card's introduction, and the articles whose links are kept. */
+const MAX_LINKS_LEAD = 40;
+const LINKS_KEEP = 300;
+/** Bump when steps are written differently: they are written again. */
+const STEP_VERSION = 5;
+/** A step's facts, pictures, and the cards close by at its moment (years either side, km, how many known cards looked at). */
+const MAX_FACTS = 4;
+const GALLERY_MAX = 6;
+const NEAR_YEARS = 3;
+const NEAR_KM = 300;
+/** Close by at the same moment: events, not towns or institutions; lasting a few years at most. */
+const NEAR_CATEGORIES = new Set<Category>(['battle', 'event', 'disaster', 'discovery', 'exploration']);
+const NEAR_SPAN = 10;
+/** Around the place in Wikidata when few are known, and how long a step waits for them. */
+const NEAR_WIKIDATA_KM = 150;
+const NEAR_WAIT_MS = 9000;
+const NEAR_MAX = 4;
+const NEAR_LOOKUP = 4000;
 const STEPS_KEEP = 6000;
 /** What the step writer reads of the place's own article. */
 const SUMMARY_CHARS = 1200;
@@ -118,10 +136,21 @@ export const ExtractedScenarios = z.object({
   scenarios: z.array(ScenarioItem.nullable().catch(null)).max(6).catch([]),
 });
 export type ScenarioItem = z.infer<typeof ScenarioItem>;
+/** "C2" (a place of the story), "K1" (another card), or 2 (a place). */
+const Target = z.union([z.string(), z.number()]).transform((v, c) => {
+  const m = String(v).trim().match(/^([CK]?)\s*(\d+)$/i);
+  if (!m) {
+    c.addIssue({ code: 'custom', message: 'no target' });
+    return z.NEVER;
+  }
+  return { kind: (m[1]!.toUpperCase() || 'C') as 'C' | 'K', i: Number(m[2]) };
+});
 const StepAnswer = z.object({
-  text: z.string().trim().min(40).max(1600),
+  text: z.string().trim().min(80).max(2800),
   cast: z.array(Index.catch(-1)).max(8).catch([]),
-  choices: z.array(z.object({ label: z.string().trim().min(3).max(90), to: Index }).nullable().catch(null)).max(4).catch([]),
+  facts: z.array(z.string().trim().min(6).max(180).nullable().catch(null)).max(8).catch([]).transform((a) => a.filter((x): x is string => !!x)),
+  quote: z.string().trim().min(20).max(400).nullable().catch(null).default(null),
+  choices: z.array(z.object({ label: z.string().trim().min(3).max(90), to: Target }).nullable().catch(null)).max(5).catch([]),
 });
 export const ExtractedStep = StepAnswer;
 
@@ -140,13 +169,15 @@ Rules, all mandatory:
 Answer with a single JSON object: {"scenarios": [...]}.`;
 
 const STEP_SYSTEM = `You write ONE step of an interactive scenario for a visitor of a historical globe, in someone's shoes, when the visitor gets there.
-You get how the visitor looks at the world (the angle to take), the scenario (title, premise, protagonist, the steps already lived), this step's place and year, the article's paragraph about it, the place's own article summary, the people of the story, and places the story may lead to next (C0, C1...).
+You get how the visitor looks at the world (the angle to take), the scenario (title, premise, protagonist, the steps already lived), this step's place and year, the article's paragraph about it, the place's own article summary, the people of the story, places of the story it may lead to next (C0, C1...), and other subjects close by at the same moment (K0, K1...).
 Write:
-- text: in French, in the second person ("vous"), 4 to 6 sentences: what the protagonist lives at this place in that year, with the concrete facts the paragraph and the summary give (dates, times, numbers, names, decisions, what the place looks like), picking up from the steps already lived; no filler about feelings, no summary of the whole story;
+- text: in French, in the second person ("vous"), 8 to 10 sentences: what the protagonist lives at this place in that year, with the concrete facts the paragraph and the summary give (dates, times, numbers, names, decisions, what the place looks like, sounds, crowds, weather when given), picking up from the steps already lived; no filler about feelings, no summary of the whole story;
+- facts: 3 to ${MAX_FACTS} short facts in French (each under 120 characters, with a date, a time or a number), taken from the paragraph or the summary, e.g. "10 avril 1912, 12 h : départ de Southampton";
+- quote: ONE sentence copied word for word from the article's paragraph (not the summary), the most vivid one; null if none fits;
 - cast: the numbers of the listed people present there at that moment (P0, P1...), at most ${MAX_CAST};
-- choices: 0 to ${MAX_CHOICES} turns the story may take from here, only when the paragraph offers a real alternative: label (French, 3 to 9 words, an action, e.g. "Suivre les rescapés jusqu'à New York", "Rester auprès des ingénieurs"), to = the number of one of the places C0, C1...
+- choices: 0 to ${MAX_CHOICES} turns the story may take from here, when there is a real alternative: label (French, 3 to 9 words, an action, e.g. "Suivre les rescapés jusqu'à New York", "Rejoindre le Carpathia"), to = "C" and the number of a place of the story (it becomes the next step), or "K" and the number of another subject close by (a short detour there, then back).
 Rules, all mandatory: never invent events, dates or deeds the texts do not support (the character may be imagined, the history may not); the step happens in its year; a real person only within their lifetime and roles they held then.
-Answer with a single JSON object: {"text": "...", "cast": [...], "choices": [...]}.`;
+Answer with a single JSON object: {"text": "...", "facts": [...], "quote": "..." or null, "cast": [...], "choices": [{"label": "...", "to": "C0"}]}.`;
 
 const PERSON_SYSTEM = `You write ONE interactive scenario for a visitor of a historical globe: a walk through the life of a REAL person, step by step, in their shoes.
 You get how the visitor looks at the world (with the angle to take), the checked places of that person's life (S0, S1...: from Wikidata, and from the stories of subjects they took part in), and their Wikipedia article.
@@ -404,6 +435,29 @@ export function choiceCandidates(
     .map((x) => x.i);
 }
 
+/**
+ * Known events close to a step, in place and time (`NEAR_KM`, a few years
+ * either side; battles, disasters, discoveries…, not towns or institutions),
+ * the story's own cards left out, the best known first. Pure, for tests.
+ */
+export function nearCards(
+  pois: PoiLite[], at: { lat: number; lon: number; year: number }, exclude: Set<string>, n = NEAR_MAX, km = NEAR_KM,
+): PoiLite[] {
+  const y = histToAstro(at.year);
+  return pois
+    .filter((p) => !exclude.has(p.id) && NEAR_CATEGORIES.has(p.category) && distanceKm(p, at) <= km
+      && (p.date_end ?? p.date_start) - p.date_start <= NEAR_SPAN
+      && histToAstro(p.date_start) <= y + NEAR_YEARS && histToAstro(p.date_end ?? p.date_start) >= y - NEAR_YEARS)
+    .sort((a, b) => b.importance - a.importance)
+    .slice(0, n);
+}
+
+/** A label naming a card: a word of its title (4 letters or more) in it. Pure, for tests. */
+export function namesOverlap(label: string, title: string): boolean {
+  const words = new Set(normalize(label).split(' ').filter((w) => w.length >= 4));
+  return normalize(title.replace(/\([^)]*\)/g, ' ')).split(' ').some((w) => w.length >= 4 && words.has(w));
+}
+
 /** A stop of a card's story as a step to walk, its text to be written. Pure, for tests. */
 export function stepOf(story: Pick<Story, 'stops'>, i: number): WalkStep | null {
   const s = story.stops[i];
@@ -438,7 +492,16 @@ interface Entry { at: number; v: number; story: StoredStory | null }
 interface ScenariosEntry { at: number; v: number; story: number; scenarios: StoryScenario[]; partial?: boolean }
 interface PersonEntry { at: number; v: number; walk: ScenarioWalk | null }
 /** A step's text: `cast` numbers the story's people, `choices` its stops. */
-interface StepEntry { at: number; text: string; cast: number[]; choices: { label: string; stop: number }[] }
+interface StepEntry {
+  at: number;
+  text: string;
+  cast: number[];
+  choices: { label: string; stop?: number; card?: PoiLite }[];
+  facts?: string[];
+  quote?: string | null;
+  gallery?: string[];
+  near?: PoiLite[];
+}
 interface Job { key: string; run: () => Promise<void> }
 
 type Labelled = z.infer<typeof Labels>;
@@ -508,6 +571,8 @@ export class StoryService {
   /** Bones being read (no AI, not queued): one reading per card. */
   private sketching = new Map<string, Promise<void>>();
   private failed = new Map<string, number>();
+  /** The links of cards' introductions, by article (kept while the server runs). */
+  private linkCache = new Map<string, Promise<CardLink[]>>();
   /** Stories whose stops' cards are being made: shown meanwhile without them. */
   private cardsPending = new WeakSet<(DatedRow | null)[]>();
   private saveTimer: NodeJS.Timeout | null = null;
@@ -706,13 +771,15 @@ export class StoryService {
   }
 
   /**
-   * A step's text, written when the visitor gets there: from the article's
-   * paragraph about its place and the place's own summary, following the
-   * steps lived before; with the turns the story may take from there (other
-   * places of the same story, next). Written once per scenario and view, then kept.
+   * A step, written when the visitor gets there: its text from the article's
+   * paragraph about the place and the place's own summary, following the
+   * steps lived before; a few facts and a sentence of the article word for
+   * word; the place's pictures; the cards close by at the same moment; and
+   * the turns the story may take (other places of the story, or another
+   * card as a detour). Written once per scenario and view, then kept.
    */
   async step(poi: Poi, ask: StepAsk, ctx: ScenarioContext): Promise<StepResponse> {
-    const none = (status: StepResponse['status']): StepResponse => ({ status, text: null, cast: [], choices: [] });
+    const none = (status: StepResponse['status']): StepResponse => ({ status, text: null, cast: [], choices: [], facts: [], quote: null, gallery: [], near: [] });
     const storyKey = this.key(poi);
     let hit = this.cache[storyKey];
     if (!hit || hit.v !== STORY_VERSION) {
@@ -722,7 +789,7 @@ export class StoryService {
     }
     const stored = hit.story;
     if (!stored || !stored.stops[ask.stop]) return none('none');
-    const key = `step|${storyKey}|${hit.at}|${normalize(ask.title)}|${ask.stop}|${contextKey(ctx)}`;
+    const key = `step${STEP_VERSION}|${storyKey}|${hit.at}|${normalize(ask.title)}|${ask.stop}|${contextKey(ctx)}`;
     const done = this.stepCache[key];
     if (done) return this.stepOut(stored, done);
     if ((this.failed.get(key) ?? 0) > Date.now()) return none('none');
@@ -742,21 +809,59 @@ export class StoryService {
       status: 'ready',
       text: e.text,
       cast: e.cast.flatMap((c) => (story.people[c] ? [story.people[c]!] : [])),
-      choices: e.choices.flatMap((c) => {
-        const step = stepOf(story, c.stop);
+      choices: e.choices.flatMap((c): StepChoice[] => {
+        if (c.card) return [{ label: c.label, poi: c.card }];
+        const step = c.stop === undefined ? null : stepOf(story, c.stop);
         return step ? [{ label: c.label, step }] : [];
       }),
+      facts: e.facts ?? [],
+      quote: e.quote ? { text: e.quote, source: stored.source } : null,
+      gallery: e.gallery ?? [],
+      near: e.near ?? [],
     };
+  }
+
+  /** Cards close by at a step's moment, from those already known, the best known first. */
+  private async nearAt(s: StoryStop, exclude: Set<string>): Promise<PoiLite[]> {
+    const y = histToAstro(s.year);
+    const known = await this.store.queryTimeRange(y - NEAR_YEARS, y + NEAR_YEARS, NEAR_LOOKUP).catch(() => [] as PoiLite[]);
+    const found = nearCards(known, s, exclude);
+    if (found.length >= 2) return found;
+    // Few known: Wikidata's dated items around the place, made cards, in the time a step allows.
+    const asked = (async () => {
+      const rows = await wikidata.queryAround(s.lat, s.lon, NEAR_WIKIDATA_KM, s.year - NEAR_YEARS, s.year + NEAR_YEARS + 1, 40);
+      await this.store.upsertPois(await buildPois(rows, this.store));
+      return (await this.store.getPoisByQids(rows.map((r) => r.qid))).map(toLite);
+    })().catch(() => [] as PoiLite[]);
+    const late = new Promise<PoiLite[]>((r) => setTimeout(() => r([]), NEAR_WAIT_MS).unref());
+    const more = await Promise.race([asked, late]);
+    return nearCards([...found, ...more.filter((p) => !found.some((f) => f.id === p.id))], s, exclude);
+  }
+
+  /** The pictures of a step: the place's article's, then the subject's when it has few. */
+  private async galleryOf(lang: string, s: StoryStop, subject: string | null): Promise<string[]> {
+    const own = await wikipedia.pageImages(lang, s.name, GALLERY_MAX).catch(() => [] as string[]);
+    const more = own.length < 3 && subject ? await wikipedia.pageImages(lang, subject, GALLERY_MAX).catch(() => [] as string[]) : [];
+    const file = (u: string) => decodeURIComponent(u.split('/').at(-1) ?? u).replace(/^\d+px-/, '');
+    const seen = new Set(s.image ? [file(s.image)] : []);
+    return [...own, ...more].filter((u) => !seen.has(file(u)) && seen.add(file(u))).slice(0, GALLERY_MAX);
   }
 
   private async writeStep(poi: Poi, stored: StoredStory, ask: StepAsk, ctx: ScenarioContext): Promise<StepEntry> {
     const story = await this.resolve(stored);
     const s = story.stops[ask.stop]!;
+    const lang = poi.wiki_lang ?? 'fr';
     const hero = ask.hero ? story.people.find((p) => p.qid === ask.hero) ?? null : null;
     const at = ask.walk.indexOf(ask.stop);
     const lived = (at >= 0 ? ask.walk.slice(0, at) : ask.walk).flatMap((i) => (story.stops[i] ? [story.stops[i]!] : []));
     const candidates = choiceCandidates(story.stops, ask.stop, ask.walk, hero ? (y) => aliveIn(hero, y, ADULT) : undefined);
-    const summary = await wikipedia.pageSummary(poi.wiki_lang ?? 'fr', s.name).catch(() => null);
+    const exclude = new Set([poi.id, ...story.stops.flatMap((x) => (x.poi ? [x.poi.id] : []))]);
+    const [summary, gallery, near] = await Promise.all([
+      wikipedia.pageSummary(lang, s.name).catch(() => null),
+      this.galleryOf(lang, s, poi.wiki_title),
+      this.nearAt(s, exclude),
+    ]);
+    const paragraph = stored.notes.paragraphs?.[ask.stop] || (stored.notes.stops[ask.stop] ?? '');
     const note = (i: number) => (stored.notes.stops[i] ?? '').slice(0, NOTE_CHARS);
     const user = [
       `Subject: « ${poi.title} ».`,
@@ -768,30 +873,87 @@ export class StoryService {
       at >= 0 && at === ask.walk.length - 1 ? 'This is the last planned step: the choices may open what comes after.' : '',
       '',
       `This step: year ${s.year} · ${s.label} · ${s.poi?.title ?? s.name}.`,
-      `The article's paragraph about it: « ${stored.notes.paragraphs?.[ask.stop] || note(ask.stop)} »`,
+      `The article's paragraph about it: « ${paragraph} »`,
       summary ? `The place's own article (« ${summary.title} »), summary: « ${summary.extract.slice(0, SUMMARY_CHARS)} »` : '',
       '',
       story.people.length ? 'People of the story:' : 'People: none listed.',
       ...story.people.map((p, i) => `P${i}. ${p.name} (${p.born ?? '?'}–${p.died ?? ''}), ${p.role}`),
       '',
-      candidates.length ? 'Places the story may lead to next:' : 'No place to lead to: choices = [].',
+      candidates.length ? 'Places of the story it may lead to next:' : 'No place of the story to lead to.',
       ...candidates.map((i, k) => `C${k}. year ${story.stops[i]!.year} · ${story.stops[i]!.label} · ${story.stops[i]!.poi?.title ?? story.stops[i]!.name} — « ${note(i)} »`),
+      near.length ? 'Other subjects close by at the same moment (a choice may leave for one, as a detour):' : '',
+      ...near.map((c, k) => `K${k}. ${c.title} (${c.date_start}${c.date_end && c.date_end !== c.date_start ? `–${c.date_end}` : ''}) — a choice toward it names it`),
     ].join('\n');
-    const answer = await this.router.completeJson('write', STEP_SYSTEM, user, (v) => StepAnswer.parse(v), 1800);
+    const answer = await this.router.completeJson('write', STEP_SYSTEM, user, (v) => StepAnswer.parse(v), 2600);
     if (!answer) throw new Error('no AI available');
     const v = answer.value;
-    const seen = new Set<number>();
+    const seen = new Set<string>();
     return {
       at: Date.now(),
       text: v.text,
       cast: [...new Set(v.cast)].filter((c) => story.people[c] && aliveIn(story.people[c]!, s.year)).slice(0, MAX_CAST),
       choices: v.choices.flatMap((c) => {
-        const stop = c ? candidates[c.to] : undefined;
-        if (!c || stop === undefined || seen.has(stop)) return [];
-        seen.add(stop);
-        return [{ label: cap(c.label), stop }];
+        if (!c) return [];
+        const stop = c.to.kind === 'C' ? candidates[c.to.i] : undefined;
+        const card = c.to.kind === 'K' ? near[c.to.i] : undefined;
+        if (card && !namesOverlap(c.label, card.title)) return [];
+        const id = stop !== undefined ? `C${stop}` : card ? `K${card.id}` : null;
+        if (!id || seen.has(id)) return [];
+        seen.add(id);
+        return [card ? { label: cap(c.label), card } : { label: cap(c.label), stop }];
       }).slice(0, MAX_CHOICES),
+      facts: v.facts.slice(0, MAX_FACTS),
+      // Word for word, or nothing: a quote the article does not hold is no quote.
+      quote: v.quote && grounded(paragraph, v.quote) ? v.quote : null,
+      gallery,
+      near,
     };
+  }
+
+  /**
+   * The links of an article's introduction made something to act on: the
+   * people (Wikidata humans), the cards already known, the places with
+   * coordinates. Read once per article, no AI.
+   */
+  links(lang: string, title: string): Promise<CardLink[]> {
+    const key = `${lang}|${title}`;
+    let run = this.linkCache.get(key);
+    if (!run) {
+      run = this.readLinks(lang, title).catch((e) => {
+        this.linkCache.delete(key);
+        throw e;
+      });
+      this.linkCache.set(key, run);
+      if (this.linkCache.size > LINKS_KEEP) this.linkCache.delete(this.linkCache.keys().next().value!);
+    }
+    return run;
+  }
+
+  private async readLinks(lang: string, title: string): Promise<CardLink[]> {
+    const page = await wikipedia.pageWikitext(lang, title);
+    if (!page) return [];
+    const links = leadLinks(page.wikitext).slice(0, MAX_LINKS_LEAD);
+    const infos = await wikipedia.pagesInfo(lang, links.map((l) => l.target));
+    const qids = [...new Set(links.flatMap((l) => infos.get(l.target)?.qid ?? []))];
+    // People have no coordinates.
+    const placeless = [...new Set([...infos.values()].flatMap((i) => (i.qid && i.lat === null ? [i.qid] : [])))];
+    const [persons, cards] = await Promise.all([
+      people.peopleByQids(placeless).catch(() => []),
+      this.store.getPoisByQids(qids).catch(() => [] as Poi[]),
+    ]);
+    return links.flatMap((l): CardLink[] => {
+      const info = infos.get(l.target);
+      if (!info?.qid) return [];
+      const url = wikipedia.articleUrl(lang, info.title);
+      const h = persons.find((p) => p.qid === info.qid);
+      if (h && !/^Q\d+$/.test(h.name)) {
+        return [{ label: l.label, url, kind: 'person', person: { qid: h.qid, name: h.name, role: h.description ?? '', born: h.born, died: h.died, image: h.image, description: h.description } }];
+      }
+      const card = cards.find((p) => p.wikidata_qid === info.qid);
+      if (card) return [{ label: l.label, url, kind: 'card', poi: toLite(card) }];
+      if (info.lat !== null && info.lon !== null && isPlace(info)) return [{ label: l.label, url, kind: 'place', lat: info.lat, lon: info.lon }];
+      return [];
+    });
   }
 
   /** An invented character's detour through the main stops of a place's story nearest to the year branched from. */

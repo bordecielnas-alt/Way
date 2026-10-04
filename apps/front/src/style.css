@@ -330,8 +330,14 @@ body.card-open .cesium-viewer-bottom { right: 452px; }
 .polity-hint[hidden] { display: none; }
 .polity-head { display: flex; align-items: flex-start; gap: 14px; justify-content: space-between; }
 .polity-emblem { width: 58px; max-height: 72px; object-fit: contain; flex: none; margin-top: 4px; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.5)); }
-.ruler { display: flex; align-items: center; gap: 12px; padding: 8px 10px; margin: 0 -10px; border-radius: 10px; text-decoration: none; color: var(--ink); }
-.ruler:hover { background: rgba(255, 255, 255, 0.04); }
+.ruler {
+  display: flex; align-items: center; gap: 12px; width: calc(100% + 20px); padding: 8px 10px; margin: 0 -10px; border: 0; border-radius: 10px;
+  background: none; color: var(--ink); font: inherit; text-align: left; text-decoration: none; cursor: pointer;
+}
+.ruler:hover, .ruler:focus-visible { background: rgba(255, 255, 255, 0.04); outline: none; }
+.ruler-text { flex: 1; }
+.ruler-more { flex: none; color: var(--muted); font-size: 16px; }
+.ruler:hover .ruler-more { color: var(--gold); }
 .ruler + .ruler { margin-top: 2px; }
 .ruler-portrait {
   width: 46px; height: 46px; flex: none; border-radius: 50%; overflow: hidden; display: grid; place-items: center;
@@ -495,7 +501,7 @@ body.card-open .carnet { right: 452px; }
 body.carnet-open .filters, body.carnet-open .people, body.carnet-open .basemap { visibility: hidden; }
 .film { position: relative; padding: 10px; border-color: rgba(217, 164, 65, 0.45); color: var(--ink); animation: film-in 220ms ease-out; }
 @keyframes film-in { from { opacity: 0; transform: translateY(8px); } }
-.film-main { display: grid; grid-template-columns: 200px minmax(0, 1fr) 230px; gap: 14px; height: 216px; }
+.film-main { display: grid; grid-template-columns: 200px minmax(0, 1fr) 240px; gap: 14px; height: 250px; }
 .film-img {
   position: relative; margin: 0; border-radius: 8px; overflow: hidden;
   background: linear-gradient(135deg, rgba(217, 164, 65, 0.18), rgba(91, 143, 209, 0.12));
@@ -565,7 +571,7 @@ body.carnet-open .filters, body.carnet-open .people, body.carnet-open .basemap {
 .sc-icon:disabled { opacity: 0.35; cursor: default; }
 /* Above the film (or alone): the paths, a place's paths, the tree, the ways on. */
 .film-drawer {
-  position: relative; display: flex; flex-direction: column; min-height: 160px; max-height: calc(100vh - 150px - 290px - 24px);
+  position: relative; display: flex; flex-direction: column; min-height: 160px; max-height: calc(100vh - 150px - 324px - 24px);
   padding: 12px 14px; color: var(--ink); animation: film-in 200ms ease-out;
 }
 .carnet:not(.playing) .film-drawer { align-self: flex-start; width: min(620px, 100%); max-height: calc(100vh - 150px - 90px); }
@@ -720,3 +726,46 @@ body.scenario-on::after {
   .cn-fork { flex-wrap: wrap; }
 }
 
+
+/* ---------- a name to act on: its menu, and the names of a card's text ---------- */
+.entity-menu { position: fixed; z-index: 30; min-width: 220px; max-width: 300px; padding: 6px; display: grid; gap: 2px; animation: film-in 140ms ease-out; }
+.entity-head { display: grid; gap: 1px; padding: 6px 8px 8px; border-bottom: 1px solid var(--panel-border); margin-bottom: 2px; }
+.entity-head b { font-family: var(--serif); font-weight: 500; font-size: 16px; color: var(--ink); }
+.entity-head small { font-size: 11.5px; color: var(--muted); }
+.entity-menu button, .entity-menu a {
+  display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: 0; border-radius: 7px; background: none;
+  color: var(--ink-soft); font: inherit; font-size: 13px; text-align: left; text-decoration: none; cursor: pointer;
+}
+.entity-menu button span, .entity-menu a span { width: 18px; text-align: center; color: var(--gold); }
+.entity-menu button:hover, .entity-menu button:focus-visible, .entity-menu a:hover, .entity-menu a:focus-visible { background: var(--gold-soft); color: var(--ink); outline: none; }
+.entity-menu a { color: var(--info); }
+.card-summary .card-link {
+  display: inline; width: auto; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: none; font: inherit; color: #f1dfb6; text-align: inherit; cursor: pointer;
+  text-decoration: underline; text-decoration-color: rgba(217, 164, 65, 0.8); text-decoration-thickness: 1px; text-underline-offset: 3px;
+}
+.card-summary .card-link.person { text-decoration-style: dotted; }
+.card-summary .card-link:hover, .card-summary .card-link:focus-visible { color: var(--gold); text-decoration-color: var(--gold); outline: none; }
+/* ---------- a step's words, facts, people and pictures ---------- */
+.film-quote { margin: 10px 0 0; padding: 6px 0 6px 12px; border-left: 2px solid var(--gold); font-family: var(--serif); font-style: italic; font-size: 15px; color: var(--ink-soft); }
+.film-quote cite { display: block; margin-top: 3px; font-style: normal; font-family: inherit; font-size: 11px; }
+.film-quote cite a { color: var(--info); text-decoration: none; }
+.film-quote cite a:hover { text-decoration: underline; }
+.film-facts { margin-top: 10px; padding: 8px 12px; border-radius: 8px; background: rgba(217, 164, 65, 0.08); border: 1px solid rgba(217, 164, 65, 0.25); }
+.film-facts-title, .film-who-title { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); }
+.film-facts ul { margin: 4px 0 0; padding-left: 16px; display: grid; gap: 2px; font-size: 13px; color: var(--ink); }
+.film-who { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.film-who-title { margin-right: 4px; }
+.film-person {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; border: 1px solid var(--panel-border); border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03); color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.film-person .cn-fork-mark { width: 26px; height: 26px; font-size: 12px; }
+.film-person:hover, .film-person:focus-visible { border-color: rgba(217, 164, 65, 0.6); outline: none; }
+.film-gallery { display: flex; gap: 6px; margin-top: 10px; overflow-x: auto; padding-bottom: 2px; }
+.film-pic { flex: none; width: 92px; height: 62px; padding: 0; border: 1px solid var(--panel-border); border-radius: 6px; overflow: hidden; background: rgba(255, 255, 255, 0.04); cursor: zoom-in; opacity: 0.75; }
+.film-pic img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.film-pic.on, .film-pic:hover, .film-pic:focus-visible { opacity: 1; border-color: var(--gold); outline: none; }
+.film-choice.away { border-color: rgba(127, 179, 224, 0.55); background: rgba(127, 179, 224, 0.12); }
+.film-near { display: flex; align-items: center; gap: 4px; }
+.film-near .film-door { flex: 1; min-width: 0; }
+.film-forks .film-forks-title + .film-near, .film-forks .film-door + .film-forks-title { margin-top: 6px; }

@@ -2,8 +2,9 @@ import {
   ACTIVITY_LABELS, CATEGORY_LABELS, DOOR_KINDS, type Army, type JourneyStop, type PersonJourney, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
   type PoiLite, type PolityInfo, type PolityRulerInfo, toLite, FLOW_LABELS, type CityRow, type Flow, type FlowDef, type FlowStage,
   STORY_PHASES, STORY_PHASE_LABELS, type Story, type StoryPerson, type StoryResponse, type StoryStop,
-  THEMES, walkOf, type ScenarioContext, type ScenariosResponse, type ScenarioWalk,
+  THEMES, walkOf, type CardLink, type CardLinksResponse, type ScenarioContext, type ScenariosResponse, type ScenarioWalk,
 } from '@way/shared';
+import { placeLinks, type Entity } from './entity.ts';
 import { setActivity } from './activity.ts';
 import { CATEGORY_COLORS } from './icons.ts';
 import { fetchCached } from './localcache.ts';
@@ -18,6 +19,15 @@ const CONFIDENCE: Record<Poi['confidence'], { icon: string; label: string; title
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+/** The Wikipedia article among a card's sources, if any. */
+function wikiOf(sources: { url: string }[]): { lang: string; title: string } | null {
+  for (const s of sources) {
+    const m = /^https:\/\/([a-z]{2,3})\.wikipedia\.org\/wiki\/([^?#]+)/.exec(s.url);
+    if (m) return { lang: m[1]!, title: decodeURIComponent(m[2]!).replace(/_/g, ' ') };
+  }
+  return null;
+}
 
 function coords(lat: number, lon: number): string {
   const f = (v: number, pos: string, neg: string) => `${Math.abs(v).toFixed(2)}° ${v >= 0 ? pos : neg}`;
@@ -36,13 +46,14 @@ function rulerEl(r: PolityRulerInfo): string {
     ? `<img alt="" src="${esc(viaServer(r.image))}" referrerpolicy="no-referrer">`
     : `<span aria-hidden="true">${esc(r.name.slice(0, 1))}</span>`;
   return `
-    <a class="ruler ${r.when}" href="https://www.wikidata.org/wiki/${esc(r.qid)}" target="_blank" rel="noopener">
+    <button type="button" class="ruler ${r.when}" data-ruler="${esc(r.qid)}" title="Suivre, ses chemins, sa vie…" aria-haspopup="menu">
       <span class="ruler-portrait">${portrait}</span>
       <span class="ruler-text">
         <span class="ruler-name">${when}${esc(r.name)}</span>
         <span class="ruler-meta">${esc([r.office, reign(r)].filter(Boolean).join(' · '))}</span>
       </span>
-    </a>`;
+      <span class="ruler-more" aria-hidden="true">⋯</span>
+    </button>`;
 }
 
 const DOOR_ICONS: Record<DoorKind, string> = { cause: '⏪', effect: '⏩', meanwhile: '🌍', time: '🕰️', surprise: '❓' };
@@ -79,6 +90,8 @@ export class Card {
 
   /** A stop of a card's story: the map and the timeline go there; `openCard`: its own card too, when it has one. */
   onStoryStop: (s: StoryStop, openCard: boolean) => void = () => undefined;
+  /** A name to act on (a ruler, a person of the story, a link of the text): its menu opens under it. */
+  onEntity: (anchor: HTMLElement, e: Entity) => void = () => undefined;
   /** The story of the card shown, or null: its places drawn on the globe. */
   onStory: (s: { story: Story; from: PoiLite } | null) => void = () => undefined;
   /** A person of a card's story: followed on the map (Personnages panel). */
@@ -482,7 +495,49 @@ export class Card {
       img.addEventListener('load', () => img.classList.add('loaded'));
       img.addEventListener('error', () => (img.closest('.card-image') ?? img).remove());
     });
+    this.root.querySelectorAll<HTMLButtonElement>('.ruler[data-ruler]').forEach((b) => b.addEventListener('click', () => {
+      const r = p.rulers.find((x) => x.qid === b.dataset.ruler);
+      if (r) this.onEntity(b, { kind: 'person', person: { qid: r.qid, name: r.name, role: r.office ?? '', born: null, died: null, image: r.image } });
+    }));
+    const wiki = wikiOf(p.sources);
+    if (wiki && p.summary) void this.linkSummary(wiki.lang, wiki.title, this.token);
     this.root.querySelector('.card-scroll')!.scrollTop = 0;
+  }
+
+  /**
+   * The names of the card's text, made something to act on: the people, the
+   * cards and the places its Wikipedia introduction links to, each opening
+   * its menu (the article kept in it).
+   */
+  private async linkSummary(lang: string, title: string, token: number): Promise<void> {
+    let links: CardLink[] = [];
+    try {
+      const r = await fetch(`/api/links?${new URLSearchParams({ lang, title })}`);
+      if (r.ok) links = ((await r.json()) as CardLinksResponse).links;
+    } catch {
+      return;
+    }
+    const el = this.root.querySelector<HTMLElement>('.card-summary');
+    if (token !== this.token || !el || !links.length) return;
+    const text = el.textContent ?? '';
+    const found = placeLinks(text, links.map((l) => l.label));
+    if (!found.length) return;
+    let html = '';
+    let at = 0;
+    for (const m of found) {
+      const l = links[m.i]!;
+      html += `${esc(text.slice(at, m.start))}<button type="button" class="card-link ${l.kind}" data-link="${m.i}" aria-haspopup="menu">${esc(text.slice(m.start, m.end))}</button>`;
+      at = m.end;
+    }
+    el.innerHTML = html + esc(text.slice(at));
+    el.querySelectorAll<HTMLButtonElement>('.card-link').forEach((b) => b.addEventListener('click', () => {
+      const l = links[Number(b.dataset.link)]!;
+      const e: Entity | null = l.kind === 'person' && l.person ? { kind: 'person', person: l.person, url: l.url }
+        : l.kind === 'card' && l.poi ? { kind: 'card', poi: l.poi, url: l.url }
+        : l.lat !== undefined && l.lon !== undefined ? { kind: 'place', name: l.label, lat: l.lat, lon: l.lon, url: l.url }
+        : null;
+      if (e) this.onEntity(b, e);
+    }));
   }
 
   close(): void {
@@ -564,6 +619,7 @@ export class Card {
     this.root.querySelector('.card-scroll')!.scrollTop = 0;
     void this.loadDoors(p.id, token);
     void this.loadStory(p.id, token, toLite(p));
+    if (p.wiki_title && p.summary) void this.linkSummary(p.wiki_lang ?? 'fr', p.wiki_title, token);
   }
 
   /**
@@ -645,9 +701,9 @@ export class Card {
       : '';
     const doors = s.stops.filter((st) => st.poi).length;
     const people = s.people.length
-      ? `<div class="story-phase"><div class="story-phase-title">Personnages <span class="story-aside">· cliquer pour suivre sur la carte</span></div>
+      ? `<div class="story-phase"><div class="story-phase-title">Personnages <span class="story-aside">· suivre, ses chemins, sa vie</span></div>
           <div class="story-people">${s.people.map((p, i) => `
-            <button type="button" class="story-person" data-person="${i}" title="Suivre ${esc(p.name)} sur la carte">
+            <button type="button" class="story-person" data-person="${i}" title="Suivre ${esc(p.name)}, ses chemins, sa vie…" aria-haspopup="menu">
               <span class="ruler-portrait">${p.image ? `<img alt="" src="${esc(viaServer(p.image))}" referrerpolicy="no-referrer">` : esc(p.name.charAt(0))}</span>
               <span class="ruler-text"><span class="ruler-name">${esc(p.name)}</span><span class="ruler-meta">${esc([p.role, life(p)].filter(Boolean).join(' · '))}</span></span>
             </button>`).join('')}</div></div>`
@@ -661,7 +717,7 @@ export class Card {
       b.addEventListener('click', () => this.onStoryStop(s.stops[Number(b.dataset.stop)]!, true)),
     );
     body.querySelectorAll<HTMLButtonElement>('.story-person').forEach((b) =>
-      b.addEventListener('click', () => this.onStoryPerson(s.people[Number(b.dataset.person)]!)),
+      b.addEventListener('click', () => this.onEntity(b, { kind: 'person', person: s.people[Number(b.dataset.person)]! })),
     );
     body.querySelectorAll<HTMLImageElement>('.story-person img').forEach((img) => img.addEventListener('error', () => img.remove()));
   }

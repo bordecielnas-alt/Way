@@ -1,4 +1,5 @@
-import { formatYear, type Door, type PoiLite, type ScenarioWalk, type StepChoice, type StoryPerson, type WalkLead } from '@way/shared';
+import { formatYear, type Door, type PoiLite, type ScenarioWalk, type StepChoice, type StepQuote, type StoryPerson, type WalkLead } from '@way/shared';
+import type { Entity } from './entity.ts';
 import { viaServer } from './media.ts';
 
 // The carnet de route, as a film along the bottom of the map: the step
@@ -140,12 +141,17 @@ export interface StepText {
   text: string;
   cast: StoryPerson[];
   choices: StepChoice[];
+  facts: string[];
+  quote: StepQuote | null;
+  gallery: string[];
+  near: PoiLite[];
 }
 
 /** Elsewhere from a step: what happened meanwhile, what led there (the card's doors). */
 export interface StepDoors {
   meanwhile: Door | null;
   cause: Door | null;
+  effect: Door | null;
 }
 
 type Drawer = 'paths' | 'here' | 'tree' | 'suites';
@@ -184,7 +190,9 @@ export class Carnet {
   /** A walk met: remembered for the search bar. */
   onMet: (walk: ScenarioWalk) => void = () => undefined;
   /** A card's doors (meanwhile, what led there), for a step's crossroads. */
-  doorsFor: (poi: PoiLite) => Promise<StepDoors> = async () => ({ meanwhile: null, cause: null });
+  doorsFor: (poi: PoiLite) => Promise<StepDoors> = async () => ({ meanwhile: null, cause: null, effect: null });
+  /** A name to act on (someone present at the step): its menu opens under it. */
+  onEntity: (anchor: HTMLElement, e: Entity) => void = () => undefined;
 
   constructor(private root: HTMLElement, private known: () => ScenarioWalk[]) {
     root.addEventListener('click', (e) => this.click(e));
@@ -335,7 +343,9 @@ export class Carnet {
     const p = this.journal.get(walkId);
     const st = p?.walk.steps[j];
     if (!p || !st) return;
-    p.walk.steps[j] = { ...st, text: t.text, cast: t.cast.length ? t.cast : st.cast, choices: t.choices };
+    p.walk.steps[j] = {
+      ...st, text: t.text, cast: t.cast.length ? t.cast : st.cast, choices: t.choices, facts: t.facts, quote: t.quote, gallery: t.gallery, near: t.near,
+    };
     this.journal.save();
     this.onMet(p.walk);
     if (this.current === walkId && p.step === j) this.render();
@@ -381,14 +391,25 @@ export class Carnet {
     this.show();
   }
 
-  /** A turn taken: its place becomes the next step of the path (once per step). */
+  /**
+   * A turn taken: a place of the story becomes the next step of the path
+   * (once per step); another card opens a short detour there, hung on this step.
+   */
   private choose(k: number): void {
     const p = this.playingPath;
     const st = p?.walk.steps[p.step];
     const c = st?.choices?.[k];
     if (!p || !st || !c) return;
+    if (c.poi) {
+      p.walk.steps[p.step] = { ...st, chosen: k };
+      this.journal.save();
+      this.onLead({ kind: 'place', poi: c.poi }, 'detour', { year: st.year, walk: p.walk });
+      return;
+    }
+    if (!c.step) return;
     const steps = [...p.walk.steps];
-    if (st.chosen !== undefined && steps[p.step + 1]?.stop === st.choices![st.chosen]?.step.stop) steps.splice(p.step + 1, 1);
+    const before = st.chosen !== undefined ? st.choices?.[st.chosen]?.step : undefined;
+    if (before && steps[p.step + 1]?.stop === before.stop) steps.splice(p.step + 1, 1);
     steps[p.step] = { ...st, chosen: k };
     steps.splice(p.step + 1, 0, { ...c.step });
     p.walk = { ...p.walk, steps };
@@ -457,6 +478,35 @@ export class Carnet {
         if (lead && p) this.onLead(lead, b.dataset.how as 'detour' | 'full', { year: p.walk.steps[p.step]!.year, walk: p.walk });
         return;
       }
+      case 'who': {
+        const person = p?.walk.steps[p.step]?.cast[n];
+        if (person) this.onEntity(b, { kind: 'person', person });
+        return;
+      }
+      case 'near': {
+        const st = p?.walk.steps[p.step];
+        const poi = st?.near?.[n];
+        if (p && st && poi) this.onLead({ kind: 'place', poi }, 'detour', { year: st.year, walk: p.walk });
+        return;
+      }
+      case 'near-card': {
+        const poi = p?.walk.steps[p.step]?.near?.[n];
+        if (poi) this.onOpenCard(poi);
+        return;
+      }
+      case 'pic': {
+        const img = this.root.querySelector<HTMLImageElement>('.film-img img');
+        const url = b.dataset.url;
+        if (!url) return;
+        if (img) img.src = url;
+        else {
+          const fig = this.root.querySelector('.film-img');
+          fig?.classList.remove('no-img');
+          fig?.insertAdjacentHTML('afterbegin', `<img alt="" src="${esc(url)}" referrerpolicy="no-referrer">`);
+        }
+        this.root.querySelectorAll('.film-pic').forEach((x) => x.classList.toggle('on', x === b));
+        return;
+      }
       case 'door': {
         const d = this.stepDoors(p)?.[b.dataset.kind as keyof StepDoors];
         if (d) this.onOpenCard(d.poi);
@@ -502,7 +552,7 @@ export class Carnet {
     if (known) return known;
     this.doors.set(poi.id, 'pending');
     void this.doorsFor(poi)
-      .catch(() => ({ meanwhile: null, cause: null }))
+      .catch(() => ({ meanwhile: null, cause: null, effect: null }))
       .then((d) => {
         this.doors.set(poi.id, d);
         const now = this.playingPath;
@@ -554,8 +604,7 @@ export class Carnet {
     const n = w.steps.length;
     const st = w.steps[p.step]!;
     const last = p.step + 1 >= n;
-    const who = w.invented ? 'Personnage inventé' : w.hero ? esc(w.hero.name) : 'Personnage réel';
-    const cast = st.cast.filter((c) => c.qid !== w.hero?.qid).map((c) => c.name);
+    const protagonist = w.invented ? 'Personnage inventé' : w.hero ? esc(w.hero.name) : 'Personnage réel';
     this.leads = stepLeads(w, p.step);
     this.walksShown = [];
     this.afterShown = [];
@@ -566,7 +615,23 @@ export class Carnet {
           <button type="button" class="sc-link" data-act="retry">relancer</button></div>
           <div class="film-text skeleton-lines"><i></i><i></i><i></i></div>`;
     const choices = st.text && st.choices?.length
-      ? `<div class="film-choices">${st.choices.map((c, k) => `<button type="button" class="film-choice${st.chosen === k ? ' on' : ''}" data-act="choice" data-i="${k}" title="${esc(`${c.step.place} · ${formatYear(c.step.year)}`)}">↳ ${esc(c.label)}</button>`).join('')}</div>`
+      ? `<div class="film-choices">${st.choices.map((c, k) => {
+          const where = c.poi ? `Détour : ${c.poi.title}` : c.step ? `${c.step.place} · ${formatYear(c.step.year)}` : '';
+          return `<button type="button" class="film-choice${st.chosen === k ? ' on' : ''}${c.poi ? ' away' : ''}" data-act="choice" data-i="${k}" title="${esc(where)}">${c.poi ? '⤴' : '↳'} ${esc(c.label)}</button>`;
+        }).join('')}</div>`
+      : '';
+    const quote = st.quote
+      ? `<blockquote class="film-quote">« ${esc(st.quote.text)} »<cite><a href="${esc(st.quote.source.url)}" target="_blank" rel="noopener">${esc(st.quote.source.title)}</a></cite></blockquote>`
+      : '';
+    const facts = st.facts?.length
+      ? `<aside class="film-facts"><div class="film-facts-title">Autour de vous</div><ul>${st.facts.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></aside>`
+      : '';
+    const who = st.text && st.cast.length
+      ? `<div class="film-who"><span class="film-who-title">Qui est là</span>${st.cast.map((c, k) => `<button type="button" class="film-person" data-act="who" data-i="${k}" title="${esc(`${c.name} · ${c.role}`)}" aria-haspopup="menu">
+          <span class="cn-fork-mark">${c.image ? `<img alt="" src="${esc(viaServer(c.image))}" referrerpolicy="no-referrer">` : esc(c.name.charAt(0))}</span><span>${esc(c.name)}</span></button>`).join('')}</div>`
+      : '';
+    const pictures = st.gallery?.length
+      ? `<div class="film-gallery">${[...(st.image ? [st.image] : []), ...st.gallery].map((u, k) => `<button type="button" class="film-pic${k === 0 ? ' on' : ''}" data-act="pic" data-url="${esc(viaServer(u))}" aria-label="Image ${k + 1}"><img alt="" src="${esc(viaServer(u))}" referrerpolicy="no-referrer" loading="lazy"></button>`).join('')}</div>`
       : '';
     const parent = p.parent && this.journal.get(p.parent.id);
     const end = last
@@ -592,7 +657,7 @@ export class Carnet {
           </figure>
           <div class="film-body">
             <header class="film-head">
-              <span class="film-kicker"><span class="sc-live" aria-hidden="true"></span>${who} · <b>${esc(w.title)}</b>${p.kind !== 'trunk' ? ` · <span class="cn-kind">${KIND_LABELS[p.kind]}</span>` : ''}</span>
+              <span class="film-kicker"><span class="sc-live" aria-hidden="true"></span>${protagonist} · <b>${esc(w.title)}</b>${p.kind !== 'trunk' ? ` · <span class="cn-kind">${KIND_LABELS[p.kind]}</span>` : ''}</span>
               <span class="film-acts">
                 <button type="button" class="sc-btn${this.drawer === 'paths' ? ' on' : ''}" data-act="drawer" data-view="paths" title="Mes chemins">🎭 <span class="cn-count">${this.journal.list().length}</span></button>
                 <button type="button" class="sc-btn${this.drawer === 'tree' ? ' on' : ''}" data-act="drawer" data-view="tree" title="L’arbre des chemins explorés">🌳</button>
@@ -605,8 +670,11 @@ export class Carnet {
             <div class="film-scroll">
               ${p.step === 0 ? `<p class="film-premise">${esc(w.premise)}</p>` : ''}
               ${text}
-              ${cast.length ? `<div class="sc-step-cast">Avec ${esc(cast.join(', '))}</div>` : ''}
               ${choices}
+              ${quote}
+              ${facts}
+              ${who}
+              ${pictures}
               ${end}
             </div>
             ${note}
@@ -650,8 +718,15 @@ export class Carnet {
       const d = doors?.[kind];
       return d ? `<button type="button" class="film-door" data-act="door" data-kind="${kind}" title="${esc(d.hint)}"><span>${icon}</span><span><b>${esc(d.poi.title)}</b><small>${label}</small></span></button>` : '';
     };
-    const rows = `${people}${place}${door('meanwhile', '🌍', 'pendant ce temps')}${door('cause', '⏪', 'ce qui a mené ici')}`;
-    return rows ? `<aside class="film-forks"><div class="film-forks-title">Carrefours</div>${rows}</aside>` : '';
+    const st = p.walk.steps[p.step]!;
+    const near = (st.near ?? []).map((c, k) => `<div class="film-near">
+        <button type="button" class="film-door" data-act="near" data-i="${k}" title="Un détour par « ${esc(c.title)} », puis retour ici"><span>⤴</span><span><b>${esc(c.title)}</b><small>${esc(formatYear(c.date_start))} · détour</small></span></button>
+        <button type="button" class="sc-icon" data-act="near-card" data-i="${k}" title="Sa fiche" aria-label="Sa fiche">📄</button>
+      </div>`).join('');
+    const rows = `${people}${place}${door('cause', '⏪', 'ce qui a mené ici')}${door('effect', '⏩', 'ce que ça a causé')}${door('meanwhile', '🌍', 'pendant ce temps')}`;
+    return rows || near
+      ? `<aside class="film-forks"><div class="film-forks-title">Carrefours</div>${rows}${near ? `<div class="film-forks-title">Tout près, au même moment</div>${near}` : ''}</aside>`
+      : '';
   }
 
   private drawerView(d: Drawer, p: Path | null): string {

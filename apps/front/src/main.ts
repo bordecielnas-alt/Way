@@ -28,6 +28,7 @@ import { PeopleLayer, type Picked } from './people.ts';
 import { Carnet, ScenarioLibrary, type Here, type LeadFrom, type StepDoors } from './scenario.ts';
 import { SearchBox } from './search.ts';
 import { StoryLayer } from './storymap.ts';
+import { EntityMenu } from './entity.ts';
 import { fetchCached } from './localcache.ts';
 import { loadUiSettings, playSound } from './sounds.ts';
 import { Timeline, type TimeWindow } from './timeline.ts';
@@ -427,13 +428,29 @@ carnet.onOpenCard = (poi) => {
   void card.open(poi.id);
 };
 carnet.onNeedText = (walk, j) => void writeStep(walk, j);
+
+// A name to act on, wherever it shows (a ruler, a person of a story, a link of a card's text, someone at a step).
+const entities = new EntityMenu();
+entities.onFollow = (p) => {
+  elsewhere();
+  playSound('person');
+  people.follow({ qid: p.qid, name: p.name, description: p.role, born: p.born, died: p.died, image: p.image });
+};
+entities.onPersonPaths = (p) => carnet.showHere(personHere(p));
+entities.onLife = (p) => void lifeScenario(p, !!carnet.playing && !carnet.isPaused);
+entities.onOpenCard = (poi) => carnet.onOpenCard(poi);
+entities.onPlacePaths = (poi) => void placePaths(poi);
+entities.onFlyTo = (lat, lon) => flyToVisible(lat, lon, 600_000);
+card.onEntity = (el, e) => entities.show(el, e);
+carnet.onEntity = (el, e) => entities.show(el, e);
 carnet.doorsFor = (poi) => doorsOf(poi);
 carnet.onLead = (lead, how, at) => {
   if (lead.kind === 'person') {
     if (how === 'full') void lifeScenario(lead.person, true);
     else void detour('person', lead.person.qid, lead.person.name, at);
   } else if (how === 'full') void placePaths(lead.poi);
-  else void detour('card', lead.poi.id, lead.poi.title, at);
+  // A card too thin for a detour: its card opens beside the film instead.
+  else void detour('card', lead.poi.id, lead.poi.title, at, () => carnet.onOpenCard(lead.poi));
 };
 
 /** Clicked elsewhere on the globe (a point, a territory, a person…): the path played waits, the carnet folds. */
@@ -447,7 +464,7 @@ let writeToken = 0;
 const of = (name: string) => (/^[aeiouyàâéèêëîïôöùûü]/i.test(name) ? `d’${name}` : `de ${name}`);
 
 /** A walk written by an AI (a life, a detour): polled while it is, then played. */
-async function writeWalk(url: string, note: string, fail: string, play: (w: ScenarioWalk) => void): Promise<void> {
+async function writeWalk(url: string, note: string, fail: string, play: (w: ScenarioWalk) => void, instead?: () => void): Promise<void> {
   if (!filters.scenarios) return;
   const token = ++writeToken;
   const key = `walk:${token}`;
@@ -471,6 +488,7 @@ async function writeWalk(url: string, note: string, fail: string, play: (w: Scen
       }
       if (res.status !== 'pending' || performance.now() - started > SCENARIO_WAIT_MS) {
         carnet.setNote(res.status === 'no-ai' ? 'Aucune IA disponible pour écrire ce chemin pour le moment.' : fail);
+        instead?.();
         window.setTimeout(() => token === writeToken && carnet.setNote(null), 6000);
         return;
       }
@@ -517,11 +535,11 @@ async function writeStep(walk: ScenarioWalk, j: number): Promise<void> {
         if (!r.ok) throw new Error(String(r.status));
         res = (await r.json()) as StepResponse;
       } catch {
-        res = { status: 'none', text: null, cast: [], choices: [] };
+        res = { status: 'none', text: null, cast: [], choices: [], facts: [], quote: null, gallery: [], near: [] };
       }
       if (token !== stepToken) return;
       if (res.text) {
-        carnet.setStepText(walk.id, j, { text: res.text, cast: res.cast, choices: res.choices });
+        carnet.setStepText(walk.id, j, { text: res.text, cast: res.cast, choices: res.choices, facts: res.facts, quote: res.quote, gallery: res.gallery, near: res.near });
         // The next step, written while this one is read.
         const next = stepUrl(carnet.playing?.walk ?? walk, j + 1, true);
         if (next && !walk.steps[j + 1]?.text) void fetch(next).catch(() => undefined);
@@ -549,9 +567,9 @@ function doorsOf(poi: PoiLite): Promise<StepDoors> {
     const started = performance.now();
     for (;;) {
       const r = await fetch(`/api/poi/${encodeURIComponent(poi.id)}/doors`).then((x) => (x.ok ? (x.json() as Promise<DoorsResponse>) : null)).catch(() => null);
-      const pick = (k: 'meanwhile' | 'cause') => r?.doors.find((d) => d.kind === k) ?? null;
-      const settled = !r || (!r.pending.includes('meanwhile') && !r.pending.includes('cause'));
-      if (settled || performance.now() - started > 30_000) return { meanwhile: pick('meanwhile'), cause: pick('cause') };
+      const pick = (k: 'meanwhile' | 'cause' | 'effect') => r?.doors.find((d) => d.kind === k) ?? null;
+      const settled = !r || !r.pending.some((k) => k === 'meanwhile' || k === 'cause' || k === 'effect');
+      if (settled || performance.now() - started > 30_000) return { meanwhile: pick('meanwhile'), cause: pick('cause'), effect: pick('effect') };
       await new Promise((x) => setTimeout(x, 2000));
     }
   })();
@@ -570,7 +588,7 @@ function lifeScenario(h: { qid: string; name: string }, branch: boolean): Promis
 }
 
 /** A short detour off the path played: a person's moments, or a place's story, around the step's year. */
-function detour(kind: DetourKind, id: string, name: string, at: LeadFrom): Promise<void> {
+function detour(kind: DetourKind, id: string, name: string, at: LeadFrom, instead?: () => void): Promise<void> {
   const year = at.year;
   const params = viewParams();
   params.set('kind', kind);
@@ -582,8 +600,9 @@ function detour(kind: DetourKind, id: string, name: string, at: LeadFrom): Promi
   return writeWalk(
     `/api/detour?${params}`,
     kind === 'person' ? `L’IA écrit un détour avec ${name} autour de ${formatYear(Math.round(year))}…` : `L’IA écrit un détour par ${name} autour de ${formatYear(Math.round(year))}…`,
-    kind === 'person' ? `Pas assez de moments connus ${of(name)} autour de cette date pour un détour.` : `Pas assez de lieux dans l’histoire de « ${name} » autour de cette date pour un détour.`,
+    kind === 'person' ? `Pas assez de moments connus ${of(name)} autour de cette date pour un détour.` : `Pas assez de lieux autour de cette date pour un détour par « ${name} » : voici sa fiche.`,
     (w) => carnet.play(w, 0, 'detour'),
+    instead,
   );
 }
 

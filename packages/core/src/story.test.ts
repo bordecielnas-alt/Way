@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { walkOf, type PersonJourney, type StoryStop } from '@way/shared';
+import { walkOf, type PersonJourney, type PoiLite, type StoryStop } from '@way/shared';
 import { grounded } from './links.ts';
 import {
   aliveIn, applyLabels, buildScenarios, contextKey, describeContext, ExtractedScenarios, livedThen,
-  buildPersonWalk, choiceCandidates, detourAsk, ExtractedStep, fillPlan, namedIn, nearMoment, personStops, plausibleYear, stepOf, StoryLabels, textFitsYear, yearOf,
+  buildPersonWalk, choiceCandidates, detourAsk, ExtractedStep, fillPlan, namesOverlap, nearCards, namedIn, nearMoment, personStops, plausibleYear, stepOf, StoryLabels, textFitsYear, yearOf,
 } from './story.ts';
 
 describe('story of a card', () => {
@@ -248,7 +248,7 @@ describe('steps written on arrival', () => {
   it('tolerates a malformed step answer', () => {
     const v = ExtractedStep.parse({ text: 'Vous débarquez à Cobh au petit matin, sous la pluie, avec les derniers passagers.', cast: ['P1', 'x'], choices: [{ label: 'Suivre les émigrants', to: 'C0' }, { to: 2 }] });
     expect(v.cast).toEqual([1, 0]);
-    expect(v.choices).toEqual([{ label: 'Suivre les émigrants', to: 0 }, null]);
+    expect(v.choices).toEqual([{ label: 'Suivre les émigrants', to: { kind: 'C', i: 0 } }, null]);
   });
 });
 
@@ -259,5 +259,32 @@ describe('plans filled to the story', () => {
     expect(fillPlan(plan, stops, [], 4).steps.map((s) => s.stop)).toEqual([1, 3, 4]);
     // Long enough: untouched.
     expect(fillPlan(plan, stops, [], 2)).toBe(plan);
+  });
+});
+
+describe('around a step', () => {
+  const card = (id: string, lat: number, lon: number, start: number, importance: number, end: number | null = null) =>
+    ({ id, title: id, category: 'battle', date_start: start, date_end: end, date_precision: 'exact_year', lat, lon, importance, confidence: 'verified', tags: [] }) as unknown as PoiLite;
+
+  it('finds the known cards close by in place and time, the best known first, the story’s own left out', () => {
+    const at = { lat: 49.6, lon: -1.6, year: 1912 };
+    const town = { ...card('ville', 49.6, -1.6, 1911, 0.95), category: 'city' } as PoiLite;
+    const pois = [card('loin', 40, -74, 1912, 0.9), card('tard', 49.5, -1.5, 1950, 0.9), card('a', 49.4, -1.2, 1910, 0.4), card('b', 50.9, -1.4, 1909, 0.8, 1914),
+      card('long', 49.5, -1.4, 1880, 0.7, 1960), town, card('own', 49.6, -1.6, 1912, 1)];
+    // Events only (not a town), lasting a few years at most.
+    expect(nearCards(pois, at, new Set(['own'])).map((p) => p.id)).toEqual(['b', 'a']);
+    expect(namesOverlap('Rejoindre le Carpathia', 'RMS Carpathia')).toBe(true);
+    expect(namesOverlap('Explorer Cherbourg', 'Huddersfield Town Football Club')).toBe(false);
+  });
+
+  it('reads a step answer: facts, a quote, choices to a place of the story or another card', () => {
+    const v = ExtractedStep.parse({
+      text: 'Vous débarquez à Cobh au petit matin, sous la pluie, avec les derniers passagers qui montent à bord du paquebot.',
+      facts: ['11 avril 1912 : escale à Queenstown', 3], quote: 'court',
+      choices: [{ label: 'Rejoindre le Carpathia', to: 'K1' }, { label: 'Rester à bord', to: 2 }, { label: 'Nulle part', to: 'X' }],
+    });
+    expect(v.facts).toEqual(['11 avril 1912 : escale à Queenstown']);
+    expect(v.quote).toBeNull();
+    expect(v.choices).toEqual([{ label: 'Rejoindre le Carpathia', to: { kind: 'K', i: 1 } }, { label: 'Rester à bord', to: { kind: 'C', i: 2 } }, null]);
   });
 });

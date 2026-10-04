@@ -433,6 +433,18 @@ app.get('/api/step', async (req, reply) => {
   }, scenarioContext(q.data));
 });
 
+// The links of a card's introduction, made something to act on (a person, a card, a place).
+app.get('/api/links', async (req, reply) => {
+  const q = z.object({ lang: z.string().regex(/^[a-z]{2,3}$/).default('fr'), title: z.string().trim().min(1).max(300) }).safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: 'requête invalide' });
+  try {
+    return { links: await stories.links(q.data.lang, q.data.title) };
+  } catch (e) {
+    req.log.warn(`links ${q.data.title} failed: ${(e as Error).message}`);
+    return { links: [] };
+  }
+});
+
 // Armies of the wars fought during a decade (first year, a multiple of 10).
 app.get('/api/armies', async (req, reply) => {
   const q = z.object({ decade: z.coerce.number().int().min(-3000).max(2030).refine((d) => d % 10 === 0) }).safeParse(req.query);
