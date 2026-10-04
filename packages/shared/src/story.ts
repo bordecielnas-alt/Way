@@ -1,5 +1,6 @@
 import type { PoiLite, Source } from './poi.ts';
 import type { Theme } from './themes.ts';
+import { formatDay, formatYear } from './years.ts';
 
 // The story of a subject (brief §4.5, beyond the five doors): an AI reads the
 // card's Wikipedia article for the places and moments of its story (where
@@ -28,6 +29,8 @@ export interface StoryStop {
   label: string;
   /** Year of that moment of the story (not the place's own date). */
   year: number;
+  /** The day of that moment, as a decimal year, when its sentence gives it ("10 avril 1912"). */
+  when?: number | null;
   lat: number;
   lon: number;
   /** The Wikidata item as a card, when it has one fitting the story. */
@@ -54,13 +57,29 @@ export interface StoryScenario {
   premise: string;
   /**
    * Index in `stops`, what happens there for that character, and the key
-   * people present (indexes in `people`), placed on the map at that step.
+   * people present (indexes in `people`), placed on the map at that step;
+   * `beat`: what is at stake for the character there, in a line.
    */
-  steps: { stop: number; text: string; cast: number[] }[];
+  steps: { stop: number; text: string; cast: number[]; beat?: string }[];
   /** Index in `people` when the scenario follows one of them. */
   person: number | null;
   /** An invented character (a typical person of the time), not a real one. */
   invented: boolean;
+  /** Turning points planned with the walk: where the story could go another way. */
+  forks?: ScenarioFork[];
+}
+
+/**
+ * Another way the story could go from a step (`at`, a stop of the walk):
+ * through other stops, in the same shoes or in those of someone met there.
+ */
+export interface ScenarioFork {
+  at: number;
+  /** An action, e.g. "Monter dans le canot 6 avec Molly Brown". */
+  label: string;
+  /** Index in `people` when the fork follows someone else from there. */
+  person: number | null;
+  stops: number[];
 }
 
 export interface Story {
@@ -108,10 +127,14 @@ export interface WalkStep {
   /** Its part in the story, e.g. "Port de départ". */
   label: string;
   year: number;
+  /** The day, as a decimal year, when the story gives it. */
+  when?: number | null;
   lat: number;
   lon: number;
   /** The place's card, when it has one. */
   poi: PoiLite | null;
+  /** What is at stake for the character there, in a line (planned with the walk). */
+  beat?: string;
   /** What the character lives there; empty until written, when the visitor gets there. */
   text: string;
   cast: StoryPerson[];
@@ -119,8 +142,12 @@ export interface WalkStep {
   stop?: number;
   /** The place's picture. */
   image?: string | null;
-  /** Where the story may lead from here, offered once its text is written. */
+  /** Short detours from here (a place of the story, someone met, a card close by), offered once its text is written. */
   choices?: StepChoice[];
+  /** The way on along the planned route, as an action ("Appareiller pour Cherbourg"), once written. */
+  next?: string | null;
+  /** Other ways the story may go from here, planned with the walk. */
+  forks?: WalkFork[];
   /** The choice taken here, if any. */
   chosen?: number;
   /** "Autour de vous": a few dated, numbered facts of the article. */
@@ -131,6 +158,14 @@ export interface WalkStep {
   gallery?: string[];
   /** Other cards close by, at the same moment: short detours. */
   near?: PoiLite[];
+}
+
+/** A turning point of a walk: its own steps, in the same shoes or someone else's. */
+export interface WalkFork {
+  label: string;
+  /** Whom it follows from there, when someone else. */
+  hero: StoryPerson | null;
+  steps: WalkStep[];
 }
 
 export interface StepQuote {
@@ -156,6 +191,8 @@ export interface StepResponse {
   /** The people present, as the writer placed them. */
   cast: StoryPerson[];
   choices: StepChoice[];
+  /** The way on along the planned route, as an action. */
+  next: string | null;
   facts: string[];
   quote: StepQuote | null;
   gallery: string[];
@@ -199,6 +236,10 @@ export interface ScenarioWalk {
   from: PoiLite | null;
   /** What the story led to, beyond the walk: cards to go on from at its end. */
   after?: WalkLead[];
+  /** A fork's walk: the stops lived before it (on the walk it leaves), for the writer. */
+  prelude?: number[];
+  /** A fork's walk: the turns taken before it, oldest first, for the writer. */
+  decisions?: string[];
 }
 
 /** A card the story leads to after the walk (an inquiry, a law, a war). */
@@ -211,7 +252,23 @@ export interface WalkLead {
 /** Leads at most offered at the end of a walk. */
 const MAX_AFTER = 3;
 
-/** A card's scenario as a walk: its stops and people written out. Pure, for tests. */
+/** "10 avr. 1912" when the day is known, else "1912". */
+export function formatWhen(s: { year: number; when?: number | null }): string {
+  return s.when != null ? formatDay(s.when) : formatYear(s.year);
+}
+
+/** A stop of a card's story as a step of a walk. */
+function stepAt(story: Story, stop: number, extra: { text?: string; cast?: number[]; beat?: string } = {}): WalkStep | null {
+  const s = story.stops[stop];
+  if (!s) return null;
+  return {
+    place: s.poi?.title ?? s.name, label: s.label, year: s.year, when: s.when ?? null, lat: s.lat, lon: s.lon, poi: s.poi,
+    text: extra.text ?? '', cast: (extra.cast ?? []).flatMap((c) => (story.people[c] ? [story.people[c]!] : [])), stop, image: s.image ?? null,
+    ...(extra.beat ? { beat: extra.beat } : {}),
+  };
+}
+
+/** A card's scenario as a walk: its stops and people written out, its turning points hung on their steps. Pure, for tests. */
 export function walkOf(from: PoiLite, story: Story, sc: StoryScenario): ScenarioWalk {
   const hero = sc.person !== null ? story.people[sc.person] ?? null : null;
   // Cards the walk already goes through are no leads (a port may be two stops of the story).
@@ -221,6 +278,16 @@ export function walkOf(from: PoiLite, story: Story, sc: StoryScenario): Scenario
     seen.add(s.poi.id);
     return [{ label: s.label, year: s.year, poi: s.poi }];
   }).slice(0, MAX_AFTER);
+  const steps = sc.steps.flatMap((st) => {
+    const step = stepAt(story, st.stop, st);
+    if (!step) return [];
+    const forks = (sc.forks ?? []).flatMap((f): WalkFork[] => {
+      if (f.at !== st.stop) return [];
+      const fs = f.stops.flatMap((i) => stepAt(story, i) ?? []);
+      return fs.length ? [{ label: f.label, hero: f.person !== null ? story.people[f.person] ?? null : null, steps: fs }] : [];
+    });
+    return [forks.length ? { ...step, forks } : step];
+  });
   return {
     after,
     id: `${from.id}|${sc.title}`,
@@ -230,14 +297,34 @@ export function walkOf(from: PoiLite, story: Story, sc: StoryScenario): Scenario
     hero,
     from,
     source: story.source,
-    steps: sc.steps.flatMap((st) => {
-      const s = story.stops[st.stop];
-      if (!s) return [];
-      return [{
-        place: s.poi?.title ?? s.name, label: s.label, year: s.year, lat: s.lat, lon: s.lon, poi: s.poi, text: st.text,
-        cast: st.cast.flatMap((c) => (story.people[c] ? [story.people[c]!] : [])), stop: st.stop, image: s.image ?? null,
-      }];
-    }),
+    steps,
+  };
+}
+
+/**
+ * A turning point taken: a walk of its own, hung on the step it leaves,
+ * remembering what was lived before it (for the writer). Pure, for tests.
+ */
+export function forkWalk(walk: ScenarioWalk, at: number, k: number): ScenarioWalk | null {
+  const st = walk.steps[at];
+  const f = st?.forks?.[k];
+  if (!st || !f) return null;
+  const before = walk.steps.slice(0, at + 1);
+  const chosen = before.flatMap((s) => (s.chosen !== undefined && s.choices?.[s.chosen] ? [s.choices[s.chosen]!.label] : []));
+  const hero = f.hero ?? (walk.invented ? null : walk.hero);
+  const role = f.hero?.role ? `, ${f.hero.role.charAt(0).toLowerCase()}${f.hero.role.slice(1)}` : '';
+  return {
+    id: `${walk.id}|bifurcation|${at}|${k}`,
+    title: f.label,
+    premise: f.hero ? `Vous suivez désormais ${f.hero.name}${role}.` : walk.premise,
+    invented: f.hero ? false : walk.invented,
+    hero,
+    from: walk.from,
+    source: walk.source,
+    after: walk.after,
+    prelude: [...(walk.prelude ?? []), ...before.flatMap((s) => (s.stop === undefined ? [] : [s.stop]))],
+    decisions: [...(walk.decisions ?? []), ...chosen, f.label].slice(-6),
+    steps: f.steps.map((s) => ({ ...s, cast: f.hero && !s.cast.some((c) => c.qid === f.hero!.qid) ? [f.hero, ...s.cast] : s.cast })),
   };
 }
 

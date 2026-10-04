@@ -433,16 +433,28 @@ const StepQuery = ScenariosQuery.extend({
   stop: z.coerce.number().int().min(0).max(500),
   /** The walk's stops in order, e.g. "3,5,8". */
   walk: z.string().regex(/^\d+(,\d+)*$/).max(400),
+  /** What is at stake there, as planned. */
+  beat: z.string().trim().max(120).optional(),
+  /** The turns taken so far, oldest first. */
+  chose: z.union([z.string().max(120), z.array(z.string().max(120)).max(8)]).optional(),
+  /** Turning points offered there: "stop:label". */
+  fork: z.union([z.string().max(140), z.array(z.string().max(140)).max(4)]).optional(),
   prefetch: z.enum(['0', '1']).default('0'),
 });
+const many = (v: string | string[] | undefined) => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
 app.get('/api/step', async (req, reply) => {
   const q = StepQuery.safeParse(req.query);
   if (!q.success) return reply.code(400).send({ error: q.error.issues });
   const poi = await store.getPoi(q.data.card);
   if (!poi) return reply.code(404).send({ error: 'not found' });
   const { title, premise, hero, invented, stop, walk, prefetch } = q.data;
+  const forks = many(q.data.fork).flatMap((f) => {
+    const m = /^(\d+):(.+)$/.exec(f);
+    return m ? [{ stop: Number(m[1]), label: m[2]!.trim() }] : [];
+  });
   return stories.step(poi, {
     title, premise, hero: hero ?? null, invented: invented === '1', stop, walk: walk.split(',').map(Number), prefetch: prefetch === '1',
+    beat: q.data.beat || null, decisions: many(q.data.chose).slice(-6), forks,
   }, scenarioContext(q.data));
 });
 

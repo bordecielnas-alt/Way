@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { walkOf, type PersonJourney, type PoiLite, type StoryStop } from '@way/shared';
+import { dateToDecimal, forkWalk, walkOf, type PersonJourney, type PoiLite, type StoryStop } from '@way/shared';
 import { grounded } from './links.ts';
 import {
-  aliveIn, applyLabels, buildScenarios, contextKey, describeContext, ExtractedScenarios, livedThen,
+  aliveIn, applyLabels, buildForks, buildScenarios, dayOf, orderSteps, stepKey, contextKey, describeContext, ExtractedScenarios, livedThen,
   buildPersonWalk, choiceCandidates, detourAsk, ExtractedStep, fillPlan, namedAll, namesOverlap, nearCards, namedIn, nearMoment, passageAround, withoutFiller, personStops, plausibleYear, stepOf, StoryLabels, textFitsYear, yearOf,
 } from './story.ts';
 
@@ -241,7 +241,7 @@ describe('steps written on arrival', () => {
 
   it('turns a stop of the story into a step to walk, its text to be written', () => {
     const story = { stops: [{ phase: 'during' as const, name: 'Cobh', label: 'Escale', year: 1912, lat: 51.8, lon: -8.3, poi: null, image: 'u.jpg' }] };
-    expect(stepOf(story, 0)).toEqual({ place: 'Cobh', label: 'Escale', year: 1912, lat: 51.8, lon: -8.3, poi: null, text: '', cast: [], stop: 0, image: 'u.jpg' });
+    expect(stepOf(story, 0)).toEqual({ place: 'Cobh', label: 'Escale', year: 1912, when: null, lat: 51.8, lon: -8.3, poi: null, text: '', cast: [], stop: 0, image: 'u.jpg' });
     expect(stepOf(story, 3)).toBeNull();
   });
 
@@ -255,8 +255,11 @@ describe('steps written on arrival', () => {
 describe('plans filled to the story', () => {
   it('adds the main stops between a short plan’s first and last moments, in the story’s order', () => {
     const stops = [{ year: 1907 }, { year: 1912 }, { year: 1912, main: false }, { year: 1912 }, { year: 1912 }, { year: 1985 }];
-    const plan = { title: 'T', premise: 'P', person: null, invented: true, steps: [{ stop: 4, text: '', cast: [] }, { stop: 1, text: '', cast: [] }] };
+    const plan = { title: 'T', premise: 'P', person: null, invented: true, steps: [{ stop: 1, text: '', cast: [] }, { stop: 4, text: '', cast: [] }] };
     expect(fillPlan(plan, stops, [], 4).steps.map((s) => s.stop)).toEqual([1, 3, 4]);
+    // Within a year, the planner's order holds; one added goes after the planned step the story tells before it.
+    const swapped = { ...plan, steps: [...plan.steps].reverse() };
+    expect(fillPlan(swapped, stops, [], 4).steps.map((s) => s.stop)).toEqual([4, 1, 3]);
     // Long enough: untouched.
     expect(fillPlan(plan, stops, [], 2)).toBe(plan);
   });
@@ -269,7 +272,7 @@ describe('around a step', () => {
   it('finds the known cards close by in place and time, the best known first, the story’s own left out', () => {
     const at = { lat: 49.6, lon: -1.6, year: 1912 };
     const town = { ...card('ville', 49.6, -1.6, 1911, 0.95), category: 'city' } as PoiLite;
-    const pois = [card('loin', 40, -74, 1912, 0.9), card('tard', 49.5, -1.5, 1950, 0.9), card('a', 49.4, -1.2, 1910, 0.4), card('b', 50.9, -1.4, 1909, 0.8, 1914),
+    const pois = [card('loin', 40, -74, 1912, 0.9), card('tard', 49.5, -1.5, 1950, 0.9), card('a', 49.4, -1.2, 1911, 0.4), card('b', 50.9, -1.4, 1909, 0.8, 1914),
       card('long', 49.5, -1.4, 1880, 0.7, 1960), town, card('own', 49.6, -1.6, 1912, 1)];
     // Events only (not a town), lasting a few years at most.
     expect(nearCards(pois, at, new Set(['own'])).map((p) => p.id)).toEqual(['b', 'a']);
@@ -320,5 +323,100 @@ describe('a step without filler', () => {
     expect(withoutFiller(text)).toBe(facts.join(' '));
     // Too little would remain: kept as written.
     expect(withoutFiller('Vous rêvez. Le paquebot part.')).toBe('Vous rêvez. Le paquebot part.');
+  });
+});
+
+describe('a walk told in the order of its days', () => {
+  it('reads the day a sentence gives for a moment of that year', () => {
+    expect(dayOf('Le 10 avril 1912, le paquebot quitte Southampton.', 1912)).toBeCloseTo(dateToDecimal(1912, 4, 10));
+    expect(dayOf('Le 1er août 1914, la France mobilise.', 1914)).toBeCloseTo(dateToDecimal(1914, 8, 1));
+    expect(dayOf('On April 15, 1912 the liner sank.', 1912)).toBeCloseTo(dateToDecimal(1912, 4, 15));
+    // Another year's day, or none: no day.
+    expect(dayOf('Lancé le 31 mai 1911, il part en 1912.', 1912)).toBeNull();
+    expect(dayOf('En 1912, il part.', 1912)).toBeNull();
+  });
+
+  it('orders a year by its days, then as planned, and drops the same spot twice in a row', () => {
+    const d = (m: number, day: number) => dateToDecimal(1912, m, day);
+    const stops = [
+      { year: 1912, when: d(4, 18), lat: 40.7, lon: -74 }, // 0 New York
+      { year: 1912, when: d(4, 10), lat: 50.9, lon: -1.4 }, // 1 Southampton, the port
+      { year: 1912, when: null, lat: 49.6, lon: -1.6 }, // 2 Cherbourg, no day
+      { year: 1912, when: d(4, 15), lat: 41.7, lon: -49.9 }, // 3 the wreck
+      { year: 1912, when: d(4, 10), lat: 50.91, lon: -1.41 }, // 4 Southampton, the town
+      { year: 1909, when: null, lat: 54.6, lon: -5.9 }, // 5 Belfast
+    ];
+    const plan = [0, 1, 4, 2, 3, 5].map((stop) => ({ stop }));
+    // New York planned first, but the 18th comes after the 15th; Cherbourg keeps the day of the step before it.
+    expect(orderSteps(plan, stops).map((s) => s.stop)).toEqual([5, 1, 2, 3, 0]);
+    // Without a day, far out of the way between the two around it: where the story ends up (the destination), last of its year.
+    const voyage = [
+      { year: 1912, when: d(4, 10), lat: 50.9, lon: -1.4 }, // 0 Southampton
+      { year: 1912, when: null, lat: 51.85, lon: -8.3 }, // 1 Queenstown
+      { year: 1912, when: null, lat: 40.7, lon: -74 }, // 2 New York
+      { year: 1912, when: null, lat: 46.66, lon: -53.07 }, // 3 Cap Race
+      { year: 1912, when: d(4, 15), lat: 41.7, lon: -49.9 }, // 4 the wreck
+    ];
+    expect(orderSteps([0, 1, 2, 3, 4].map((stop) => ({ stop })), voyage).map((s) => s.stop)).toEqual([0, 1, 3, 4, 2]);
+    // A war's fronts far apart are no detour to undo.
+    const fronts = [{ year: 1914, lat: 48.85, lon: 2.35 }, { year: 1914, lat: 52.52, lon: 13.4 }, { year: 1914, lat: 40.4, lon: -3.7 }];
+    expect(orderSteps([0, 1, 2].map((stop) => ({ stop })), fronts).map((s) => s.stop)).toEqual([0, 1, 2]);
+    // Without days, the planner's order within a year.
+    expect(orderSteps([{ stop: 2 }, { stop: 1 }], [{ year: 1912 }, { year: 1912 }, { year: 1912 }]).map((s) => s.stop)).toEqual([2, 1]);
+  });
+
+  it('keeps turning points at a step, through stops off the route, following someone when the protagonist is real', () => {
+    const stops = [1912, 1912, 1912, 1912, 1912, 1909].map((year) => ({ year }));
+    const persons = [{ name: 'Edward Smith', born: 1850, died: 1912 }, { name: 'Margaret Brown', born: 1867, died: 1932 }];
+    const steps = [{ stop: 0 }, { stop: 1 }, { stop: 2 }];
+    const fork = (at: number, label: string, person: number | null, route: number[]) => ({ at, label, person, stops: route });
+    // Smith is real: a fork in his own shoes would rewrite history.
+    expect(buildForks([fork(1, 'Rester sur le pont', null, [3])], steps, stops, persons, 0)).toEqual([]);
+    // Following Margaret Brown (whom the label names), off the route, from that moment on.
+    // Another way on: not the walk's own stops (2 is its next one), nothing before that moment (1909).
+    expect(buildForks([fork(1, 'Monter dans le canot 6 avec Margaret Brown', 0, [2, 0, 5, 3, 4])], steps, stops, persons, 0))
+      .toEqual([{ at: 1, label: 'Monter dans le canot 6 avec Margaret Brown', person: 1, stops: [3, 4] }]);
+    // An invented character may turn away in their own shoes; one per step; not at a step off the walk.
+    const own = buildForks([fork(0, 'rester à terre', null, [3]), fork(0, 'Encore', null, [4]), fork(9, 'Ailleurs', null, [4]), null], steps, stops, persons, null);
+    expect(own).toEqual([{ at: 0, label: 'Rester à terre', person: null, stops: [3] }]);
+  });
+
+  it('hangs a turning point on its step, and plays it as a walk of its own', () => {
+    const from = { id: 'p1', title: 'Titanic' } as Parameters<typeof walkOf>[0];
+    const stop = (name: string): StoryStop => ({ phase: 'during', name, label: 'Escale', year: 1912, lat: 50, lon: -1, poi: null });
+    const brown = { qid: 'Q2', name: 'Margaret Brown', role: 'Passagère de première classe', born: 1867, died: 1932, image: null };
+    const story = { stops: [stop('Southampton'), stop('Naufrage'), stop('Carpathia'), stop('New York')], people: [brown], source: { url: 'u', title: 't', kind: 'wikipedia' as const }, provider: 'x' };
+    const w = walkOf(from, story, {
+      title: 'Le voyage', premise: 'Vous êtes un émigrant.', person: null, invented: true,
+      steps: [{ stop: 0, text: '', cast: [], beat: 'Trouver une place' }, { stop: 1, text: '', cast: [] }],
+      forks: [{ at: 1, label: 'Monter dans le canot 6', person: 0, stops: [2, 3] }],
+    });
+    expect(w.steps[0]!.beat).toBe('Trouver une place');
+    expect(w.steps[1]!.forks?.map((f) => [f.label, f.hero?.name, f.steps.map((s) => s.place)])).toEqual([['Monter dans le canot 6', 'Margaret Brown', ['Carpathia', 'New York']]]);
+    const taken = forkWalk({ ...w, steps: w.steps.map((s, j) => (j === 0 ? { ...s, choices: [{ label: 'Aider une famille' }], chosen: 0 } : s)) }, 1, 0)!;
+    expect(taken.id).toBe('p1|Le voyage|bifurcation|1|0');
+    expect(taken.hero?.name).toBe('Margaret Brown');
+    expect(taken.premise).toContain('Margaret Brown');
+    expect(taken.prelude).toEqual([0, 1]);
+    expect(taken.decisions).toEqual(['Aider une famille', 'Monter dans le canot 6']);
+    expect(taken.steps.map((s) => s.place)).toEqual(['Carpathia', 'New York']);
+    expect(taken.steps[0]!.cast.map((p) => p.name)).toEqual(['Margaret Brown']);
+    expect(forkWalk(w, 0, 0)).toBeNull();
+  });
+
+  it('writes a step again when its way on, its turning points or the turns taken change', () => {
+    const ask = { stop: 4, walk: [1, 4, 7], decisions: ['Aider une famille'], forks: [{ label: 'Canot 6', stop: 9 }] };
+    expect(stepKey(ask)).not.toBe(stepKey({ ...ask, walk: [1, 4, 8] }));
+    expect(stepKey(ask)).not.toBe(stepKey({ ...ask, decisions: [] }));
+    expect(stepKey(ask)).not.toBe(stepKey({ ...ask, forks: [] }));
+    expect(stepKey(ask)).toBe(stepKey({ ...ask, walk: [0, 1, 4, 7] }));
+  });
+
+  it('reads the planned way on and turning points in the answers', () => {
+    const plan = ExtractedScenarios.parse({ scenarios: [{ title: 'Le voyage', premise: 'Vous êtes un émigrant.', invented: true, steps: [{ stop: 'S1', beat: 'Trouver une place' }], forks: [{ at: 'S1', label: 'Rester à terre', stops: ['S3', 'S4'] }, { at: 2 }] }] });
+    expect(plan.scenarios[0]!.steps[0]).toMatchObject({ stop: 1, beat: 'Trouver une place' });
+    expect(plan.scenarios[0]!.forks).toEqual([{ at: 1, label: 'Rester à terre', stops: [3, 4] }, null]);
+    const step = ExtractedStep.parse({ text: 'Vous débarquez à Cobh au petit matin, sous la pluie, avec les derniers passagers qui montent à bord.', next: 'Remonter à bord pour la traversée' });
+    expect(step.next).toBe('Remonter à bord pour la traversée');
   });
 });

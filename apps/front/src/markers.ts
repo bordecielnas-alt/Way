@@ -1,6 +1,6 @@
 import {
-  BoundingSphere, CallbackProperty, Cartesian2, Cartesian3, Color, ConstantProperty, CustomDataSource,
-  DistanceDisplayCondition, Entity, HeadingPitchRange, HorizontalOrigin, LabelStyle, Math as CesiumMath,
+  CallbackProperty, Cartesian2, Cartesian3, Color, ConstantProperty, CustomDataSource,
+  DistanceDisplayCondition, Entity, HorizontalOrigin, LabelStyle,
   VerticalOrigin, type Viewer,
 } from 'cesium';
 import { poiInWindow, type PoiLite } from '@way/shared';
@@ -103,22 +103,6 @@ export class PoiLayer {
     if (cur) this.pulse(cur);
     else if (id) this.queueSync();
     this.animate(0);
-  }
-
-  /**
-   * Fly the camera to a POI with a slight tilt. A `journey` (door) keeps
-   * roughly the current altitude and takes longer over long distances.
-   */
-  flyTo(p: PoiLite, { journey = false } = {}): void {
-    const camera = this.viewer.camera;
-    const h = camera.positionCartographic.height;
-    const range = journey ? Math.min(1.5e6, Math.max(1.2e5, h)) : Math.min(1.8e6, Math.max(2.5e4, h * 0.45));
-    const target = Cartesian3.fromDegrees(p.lon, p.lat);
-    const km = Cartesian3.distance(camera.positionWC, target) / 1000;
-    camera.flyToBoundingSphere(new BoundingSphere(target, 0), {
-      offset: new HeadingPitchRange(0, CesiumMath.toRadians(-55), range),
-      duration: journey ? Math.min(4, 1.8 + km / 3000) : 2.2,
-    });
   }
 
   /** Returns a POI id or the entities of a cluster under the cursor. */

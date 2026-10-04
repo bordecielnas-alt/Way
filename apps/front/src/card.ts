@@ -106,6 +106,12 @@ export class Card {
   onPersonPaths: (p: StoryPerson) => void = () => undefined;
   /** Other paths known through a card (met elsewhere): counted on its chip. */
   pathsThrough: (poi: PoiLite) => ScenarioWalk[] = () => [];
+  /** One of the card's roles chosen: its path plays. */
+  onPlay: (walk: ScenarioWalk) => void = () => undefined;
+  /** The card is out of sight (behind a path played): its roles are asked when it shows. */
+  waitRoles: () => boolean = () => false;
+  /** Where the visitor is in a path, if started. */
+  pathState: (id: string) => { step: number; done: boolean } | undefined = () => undefined;
   /** Scenarios turned off in the filters: none asked for, none shown. */
   private scenariosOn = true;
   /** The story shown on the current card, and its scenarios as walks. */
@@ -129,6 +135,12 @@ export class Card {
 
   get currentPoi(): string | null {
     return this.root.hidden ? null : this.shown;
+  }
+
+  /** The title of the point's card shown, if one is. */
+  get currentTitle(): string | null {
+    const id = this.currentPoi;
+    return id && this.shownLite?.id === id ? this.shownLite.title : null;
   }
 
   /** `onTravel`: go to a point (through a door, or back along the trail). */
@@ -653,7 +665,8 @@ export class Card {
             this.renderStory(body, res.story, !!res.draft, open);
             this.story = { id, token, story: res.story, from };
             this.onStory({ story: res.story, from });
-            if (first) void this.loadScenarios();
+            // Hidden behind a path played, its roles wait to be seen: the AI writes the step first.
+            if (first && !this.waitRoles()) void this.loadScenarios();
           } else if (!res.draft) body.querySelector('.story-labelling')?.remove();
           if (!res.draft || performance.now() - started > STORY_WAIT_MS) return;
           setActivity(key, { label: 'IA · rôles des lieux', title: 'L’IA précise le rôle de chaque lieu dans l’histoire', ai: true });
@@ -803,31 +816,54 @@ export class Card {
     if (this.shownLite) this.onPathsChanged({ poi: this.shownLite, walks, status });
   }
 
-  /** "🎭 3 chemins passent ici ›": the card no longer holds the scenarios, the carnet does. */
+  /**
+   * "▶ Vivre cette histoire": the card's roles, each to play at once (who,
+   * whose shoes, where the visitor is in it); the paths met elsewhere that
+   * pass here open in the carnet.
+   */
   private renderPaths(): void {
     const box = this.root.querySelector<HTMLElement>('.card-paths');
     const poi = this.shownLite;
     if (!box || !poi || this.shown !== poi.id) return;
     const ids = new Set(this.walks.map((w) => w.id));
-    const all = [...this.walks, ...(this.scenariosOn ? this.pathsThrough(poi).filter((w) => !ids.has(w.id)) : [])];
+    const others = this.scenariosOn ? this.pathsThrough(poi).filter((w) => !ids.has(w.id)) : [];
     const pending = this.pathsStatus === 'pending';
-    if (!this.scenariosOn || (!all.length && !pending)) {
+    if (!this.scenariosOn || (!this.walks.length && !others.length && !pending)) {
       box.hidden = true;
       box.innerHTML = '';
       return;
     }
-    const here = !!this.playing && all.some((w) => w.id === this.playing!.id);
-    const label = all.length
-      ? `<b>${all.length} chemin${all.length > 1 ? 's' : ''}</b> passe${all.length > 1 ? 'nt' : ''} par ici`
-      : 'L’IA trace des chemins par ici…';
+    const role = (w: ScenarioWalk, i: number) => {
+      const state = this.pathState(w.id);
+      const mine = this.playing?.id === w.id;
+      const go = mine ? '● en cours' : state && !state.done ? `Reprendre · ${state.step + 1}/${w.steps.length}` : state?.done ? 'Revivre ↺' : 'Jouer ▸';
+      const turns = w.steps.reduce((n, s) => n + (s.forks?.length ?? 0), 0);
+      const portrait = w.hero?.image
+        ? `<img alt="" src="${esc(viaServer(w.hero.image))}" referrerpolicy="no-referrer">`
+        : `<span aria-hidden="true">${w.hero ? esc(w.hero.name.charAt(0)) : '🎭'}</span>`;
+      return `<button type="button" class="role${mine ? ' playing' : ''}" data-role="${i}" title="${esc(w.premise)}">
+          <span class="ruler-portrait role-portrait">${portrait}</span>
+          <span class="role-text">
+            <span class="role-who">${w.invented ? 'Personnage inventé' : esc(w.hero?.name ?? 'Personnage réel')}</span>
+            <b class="role-title">${esc(w.title)}</b>
+            <span class="role-premise">${esc(w.premise)}</span>
+            <span class="role-meta">${w.steps.length} étapes${turns ? ` · ${turns} bifurcation${turns > 1 ? 's' : ''}` : ''}</span>
+          </span>
+          <span class="role-go">${go}</span>
+        </button>`;
+    };
+    const waiting = pending ? `<div class="role-wait"><span class="sc-note-dot" aria-hidden="true"></span>${this.walks.length ? 'L’IA écrit un autre rôle…' : 'L’IA écrit des rôles pour cette histoire…'}</div>` : '';
     box.hidden = false;
-    box.innerHTML = `<button type="button" class="paths-chip${pending && !all.length ? ' waiting' : ''}" title="Ouvrir le carnet de route sur les chemins qui passent par cette fiche">
-        <span class="paths-mask" aria-hidden="true">🎭</span>
-        <span class="paths-label">${label}</span>
-        ${here ? '<span class="paths-state">● en cours</span>' : pending && all.length ? '<span class="paths-state">+ en écriture…</span>' : ''}
-        <span class="paths-go" aria-hidden="true">›</span>
-      </button>`;
-    box.querySelector('button')!.addEventListener('click', () => this.onPaths({ poi, walks: this.walks, status: this.pathsStatus }));
+    box.innerHTML = `<div class="roles-title">▶ Vivre cette histoire${this.walks.length ? ` <span>· ${this.walks.length} rôle${this.walks.length > 1 ? 's' : ''}</span>` : ''}</div>
+      ${this.walks.map(role).join('')}
+      ${waiting}
+      ${others.length ? `<button type="button" class="sc-link roles-more">+ ${others.length} autre${others.length > 1 ? 's' : ''} chemin${others.length > 1 ? 's' : ''} passe${others.length > 1 ? 'nt' : ''} par ici ›</button>` : ''}`;
+    box.querySelectorAll<HTMLButtonElement>('.role').forEach((b) => b.addEventListener('click', () => {
+      const w = this.walks[Number(b.dataset.role)];
+      if (w && this.playing?.id !== w.id) this.onPlay(w);
+    }));
+    box.querySelectorAll<HTMLImageElement>('.role img').forEach((img) => img.addEventListener('error', () => img.remove()));
+    box.querySelector('.roles-more')?.addEventListener('click', () => this.onPaths({ poi, walks: this.walks, status: this.pathsStatus }));
   }
 
   /** Doors arrive progressively: poll until every kind is known. */
