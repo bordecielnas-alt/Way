@@ -151,7 +151,7 @@ export class SearchBox {
     if (scenariosOn && local.scenarios.length) {
       parts.push(group('Scénarios', local.scenarios.map((w) => row(`
         <span class="sr-mark sr-mask" aria-hidden="true">🎭</span>
-        <span class="sr-text"><b>${esc(w.title)}</b><small>${esc([w.hero?.name ?? (w.invented ? 'Personnage inventé' : ''), w.from?.title ?? 'À travers plusieurs fiches', `${w.steps.length} étapes`].filter(Boolean).join(' · '))}</small></span>`,
+        <span class="sr-text"><b>${esc(w.title)}</b><small>${esc([w.hero?.name ?? (w.invented ? 'Fil thématique' : ''), w.from?.title ?? 'À travers plusieurs fiches', `${w.steps.length} étapes`].filter(Boolean).join(' · '))}</small></span>`,
       () => this.choose(() => this.actions.scenario(w)))).join('')));
     }
     parts.push(group('Événements et lieux', cards === null ? wait : cards === 'error' ? failed : !cards.length ? none : cards.map((p) => row(`
@@ -162,7 +162,7 @@ export class SearchBox {
       const life = h.born !== null || h.died !== null ? `${h.born !== null ? formatYear(Math.floor(h.born)) : '?'} – ${h.died !== null ? formatYear(Math.floor(h.died)) : ''}` : '';
       personActs.push(() => this.choose(() => this.actions.personScenario(h)));
       const story = scenariosOn
-        ? `<button type="button" class="sr-act" data-act="${personActs.length - 1}" title="Un scénario à travers les fiches de sa vie, écrit par l’IA">🎭 Vivre son histoire</button>`
+        ? `<button type="button" class="sr-act" data-act="${personActs.length - 1}" title="Sa vie étape par étape, à travers les fiches où elle passe, rédigée d’après Wikipédia">📖 Suivre sa vie</button>`
         : '';
       return row(`
         <span class="sr-mark">${h.image ? `<img alt="" src="${esc(viaServer(h.image))}" referrerpolicy="no-referrer">` : esc(h.name.charAt(0))}</span>

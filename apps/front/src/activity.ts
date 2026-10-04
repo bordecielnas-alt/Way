@@ -32,3 +32,13 @@ export function currentActivity(): (Activity & { more: number }) | null {
 export function onActivity(f: () => void): void {
   listeners.add(f);
 }
+
+/** An AI's name short enough for the status: "gpt-oss-120b" for "openai/gpt-oss-120b via groq". */
+export function aiShort(ai: string): string {
+  return ai.replace(/ via .*$/, '').replace(/^.*\//, '');
+}
+
+/** AI work, named by the AI doing it when the server says which: "gemini-2.5-flash · étape". */
+export function aiActivity(what: string, title: string, ai: string | null | undefined): Activity {
+  return { label: `${ai ? aiShort(ai) : 'IA'} · ${what}`, title: ai ? `${title} — ${ai}` : title, ai: true };
+}

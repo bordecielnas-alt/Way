@@ -128,6 +128,18 @@ export class ProviderRouter {
     return this.enabled && this.route(task).some((id) => this.usable(id));
   }
 
+  /** The AI a task goes to now (the first available in its order), named for the visitor; null when none. */
+  nextAi(task: Task): string | null {
+    if (!this.enabled) return null;
+    const id = this.route(task).find((x) => this.available(x));
+    return id ? this.aiName(id) : null;
+  }
+
+  /** An AI named for the visitor: its model, with the service when the model does not say it ("openai/gpt-oss-120b via groq"). */
+  aiName(id: string): string {
+    return aiLabel(id, this.model(id));
+  }
+
   /** Variables the settings page may set: keys, URLs and model overrides. */
   variables(): string[] {
     const out = new Set<string>();
@@ -218,14 +230,14 @@ export class ProviderRouter {
    */
   async completeJson<T>(
     task: Task, system: string, user: string, parse: (value: unknown) => T, maxTokens?: number,
-  ): Promise<{ value: T; provider: string } | null> {
+  ): Promise<{ value: T; provider: string; ai: string } | null> {
     for (const id of this.route(task)) {
       if (!this.available(id)) continue;
       const value = await this.call(id, task, async () => {
         const text = await this.complete(id, system, user, this.cfg.providers[id]!.timeoutMs, maxTokens);
         return parse(llm.parseJsonObject(text));
       });
-      if (value !== undefined) return { value, provider: id };
+      if (value !== undefined) return { value, provider: id, ai: this.aiName(id) };
     }
     return null;
   }
@@ -368,6 +380,13 @@ export class ProviderRouter {
     }, 2000);
     this.saveTimer.unref();
   }
+}
+
+/** An AI as the visitor reads it: the model, and the service when the model's name does not say it. Pure, for tests. */
+export function aiLabel(id: string, model: string | null): string {
+  if (!model) return id;
+  const service = id.split('-')[0]!.toLowerCase();
+  return model.toLowerCase().includes(service) ? model : `${model} via ${id}`;
 }
 
 /** The provider refused the model itself (not reachable for this key or project). */

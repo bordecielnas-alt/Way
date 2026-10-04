@@ -170,7 +170,7 @@ export class FlowService {
           id: def.id,
           stages: built,
           source: { url: article.url, title: `Wikipédia : ${article.title}`, kind: 'wikipedia' },
-          provider: answer.provider,
+          provider: answer.ai,
         };
       }
     }

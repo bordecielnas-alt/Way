@@ -27,5 +27,5 @@ export type ClientMessage = z.infer<typeof ClientMessage>;
 export type ServerMessage =
   /** `background`: points around the view, kept in memory for later. */
   | { type: 'pois'; pois: PoiLite[]; background?: boolean }
-  /** Searches running for the view: `pending` fast ones (level 1), `ai` web + AI ones (level 2). */
-  | { type: 'status'; pending: number; ai: number };
+  /** Searches running for the view: `pending` fast ones (level 1), `ai` web + AI ones (level 2), `model` the AI reading them. */
+  | { type: 'status'; pending: number; ai: number; model?: string | null };

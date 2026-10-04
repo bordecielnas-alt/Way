@@ -6,11 +6,13 @@ import { formatDay, formatYear } from './years.ts';
 // card's Wikipedia article for the places and moments of its story (where
 // the Titanic was built, the ports it left, where it sank, where the dead
 // were buried), what it led to (the wars that followed the attacks on the
-// World Trade Center), the people who lived it, and a few walks through it
-// in someone's shoes. Places and moments quote the article; people are
-// Wikidata humans; scenarios are written by the AI over those checked stops,
-// for the way the visitor looks at the world (lens, themes) and the path that
-// led them to the card: two follow real people, the last an invented one.
+// World Trade Center), the people who lived it, and a few walks through it.
+// Places and moments quote the article; people are Wikidata humans;
+// scenarios are planned by the AI over those checked stops, for the way the
+// visitor looks at the world (lens, themes) and the path that led them to the
+// card: two follow real people, the last a thread of the story chosen for that
+// view. Steps are told as an encyclopedia would, from Wikipedia, never in
+// someone's shoes.
 
 export const STORY_PHASES = ['before', 'during', 'after'] as const;
 export type StoryPhase = (typeof STORY_PHASES)[number];
@@ -53,7 +55,7 @@ export interface StoryPerson {
 
 export interface StoryScenario {
   title: string;
-  /** Whose shoes, e.g. "Vous êtes un émigrant irlandais embarqué en troisième classe". */
+  /** Whom or what it follows, in the third person, e.g. "Thomas Andrews, architecte du navire, embarque pour la traversée inaugurale". */
   premise: string;
   /**
    * Index in `stops`, what happens there for that character, and the key
@@ -63,10 +65,12 @@ export interface StoryScenario {
   steps: { stop: number; text: string; cast: number[]; beat?: string }[];
   /** Index in `people` when the scenario follows one of them. */
   person: number | null;
-  /** An invented character (a typical person of the time), not a real one. */
+  /** Follows no one in particular: a thread of the story chosen for the visitor's view (the freight, the faith…). */
   invented: boolean;
   /** Turning points planned with the walk: where the story could go another way. */
   forks?: ScenarioFork[];
+  /** The AI that planned it, e.g. "gemini-2.5-flash". */
+  ai?: string;
 }
 
 /**
@@ -75,7 +79,7 @@ export interface StoryScenario {
  */
 export interface ScenarioFork {
   at: number;
-  /** An action, e.g. "Monter dans le canot 6 avec Molly Brown". */
+  /** The other thread, e.g. "Suivre Molly Brown dans le canot 6". */
   label: string;
   /** Index in `people` when the fork follows someone else from there. */
   person: number | null;
@@ -109,6 +113,8 @@ export interface StoryResponse {
   story: Story | null;
   /** Its places as the article heads them, an AI labelling them meanwhile: ask again. */
   draft?: boolean;
+  /** The AI at work meanwhile, e.g. "gemini-2.5-flash-lite". */
+  ai?: string | null;
 }
 
 export interface ScenariosResponse {
@@ -118,9 +124,11 @@ export interface ScenariosResponse {
   story?: Story;
   /** The first ones, more being written: ask again. */
   more?: boolean;
+  /** The AI at work meanwhile. */
+  ai?: string | null;
 }
 
-/** A moment of a walk, self-contained: the place, the year, what the character lives there and who is around. */
+/** A moment of a walk, self-contained: the place, the year, what happened there and who was there. */
 export interface WalkStep {
   /** As the story names it, e.g. "Southampton". */
   place: string;
@@ -133,9 +141,9 @@ export interface WalkStep {
   lon: number;
   /** The place's card, when it has one. */
   poi: PoiLite | null;
-  /** What is at stake for the character there, in a line (planned with the walk). */
+  /** Its heading, in a line (planned with the walk), e.g. "L'alerte du Baltic". */
   beat?: string;
-  /** What the character lives there; empty until written, when the visitor gets there. */
+  /** What happened there, in paragraphs (a blank line between them); empty until written, when the visitor gets there. */
   text: string;
   cast: StoryPerson[];
   /** The stop of the card's story it walks through (`ScenarioWalk.from`): its text is written from it. */
@@ -144,23 +152,33 @@ export interface WalkStep {
   image?: string | null;
   /** Short detours from here (a place of the story, someone met, a card close by), offered once its text is written. */
   choices?: StepChoice[];
-  /** The way on along the planned route, as an action ("Appareiller pour Cherbourg"), once written. */
+  /** The way on along the planned route, as a heading ("L'escale de Cherbourg"), once written. */
   next?: string | null;
   /** Other ways the story may go from here, planned with the walk. */
   forks?: WalkFork[];
   /** The choice taken here, if any. */
   chosen?: number;
-  /** "Autour de vous": a few dated, numbered facts of the article. */
+  /** "Repères": a few dated, numbered facts of the article. */
   facts?: string[];
   /** A sentence of the article, word for word. */
   quote?: StepQuote | null;
-  /** More pictures of the place and the moment. */
-  gallery?: string[];
+  /** More pictures of the place and the moment, with the article's captions. */
+  gallery?: StepPicture[];
   /** Other cards close by, at the same moment: short detours. */
   near?: PoiLite[];
+  /** The articles it was written from: the section telling it, the article detailing it, the place's. */
+  sources?: Source[];
+  /** The AI that wrote it. */
+  ai?: string | null;
 }
 
-/** A turning point of a walk: its own steps, in the same shoes or someone else's. */
+/** A picture of a step, with its caption in the article (null when it gives none). */
+export interface StepPicture {
+  src: string;
+  caption: string | null;
+}
+
+/** A turning point of a walk: its own steps, following the same person or someone else. */
 export interface WalkFork {
   label: string;
   /** Whom it follows from there, when someone else. */
@@ -180,7 +198,7 @@ export interface StepChoice {
   label: string;
   step?: WalkStep;
   poi?: PoiLite;
-  /** Someone present: a few moments of their life around this one, in their shoes. */
+  /** Someone present: a few moments of their life around this one. */
   person?: StoryPerson;
 }
 
@@ -191,12 +209,15 @@ export interface StepResponse {
   /** The people present, as the writer placed them. */
   cast: StoryPerson[];
   choices: StepChoice[];
-  /** The way on along the planned route, as an action. */
+  /** The way on along the planned route, as a heading. */
   next: string | null;
   facts: string[];
   quote: StepQuote | null;
-  gallery: string[];
+  gallery: StepPicture[];
   near: PoiLite[];
+  sources: Source[];
+  /** The AI that wrote it, or the one at work while pending. */
+  ai: string | null;
 }
 
 /** A link of a card's introduction, made something to act on: a person, a card, a place. */
@@ -240,6 +261,8 @@ export interface ScenarioWalk {
   prelude?: number[];
   /** A fork's walk: the turns taken before it, oldest first, for the writer. */
   decisions?: string[];
+  /** The AI that planned it. */
+  ai?: string;
 }
 
 /** A card the story leads to after the walk (an inquiry, a law, a war). */
@@ -298,6 +321,7 @@ export function walkOf(from: PoiLite, story: Story, sc: StoryScenario): Scenario
     from,
     source: story.source,
     steps,
+    ...(sc.ai ? { ai: sc.ai } : {}),
   };
 }
 
@@ -316,7 +340,7 @@ export function forkWalk(walk: ScenarioWalk, at: number, k: number): ScenarioWal
   return {
     id: `${walk.id}|bifurcation|${at}|${k}`,
     title: f.label,
-    premise: f.hero ? `Vous suivez désormais ${f.hero.name}${role}.` : walk.premise,
+    premise: f.hero ? `L’histoire suit désormais ${f.hero.name}${role}, à partir de ${st.place}.` : walk.premise,
     invented: f.hero ? false : walk.invented,
     hero,
     from: walk.from,
@@ -335,4 +359,6 @@ export type DetourKind = 'person' | 'card';
 export interface PersonScenarioResponse {
   status: StoryStatus;
   walk: ScenarioWalk | null;
+  /** The AI at work meanwhile. */
+  ai?: string | null;
 }

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Poi } from '@way/shared';
+import { AI_TAG, type Poi } from '@way/shared';
 import { wikipedia } from '@way/providers';
 import type { ProviderRouter } from './router.ts';
 import type { Store } from './store/types.ts';
@@ -46,5 +46,6 @@ export async function loadPoiDetail(
 async function translate(poi: Poi, store: Store, router: ProviderRouter): Promise<void> {
   const r = await router.completeJson('write', SYSTEM, poi.summary!, (v) => z.object({ fr: z.string().min(20) }).parse(v).fr);
   if (!r) return;
-  await store.updatePoi(poi.id, { summary: r.value, summary_lang: 'fr', tags: [...new Set([...poi.tags, AI_TRANSLATED])] });
+  const tags = poi.tags.filter((t) => !t.startsWith(AI_TAG));
+  await store.updatePoi(poi.id, { summary: r.value, summary_lang: 'fr', tags: [...new Set([...tags, AI_TRANSLATED, `${AI_TAG}${r.ai}`])] });
 }

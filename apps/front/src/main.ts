@@ -8,12 +8,12 @@ import './style.css';
 
 import { ScreenSpaceEventType, Cartesian2, BoundingSphere, Cartesian3, Cartographic, Math as CesiumMath, Rectangle, type Entity } from 'cesium';
 import {
-  cellsForRect, formatPoiDate, formatYear, isGlobalSearchRes, MAX_YEAR, MIN_YEAR, rectAreaKm2, resolutionForArea, ringAround, CATEGORY_LABELS,
+  cellsForRect, formatPoiDate, formatWhen, formatYear, isGlobalSearchRes, MAX_YEAR, MIN_YEAR, rectAreaKm2, resolutionForArea, ringAround, CATEGORY_LABELS,
   ALL_THEMES, THEMES, walkOf, type Backdrop, type Category, type DetourKind, type PersonScenarioResponse, type PoiLite, type ScenarioWalk,
   type DoorsResponse, type ScenariosResponse, type StepResponse, type Story, type StoryPerson, type StoryResponse, type SubdivisionsResponse,
   type ThemeFilter, type ViewMessage,
 } from '@way/shared';
-import { currentActivity, onActivity, setActivity } from './activity.ts';
+import { aiActivity, currentActivity, onActivity, setActivity } from './activity.ts';
 import { BordersLayer, realmKey, type BorderShape } from './borders.ts';
 import { CameraGuide, type Zone } from './camera.ts';
 import { Card, type CardPaths } from './card.ts';
@@ -514,7 +514,8 @@ async function writeWalk(url: string, note: string, fail: string, play: (w: Scen
         window.setTimeout(() => token === writeToken && carnet.setNote(null), 6000);
         return;
       }
-      setActivity(key, { label: 'IA · chemin', title: note, ai: true });
+      if (res.ai) carnet.setNote(note.replace(/^L’IA/, res.ai));
+      setActivity(key, aiActivity('chemin', note, res.ai));
       await new Promise((r) => setTimeout(r, SCENARIO_POLL_MS));
     }
   } finally {
@@ -526,30 +527,51 @@ async function writeWalk(url: string, note: string, fail: string, play: (w: Scen
 let stepToken = 0;
 const STEP_WAIT_MS = 90_000;
 
-/** A card's scenario step as the server asks it: the scenario, the stop, the walk's stops in order. */
+/**
+ * A step as the server asks it: a card's scenario (the stop, the walk's stops
+ * in order), or a real person's life (the place, the steps around it), each
+ * written from its Wikipedia article.
+ */
 function stepUrl(walk: ScenarioWalk, j: number, prefetch: boolean): string | null {
   const st = walk.steps[j];
-  if (!walk.from || st?.stop === undefined) return null;
+  if (!st) return null;
   const params = viewParams();
-  params.set('card', walk.from.id);
   params.set('title', walk.title.slice(0, 120));
   params.set('premise', walk.premise.slice(0, 300));
-  if (walk.hero) params.set('hero', walk.hero.qid);
-  params.set('invented', walk.invented ? '1' : '0');
-  params.set('stop', String(st.stop));
-  // The stops lived before a turning point's walk come first: the writer picks up from them.
-  params.set('walk', [...(walk.prelude ?? []), ...walk.steps.flatMap((s) => (s.stop === undefined ? [] : [s.stop]))].join(','));
   if (st.beat) params.set('beat', st.beat.slice(0, 120));
   for (const d of stepDecisions(walk, j)) params.append('chose', d.slice(0, 120));
-  for (const f of st.forks ?? []) if (f.steps[0]?.stop !== undefined) params.append('fork', `${f.steps[0].stop}:${f.label}`.slice(0, 140));
   if (prefetch) params.set('prefetch', '1');
-  return `/api/step?${params}`;
+  if (walk.from && st.stop !== undefined) {
+    params.set('card', walk.from.id);
+    if (walk.hero) params.set('hero', walk.hero.qid);
+    params.set('invented', walk.invented ? '1' : '0');
+    params.set('stop', String(st.stop));
+    // The stops lived before a turning point's walk come first: the writer picks up from them.
+    params.set('walk', [...(walk.prelude ?? []), ...walk.steps.flatMap((s) => (s.stop === undefined ? [] : [s.stop]))].join(','));
+    for (const f of st.forks ?? []) if (f.steps[0]?.stop !== undefined) params.append('fork', `${f.steps[0].stop}:${f.label}`.slice(0, 140));
+    return `/api/step?${params}`;
+  }
+  // A life (or a detour in one): from the article of the person followed.
+  if (!walk.hero) return null;
+  params.set('person', walk.hero.qid);
+  params.set('place', st.place.slice(0, 200));
+  params.set('label', st.label.slice(0, 120));
+  params.set('year', String(Math.round(st.year)));
+  params.set('lat', String(st.lat));
+  params.set('lon', String(st.lon));
+  if (st.poi) params.set('poi', st.poi.id);
+  for (const s of walk.steps.slice(Math.max(0, j - 6), j)) params.append('lived', `${formatWhen(s)} ${s.place} (${s.label})`.slice(0, 200));
+  const next = walk.steps[j + 1];
+  if (next) params.set('next', `${formatWhen(next)} · ${next.label} · ${next.place}`.slice(0, 200));
+  return `/api/life-step?${params}`;
 }
 
 /** A step's text, written by an AI when the visitor gets there; the next one is asked ahead. */
 async function writeStep(walk: ScenarioWalk, j: number): Promise<void> {
   const url = stepUrl(walk, j, false);
   if (!url) return;
+  // A life's step comes with a few lines: made a full one quietly, kept as is when it cannot be.
+  const had = !!walk.steps[j]?.text;
   const token = ++stepToken;
   const key = `step:${token}`;
   const started = performance.now();
@@ -561,22 +583,28 @@ async function writeStep(walk: ScenarioWalk, j: number): Promise<void> {
         if (!r.ok) throw new Error(String(r.status));
         res = (await r.json()) as StepResponse;
       } catch {
-        res = { status: 'none', text: null, cast: [], choices: [], next: null, facts: [], quote: null, gallery: [], near: [] };
+        res = { status: 'none', text: null, cast: [], choices: [], next: null, facts: [], quote: null, gallery: [], near: [], sources: [], ai: null };
       }
       if (token !== stepToken) return;
       if (res.text) {
-        carnet.setStepText(walk.id, j, { text: res.text, cast: res.cast, choices: res.choices, next: res.next, facts: res.facts, quote: res.quote, gallery: res.gallery, near: res.near });
+        carnet.setStepText(walk.id, j, {
+          text: res.text, cast: res.cast, choices: res.choices, next: res.next, facts: res.facts, quote: res.quote, gallery: res.gallery, near: res.near,
+          sources: res.sources ?? [], ai: res.ai ?? null,
+        });
         // The next step, written while this one is read.
         const next = stepUrl(carnet.playing?.walk ?? walk, j + 1, true);
-        if (next && !walk.steps[j + 1]?.text) void fetch(next).catch(() => undefined);
+        if (next && !walk.steps[j + 1]?.ai) void fetch(next).catch(() => undefined);
         return;
       }
       if (res.status !== 'pending' || performance.now() - started > STEP_WAIT_MS) {
+        carnet.setWriter(null);
+        if (had) return;
         carnet.setNote(res.status === 'no-ai' ? 'Aucune IA disponible pour écrire cette étape pour le moment.' : 'Cette étape n’a pas pu être écrite. « relancer » pour réessayer.');
         window.setTimeout(() => token === stepToken && carnet.setNote(null), 6000);
         return;
       }
-      setActivity(key, { label: 'IA · étape', title: `L’IA écrit l’étape « ${walk.steps[j]!.place} »`, ai: true });
+      carnet.setWriter(res.ai ?? 'L’IA');
+      setActivity(key, aiActivity('étape', `Écriture de l’étape « ${walk.steps[j]!.place} » d’après Wikipédia`, res.ai));
       await new Promise((r) => setTimeout(r, 1500));
     }
   } finally {
@@ -607,7 +635,7 @@ function doorsOf(poi: PoiLite): Promise<StepDoors> {
 function lifeScenario(h: { qid: string; name: string }, branch: boolean): Promise<void> {
   return writeWalk(
     `/api/people/${encodeURIComponent(h.qid)}/scenario?${viewParams()}`,
-    `L’IA écrit l’histoire ${of(h.name)} à travers les fiches de sa vie…`,
+    `L’IA trace la vie ${of(h.name)} à travers les fiches où elle passe…`,
     `Pas assez de lieux connus dans la vie ${of(h.name)} pour en faire un chemin.`,
     (w) => carnet.play(w, 0, branch && carnet.playing ? 'branch' : undefined),
   );
@@ -655,9 +683,11 @@ async function placePaths(poi: PoiLite): Promise<void> {
       if (token !== placeToken || carnet.hereKey !== poi.id) return;
       // The story first: scenarios are written over its stops.
       const story = await get<StoryResponse>(`/api/poi/${encodeURIComponent(poi.id)}/story`);
+      let working = story?.ai;
       if (story?.story) {
         const res = await get<ScenariosResponse>(`/api/poi/${encodeURIComponent(poi.id)}/scenarios?${viewParams()}`);
         if (token !== placeToken) return;
+        working = res?.ai ?? working;
         if (res?.scenarios.length) {
           found = res.scenarios.map((sc) => walkOf(poi, res.story ?? story.story!, sc));
           library.add(found);
@@ -665,7 +695,7 @@ async function placePaths(poi: PoiLite): Promise<void> {
           if (!res.more) return;
         } else if (!res || res.status !== 'pending') return carnet.updateHere(show([], res?.status ?? 'none'));
       } else if (!story || story.status !== 'pending') return carnet.updateHere(show([], story?.status ?? 'none'));
-      setActivity(key, { label: 'IA · chemins', title: `L’IA trace les chemins de « ${poi.title} »`, ai: true });
+      setActivity(key, aiActivity('chemins', `Tracé des chemins de « ${poi.title} »`, working));
       await new Promise((r) => setTimeout(r, SCENARIO_POLL_MS));
     }
     carnet.updateHere(show(found, found.length ? 'ready' : 'none'));
@@ -743,13 +773,15 @@ function travel(p: PoiLite): void {
 let online = false;
 let pending = 0;
 let ai = 0;
+/** The AI reading the zone's searches, as the server names it. */
+let aiModel: string | null = null;
 /**
  * Discreet: nothing when idle, a dot and a short word while points or details
  * are looked up, an hourglass while an AI reads (the zone, a card's doors,
  * the Monde vivant flows).
  */
 function renderStatus(): void {
-  setActivity('zone-ai', online && ai > 0 ? { label: 'IA · faits de la zone', title: 'L’IA cherche d’autres faits sur cette zone', ai: true } : null);
+  setActivity('zone-ai', online && ai > 0 ? aiActivity('faits de la zone', 'Recherche d’autres faits sur cette zone, sur le web', aiModel) : null);
   setActivity('zone', online && pending > 0 ? { label: 'Points de la zone', title: 'Recherche de points sur cette zone', ai: false } : null);
 }
 function showActivity(): void {
@@ -773,6 +805,7 @@ const conn = new Connection({
     } else if (msg.type === 'status') {
       pending = msg.pending;
       ai = msg.ai ?? 0;
+      aiModel = msg.model ?? null;
       renderStatus();
     }
   },

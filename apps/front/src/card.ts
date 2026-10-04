@@ -1,11 +1,11 @@
 import {
-  ACTIVITY_LABELS, CATEGORY_LABELS, DOOR_KINDS, type Army, type JourneyStop, type PersonJourney, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
+  ACTIVITY_LABELS, aiOf, CATEGORY_LABELS, DOOR_KINDS, type Army, type JourneyStop, type PersonJourney, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
   type PoiLite, type PolityInfo, type PolityRulerInfo, toLite, FLOW_LABELS, type CityRow, type Flow, type FlowDef, type FlowStage,
   STORY_PHASES, STORY_PHASE_LABELS, type Story, type StoryPerson, type StoryResponse, type StoryStop,
   THEMES, walkOf, type CardLink, type CardLinksResponse, type ScenarioContext, type ScenariosResponse, type ScenarioWalk,
 } from '@way/shared';
 import { placeLinks, type Entity } from './entity.ts';
-import { setActivity } from './activity.ts';
+import { aiActivity, setActivity } from './activity.ts';
 import { CATEGORY_COLORS } from './icons.ts';
 import { fetchCached } from './localcache.ts';
 import { formatPop } from './living.ts';
@@ -118,6 +118,8 @@ export class Card {
   private story: { id: string; token: number; story: Story; from: PoiLite } | null = null;
   private walks: ScenarioWalk[] = [];
   private pathsStatus: CardPaths['status'] = 'none';
+  /** The AI tracing the card's paths, while it does. */
+  private pathsAi: string | null = null;
   private shownLite: PoiLite | null = null;
   private scenarioToken = 0;
   /** The path played, to mark the chip when it passes here. */
@@ -407,7 +409,7 @@ export class Card {
       <div class="card-scroll"><div class="card-body">
         <div class="card-kicker">
           <span class="card-cat"><i style="background:${color}"></i>${esc(FLOW_LABELS[def.kind].label)}</span>
-          <span class="badge web_single_source" title="Étapes lues par une IA dans l’article cité, puis placées sur la carte">🔎 Lu par IA</span>
+          <span class="badge web_single_source" title="Étapes lues par ${esc(flow.provider ?? 'une IA')} dans l’article cité, puis placées sur la carte">🔎 Lu par ${esc(flow.provider ?? 'IA')}</span>
         </div>
         <h2 class="card-title">${esc(def.title)}</h2>
         <div class="card-date">${esc(span)}</div>
@@ -419,7 +421,7 @@ export class Card {
               <span class="journey-when">${esc(formatYear(s.year))}</span>
               <span class="journey-what"><b>${esc(s.place)}</b> ${esc(s.note)}${s.from !== null ? ` <small>depuis ${esc(flow.stages[s.from]!.place)}</small>` : ''}</span>
             </button></li>`).join('')}</ol>
-          <div class="card-summary-note">Lieux et dates lus par une IA dans l’article ci-dessous (chaque étape y est citée), placés sur la carte par géocodage : vérifiez-les. Entre deux étapes, le trajet est tracé au plus court${def.kind === 'trade' ? ', par la mer quand il le faut' : ''}.</div>
+          <div class="card-summary-note">Lieux et dates lus par ${esc(flow.provider ?? 'une IA')} dans l’article ci-dessous (chaque étape y est citée), placés sur la carte par géocodage : vérifiez-les. Entre deux étapes, le trajet est tracé au plus court${def.kind === 'trade' ? ', par la mer quand il le faut' : ''}.</div>
         </div>
         <div class="card-section">
           <div class="card-section-title">Sources</div>
@@ -571,11 +573,12 @@ export class Card {
     this.remember(p);
     const conf = CONFIDENCE[p.confidence];
     // Say where the text comes from whenever it is not a French Wikipedia intro.
+    const writer = esc(aiOf(p.tags) ?? 'une IA');
     const note =
       p.provenance === 'web_ai'
-        ? 'Fiche rédigée par IA à partir des sources ci-dessous : vérifiez-les.'
+        ? `Fiche rédigée par ${writer} à partir des sources ci-dessous : vérifiez-les.`
         : p.tags.includes('summary:ai-translated')
-          ? 'Résumé traduit de l’anglais par IA.'
+          ? `Résumé traduit de l’anglais par ${writer}.`
           : p.summary_lang && p.summary_lang !== 'fr'
             ? 'Résumé disponible uniquement en anglais.'
             : null;
@@ -669,7 +672,7 @@ export class Card {
             if (first && !this.waitRoles()) void this.loadScenarios();
           } else if (!res.draft) body.querySelector('.story-labelling')?.remove();
           if (!res.draft || performance.now() - started > STORY_WAIT_MS) return;
-          setActivity(key, { label: 'IA · rôles des lieux', title: 'L’IA précise le rôle de chaque lieu dans l’histoire', ai: true });
+          setActivity(key, aiActivity('rôles des lieux', 'Le rôle de chaque lieu dans l’histoire, lu dans l’article', res.ai));
           await new Promise((r) => setTimeout(r, LABEL_POLL_MS));
           continue;
         }
@@ -721,10 +724,11 @@ export class Card {
               <span class="ruler-text"><span class="ruler-name">${esc(p.name)}</span><span class="ruler-meta">${esc([p.role, life(p)].filter(Boolean).join(' · '))}</span></span>
             </button>`).join('')}</div></div>`
       : '';
+    const reader = s.provider && s.provider !== 'wikipedia' ? s.provider : 'IA';
     body.innerHTML = `${draft ? '<div class="story-labelling">L’IA précise le rôle de chaque lieu…</div>' : ''}
       ${doors ? `<div class="story-hint">⤷ ${doors} lieu${doors > 1 ? 'x ont' : ' a'} sa propre histoire : entrez-y pour explorer plus loin.</div>` : ''}
       ${phases}${more}${people}
-      <a class="door-source story-source" href="${esc(s.source.url)}" target="_blank" rel="noopener">Lieux et personnages liés par l’article « ${esc(s.source.title.replace(/^Wikipédia : /, ''))} »${draft ? '' : ', rôles résumés par IA'} : vérifier</a>`;
+      <a class="door-source story-source" href="${esc(s.source.url)}" target="_blank" rel="noopener">Lieux et personnages liés par l’article « ${esc(s.source.title.replace(/^Wikipédia : /, ''))} »${draft ? '' : `, rôles résumés par ${esc(reader)}`} : vérifier</a>`;
 
     body.querySelectorAll<HTMLButtonElement>('.story-stop').forEach((b) =>
       b.addEventListener('click', () => this.onStoryStop(s.stops[Number(b.dataset.stop)]!, true)),
@@ -791,7 +795,8 @@ export class Card {
             if (res.more) this.setPaths(walks, 'ready');
             return;
           }
-          setActivity(key, { label: 'IA · scénarios', title: 'L’IA écrit les chemins suivants', ai: true });
+          this.pathsAi = res.ai ?? null;
+          setActivity(key, aiActivity('parcours', 'Tracé des parcours suivants d’après l’article', res.ai));
           await new Promise((r) => setTimeout(r, LABEL_POLL_MS));
           continue;
         }
@@ -800,8 +805,9 @@ export class Card {
           this.setPaths(this.walks, this.walks.length ? 'ready' : res.status === 'pending' ? 'none' : res.status);
           return;
         }
+        this.pathsAi = res.ai ?? null;
         if (this.pathsStatus !== 'pending' && !this.walks.length) this.setPaths([], 'pending');
-        setActivity(key, { label: 'IA · scénarios', title: 'L’IA écrit des scénarios pour votre lentille et votre exploration', ai: true });
+        setActivity(key, aiActivity('parcours', 'Tracé des parcours de cette histoire pour votre lentille et vos thèmes', res.ai));
         await new Promise((r) => setTimeout(r, LABEL_POLL_MS));
       }
     } finally {
@@ -817,9 +823,9 @@ export class Card {
   }
 
   /**
-   * "▶ Vivre cette histoire": the card's roles, each to play at once (who,
-   * whose shoes, where the visitor is in it); the paths met elsewhere that
-   * pass here open in the carnet.
+   * "▶ Parcourir cette histoire": the card's paths, each to read at once
+   * (whom or what it follows, where the visitor is in it, the AI that traced
+   * it); the paths met elsewhere that pass here open in the carnet.
    */
   private renderPaths(): void {
     const box = this.root.querySelector<HTMLElement>('.card-paths');
@@ -836,15 +842,15 @@ export class Card {
     const role = (w: ScenarioWalk, i: number) => {
       const state = this.pathState(w.id);
       const mine = this.playing?.id === w.id;
-      const go = mine ? '● en cours' : state && !state.done ? `Reprendre · ${state.step + 1}/${w.steps.length}` : state?.done ? 'Revivre ↺' : 'Jouer ▸';
+      const go = mine ? '● en cours' : state && !state.done ? `Reprendre · ${state.step + 1}/${w.steps.length}` : state?.done ? 'Relire ↺' : 'Lire ▸';
       const turns = w.steps.reduce((n, s) => n + (s.forks?.length ?? 0), 0);
       const portrait = w.hero?.image
         ? `<img alt="" src="${esc(viaServer(w.hero.image))}" referrerpolicy="no-referrer">`
-        : `<span aria-hidden="true">${w.hero ? esc(w.hero.name.charAt(0)) : '🎭'}</span>`;
+        : `<span aria-hidden="true">${w.hero ? esc(w.hero.name.charAt(0)) : '❖'}</span>`;
       return `<button type="button" class="role${mine ? ' playing' : ''}" data-role="${i}" title="${esc(w.premise)}">
           <span class="ruler-portrait role-portrait">${portrait}</span>
           <span class="role-text">
-            <span class="role-who">${w.invented ? 'Personnage inventé' : esc(w.hero?.name ?? 'Personnage réel')}</span>
+            <span class="role-who">${w.invented ? 'Fil thématique' : esc(w.hero?.name ?? 'Personnage réel')}</span>
             <b class="role-title">${esc(w.title)}</b>
             <span class="role-premise">${esc(w.premise)}</span>
             <span class="role-meta">${w.steps.length} étapes${turns ? ` · ${turns} bifurcation${turns > 1 ? 's' : ''}` : ''}</span>
@@ -852,11 +858,14 @@ export class Card {
           <span class="role-go">${go}</span>
         </button>`;
     };
-    const waiting = pending ? `<div class="role-wait"><span class="sc-note-dot" aria-hidden="true"></span>${this.walks.length ? 'L’IA écrit un autre rôle…' : 'L’IA écrit des rôles pour cette histoire…'}</div>` : '';
+    const who = this.pathsAi ? esc(this.pathsAi) : 'L’IA';
+    const waiting = pending ? `<div class="role-wait"><span class="sc-note-dot" aria-hidden="true"></span>${this.walks.length ? `${who} trace un autre parcours…` : `${who} trace des parcours dans cette histoire…`}</div>` : '';
+    const planners = [...new Set(this.walks.flatMap((w) => (w.ai ? [w.ai] : [])))];
     box.hidden = false;
-    box.innerHTML = `<div class="roles-title">▶ Vivre cette histoire${this.walks.length ? ` <span>· ${this.walks.length} rôle${this.walks.length > 1 ? 's' : ''}</span>` : ''}</div>
+    box.innerHTML = `<div class="roles-title">▶ Parcourir cette histoire${this.walks.length ? ` <span>· ${this.walks.length} parcours</span>` : ''}</div>
       ${this.walks.map(role).join('')}
       ${waiting}
+      ${planners.length && !pending ? `<div class="roles-ai">Parcours tracés par ${planners.map(esc).join(', ')} d’après l’article ; chaque étape est rédigée d’après Wikipédia à l’arrivée.</div>` : ''}
       ${others.length ? `<button type="button" class="sc-link roles-more">+ ${others.length} autre${others.length > 1 ? 's' : ''} chemin${others.length > 1 ? 's' : ''} passe${others.length > 1 ? 'nt' : ''} par ici ›</button>` : ''}`;
     box.querySelectorAll<HTMLButtonElement>('.role').forEach((b) => b.addEventListener('click', () => {
       const w = this.walks[Number(b.dataset.role)];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bestMention, cleanWikitext, isPlace, labelOf, leadLinks, mentionsOf, phaseOf, rankMentions, sectionOf, yearsIn } from './skeleton.ts';
+import { bestMention, cleanWikitext, filesOf, isPlace, labelOf, leadLinks, mentionsOf, phaseOf, rankMentions, sectionOf, yearsIn } from './skeleton.ts';
 
 const ARTICLE = `{{Infobox Navire
  | nom = RMS ''Titanic''
@@ -114,7 +114,15 @@ describe('the section telling a moment', () => {
     expect(s.text).not.toContain('Ballard');
     expect(s.links).toEqual(['Edward Smith (officier de marine)', 'Cherbourg-en-Cotentin', 'Nomadic']);
     expect(s.files).toEqual(['Titanic leaving Southampton.jpg', 'Nomadic.jpg']);
+    expect(s.captions).toEqual({ 'Titanic leaving Southampton.jpg': 'Le départ de Southampton.', 'Nomadic.jpg': 'Le transbordeur' });
     expect(s.detailed).toEqual(['Naufrage du Titanic']);
+  });
+
+  it('reads a picture’s caption past its layout and the links in it', () => {
+    expect(filesOf('[[File:A_b.jpg|thumb|upright=1.2|220px|alt=x|Le pont du [[Titanic|navire]], vers 1912.]] [[Fichier:Plan.png|vignette|gauche]]')).toEqual([
+      { file: 'A b.jpg', caption: 'Le pont du navire, vers 1912.' },
+      { file: 'Plan.png', caption: null },
+    ]);
   });
 
   it('reads the introduction for no heading, or one the article does not have', () => {

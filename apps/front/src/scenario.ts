@@ -1,13 +1,16 @@
 import {
-  forkWalk, formatWhen, formatYear, type Door, type PoiLite, type ScenarioWalk, type StepChoice, type StepQuote, type StoryPerson, type WalkLead,
+  forkWalk, formatWhen, formatYear, type Door, type PoiLite, type ScenarioWalk, type Source, type StepChoice, type StepPicture, type StepQuote, type StoryPerson,
+  type WalkLead,
 } from '@way/shared';
 import type { Entity } from './entity.ts';
 import { viaServer } from './media.ts';
 import type { RouteOption } from './storymap.ts';
 
-// The carnet de route, as a column beside the map: the step played (its
-// place's picture, what is at stake there, its text), and pinned under it
-// the crossroads, "Que faites-vous ?": go on along the planned route,
+// The carnet de route, as a column beside the map: the step played, told
+// like a short illustrated article from Wikipedia (its place's picture, its
+// heading, its paragraphs and the section's pictures, who was there, its
+// sources and the AI that wrote it), and pinned under it the crossroads,
+// "Où aller ensuite ?": go on along the planned route,
 // turn away at one of its turning points, or take a short detour and come
 // back. The same crossroads is drawn on the globe from the step. Tabs give
 // the tree of the paths taken and not taken from this story, and the card of
@@ -179,9 +182,24 @@ export interface StepText {
   next: string | null;
   facts: string[];
   quote: StepQuote | null;
-  gallery: string[];
+  gallery: StepPicture[];
   near: PoiLite[];
+  sources: Source[];
+  ai: string | null;
 }
+
+/** A step's picture as kept: paths remembered before captions kept plain addresses. */
+const pictureOf = (g: StepPicture | string): StepPicture => (typeof g === 'string' ? { src: g, caption: null } : g);
+
+/** A step's picture for its thumbnail: its place's, else the first of its gallery. */
+const thumbOf = (s: { image?: string | null; gallery?: (StepPicture | string)[] }): string | null =>
+  s.image ?? (s.gallery?.[0] ? pictureOf(s.gallery[0]).src : null);
+
+/** A picture between a step's paragraphs, with its caption, as an article shows it. */
+const figure = (g: StepPicture) => `<figure class="film-fig">
+    <img alt="${esc(g.caption ?? '')}" src="${esc(viaServer(g.src))}" referrerpolicy="no-referrer" loading="lazy">
+    ${g.caption ? `<figcaption>${esc(g.caption)}</figcaption>` : ''}
+  </figure>`;
 
 /** Elsewhere from a step: what happened meanwhile, what led there (the card's doors). */
 export interface StepDoors {
@@ -211,10 +229,14 @@ export class Carnet {
   private here: Here | null = null;
   /** Something being prepared (a detour, a life written by an AI). */
   private note: string | null = null;
+  /** The AI writing the step played, while it does. */
+  private writer: string | null = null;
   /** A path just left: the bar offering to go back to where the visitor was before it. */
   private back: string | null = null;
   /** "Explorer autour" unfolded. */
   private around = false;
+  /** The crossroads unfolded: its turning points and detours, not only the way on. */
+  private crossOpen = false;
   /** What the buttons shown point to. */
   private leads: Lead[] = [];
   private walksShown: ScenarioWalk[] = [];
@@ -420,13 +442,22 @@ export class Carnet {
     this.render();
   }
 
+  /** The AI writing the step played (null once done). */
+  setWriter(ai: string | null): void {
+    if (ai === this.writer) return;
+    this.writer = ai;
+    this.render();
+  }
+
   /** A step's text has come: kept with the path (it is not written twice). */
   setStepText(walkId: string, j: number, t: StepText): void {
     const p = this.journal.get(walkId);
     const st = p?.walk.steps[j];
     if (!p || !st) return;
+    this.writer = null;
     p.walk.steps[j] = {
       ...st, text: t.text, cast: t.cast.length ? t.cast : st.cast, choices: t.choices, next: t.next, facts: t.facts, quote: t.quote, gallery: t.gallery, near: t.near,
+      sources: t.sources, ai: t.ai,
     };
     this.journal.save();
     this.onMet(p.walk);
@@ -524,7 +555,9 @@ export class Carnet {
     // Laid out first: the map flies to the part the column leaves visible.
     this.render();
     this.onStep(p.walk, p.step, first);
-    if (!p.walk.steps[p.step]!.text) this.onNeedText(p.walk, p.step);
+    // Written by the step's writer, or still to be: those of a life come with a few lines, made a full step on arrival.
+    this.writer = null;
+    if (!p.walk.steps[p.step]!.ai) this.onNeedText(p.walk, p.step);
     this.onChange();
   }
 
@@ -559,6 +592,9 @@ export class Carnet {
       case 'retry':
         if (p) this.onNeedText(p.walk, p.step);
         return;
+      case 'cross':
+        this.crossOpen = !this.crossOpen;
+        return this.render();
       case 'finish': return this.finish();
       case 'back': return this.quit();
       case 'return':
@@ -625,7 +661,13 @@ export class Carnet {
           fig?.classList.remove('no-img');
           fig?.insertAdjacentHTML('afterbegin', `<img alt="" src="${esc(url)}" referrerpolicy="no-referrer">`);
         }
+        const caption = this.root.querySelector<HTMLElement>('.film-img-caption');
+        if (caption) {
+          caption.textContent = b.dataset.caption ?? '';
+          caption.hidden = !b.dataset.caption;
+        }
         this.root.querySelectorAll('.film-pic').forEach((x) => x.classList.toggle('on', x === b));
+        this.root.querySelector('.film-pane')?.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }
       case 'door': {
@@ -744,7 +786,7 @@ export class Carnet {
   /** The column: its head and tabs, the step played (or the tree), the crossroads pinned under it, the reel of steps. */
   private film(p: Path, note: string, tab: CarnetTab): string {
     const w = p.walk;
-    const protagonist = w.invented ? 'Personnage inventé' : w.hero ? esc(w.hero.name) : 'Personnage réel';
+    const protagonist = w.invented ? 'Fil thématique' : w.hero ? esc(w.hero.name) : 'Personnage réel';
     const family = this.familyOf(p);
     const card = this.cardTitle();
     const tabs = `<nav class="film-tabs" role="tablist" aria-label="Carnet">
@@ -772,51 +814,79 @@ export class Carnet {
       </section>`;
   }
 
-  /** The step played: its place and moment, what is at stake, its text, its people, words and pictures; around it, folded. */
+  /**
+   * The step played, as a short illustrated article: its place and moment,
+   * its heading, its paragraphs with the section's pictures and their
+   * captions between them, a sentence of the article, the facts to keep,
+   * who was there, its sources and the AI that wrote it; around it, folded.
+   */
   private stepView(p: Path): string {
     const w = p.walk;
     const st = w.steps[p.step]!;
     this.leads = stepLeads(w, p.step);
     this.walksShown = [];
     this.afterShown = [];
-    const img = st.image ?? null;
-    const text = st.text
-      ? `<p class="film-text">${esc(st.text)}</p>`
-      : `<div class="film-writing"><span class="sc-note-dot" aria-hidden="true"></span>L’IA écrit cette étape à partir de l’article sur ${esc(st.place)}…
-          <button type="button" class="sc-link" data-act="retry">relancer</button></div>
-          <div class="film-text skeleton-lines"><i></i><i></i><i></i></div>`;
+    const pics = (st.gallery ?? []).map(pictureOf);
+    const head = st.image ? { src: st.image, caption: null } : pics.shift() ?? null;
+    const paragraphs = st.text ? st.text.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean) : [];
+    // Pictures between the paragraphs, as an article shows them (never after the last); the others in a strip.
+    const slots = [0, 2].filter((k) => k < paragraphs.length - 1).slice(0, pics.length);
+    const inline = pics.slice(0, slots.length);
+    const strip = pics.slice(slots.length);
     const quote = st.quote
       ? `<blockquote class="film-quote">« ${esc(st.quote.text)} »<cite><a href="${esc(st.quote.source.url)}" target="_blank" rel="noopener">${esc(st.quote.source.title)}</a></cite></blockquote>`
       : '';
+    const quoteAt = paragraphs.length > 2 ? 1 : paragraphs.length - 1;
+    const writing = (what: string) => `<div class="film-writing"><span class="sc-note-dot" aria-hidden="true"></span>${what}
+          <button type="button" class="sc-link" data-act="retry">relancer</button></div>`;
+    const article = paragraphs.length
+      ? `<div class="film-article">${paragraphs.map((t, k) => {
+        const at = slots.indexOf(k);
+        return `<p class="film-par${k === 0 ? ' film-lead' : ''}">${esc(t)}</p>${at >= 0 ? figure(inline[at]!) : ''}${k === quoteAt ? quote : ''}`;
+      }).join('')}</div>
+        ${!st.ai && this.writer ? writing(`${esc(this.writer)} développe cette étape d’après Wikipédia…`) : ''}`
+      : `${writing(`${this.writer ? esc(this.writer) : 'L’IA'} écrit cette étape d’après l’article de Wikipédia sur ${esc(st.place)}…`)}
+          <div class="film-text skeleton-lines"><i></i><i></i><i></i><i></i><i></i></div>`;
     const facts = st.facts?.length
-      ? `<aside class="film-facts"><div class="film-facts-title">Autour de vous</div><ul>${st.facts.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></aside>`
+      ? `<aside class="film-facts"><div class="film-box-title">Repères</div><ul>${st.facts.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></aside>`
       : '';
     const who = st.text && st.cast.length
-      ? `<div class="film-who"><span class="film-who-title">Qui est là</span>${st.cast.map((c, k) => `<button type="button" class="film-person" data-act="who" data-i="${k}" title="${esc(`${c.name} · ${c.role}`)}" aria-haspopup="menu">
-          ${face(c)}<span>${esc(c.name)}</span></button>`).join('')}</div>`
+      ? `<section class="film-who"><div class="film-box-title">Présents</div><div class="film-who-list">${st.cast.map((c, k) => `<button type="button" class="film-person" data-act="who" data-i="${k}" title="${esc(`${c.name} · ${c.role}`)}" aria-haspopup="menu">
+          ${face(c)}<span class="film-person-text"><b>${esc(c.name)}</b><small>${esc(c.role)}</small></span></button>`).join('')}</div></section>`
       : '';
-    const pictures = st.gallery?.length
-      ? `<div class="film-gallery">${[...(st.image ? [st.image] : []), ...st.gallery].map((u, k) => `<button type="button" class="film-pic${k === 0 ? ' on' : ''}" data-act="pic" data-url="${esc(viaServer(u))}" aria-label="Image ${k + 1}"><img alt="" src="${esc(viaServer(u))}" referrerpolicy="no-referrer" loading="lazy"></button>`).join('')}</div>`
+    const pictures = strip.length
+      ? `<div class="film-gallery">${strip.map((g, k) => `<button type="button" class="film-pic" data-act="pic" data-url="${esc(viaServer(g.src))}" data-caption="${esc(g.caption ?? '')}" aria-label="${esc(g.caption ?? `Image ${k + 1}`)}" title="${esc(g.caption ?? '')}"><img alt="" src="${esc(viaServer(g.src))}" referrerpolicy="no-referrer" loading="lazy"></button>`).join('')}</div>`
       : '';
-    return `<figure class="film-img${img ? '' : ' no-img'}">
-          ${img ? `<img alt="" src="${esc(viaServer(img))}" referrerpolicy="no-referrer">` : ''}
+    const sources = st.sources?.length ? st.sources : st.text ? [w.source] : [];
+    const credit = st.ai
+      ? `Texte rédigé par <b>${esc(st.ai)}</b> d’après ${sources.length > 1 ? 'ces articles' : 'cet article'} de Wikipédia (CC BY-SA) : vérifiez-les.`
+      : st.text ? 'Texte écrit avec le chemin, d’après l’article ci-dessus.' : '';
+    const footer = sources.length
+      ? `<footer class="film-sources"><div class="film-box-title">Sources</div>
+          <ul>${sources.map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title.replace(/^Wikipédia : /, ''))}</a></li>`).join('')}</ul>
+          <p class="film-ai">${credit}${w.ai ? ` Chemin tracé par ${esc(w.ai)}.` : ''}</p></footer>`
+      : '';
+    return `<figure class="film-img${head ? '' : ' no-img'}">
+          ${head ? `<img alt="" src="${esc(viaServer(head.src))}" referrerpolicy="no-referrer">` : ''}
           <figcaption><b>${esc(st.place)}</b><span>${esc(formatWhen(st))}</span></figcaption>
         </figure>
-        <div class="film-place">${esc(st.label)}</div>
-        ${st.beat ? `<p class="film-beat"><span>Enjeu</span>${esc(st.beat)}</p>` : ''}
+        <p class="film-img-caption"${head?.caption ? '' : ' hidden'}>${esc(head?.caption ?? '')}</p>
+        ${st.beat ? `<div class="film-place">${esc(st.label)}</div>` : ''}
+        <h3 class="film-heading">${esc(st.beat ?? st.label)}</h3>
         ${p.step === 0 ? `<p class="film-premise">${esc(w.premise)}</p>` : ''}
-        ${text}
-        ${quote}
-        ${who}
+        ${article}
         ${facts}
+        ${who}
         ${pictures}
+        ${footer}
         ${this.aroundView(p)}`;
   }
 
   /**
-   * "Que faites-vous ?": the way on along the planned route first, then the
+   * "Où aller ensuite ?": the way on along the planned route first, then the
    * turning points (a branch of this path), then the detours (a few steps,
-   * then back here); at the end of the path, the ways on.
+   * then back here), folded under their count to leave the article room;
+   * at the end of the path, the ways on.
    */
   private cross(p: Path): string {
     const w = p.walk;
@@ -845,8 +915,13 @@ export class Carnet {
           <span class="cross-text"><b>${esc(f.label)}</b><small>${f.hero ? `avec ${esc(f.hero.name)} · ` : ''}${to ? `${esc(to.place)} · ${esc(formatWhen(to))}` : ''}${taken ? ` · ${taken.done ? 'parcourue' : `reprendre ${taken.step + 1}/${taken.walk.steps.length}`}` : ''}</small></span>
         </button>`;
     }).join('');
+    // Someone a turning point follows is no detour as well.
+    const followed = new Set((st.forks ?? []).flatMap((f) => (f.hero ? [f.hero.qid] : [])));
+    let shown = 0;
     const choices = st.text ? (st.choices ?? []).map((c, k) => {
-      const where = c.person ? `dans les pas de ${c.person.name}, puis retour` : c.poi ? `${c.poi.title}, puis retour` : c.step ? `${c.step.place} · ${formatWhen(c.step)}, puis la suite` : '';
+      if (c.person && followed.has(c.person.qid)) return '';
+      shown++;
+      const where = c.person ? `quelques moments de sa vie, puis retour` : c.poi ? `${c.poi.title}, puis retour` : c.step ? `${c.step.place} · ${formatWhen(c.step)}, puis la suite` : '';
       return `<button type="button" class="cross-detour${st.chosen === k ? ' on' : ''}" data-act="choice" data-i="${k}" title="Un détour, puis retour sur le chemin">
           ${c.person ? face(c.person) : '<span class="cross-icon" aria-hidden="true">↪</span>'}
           <span class="cross-text"><b>${esc(c.label)}</b><small>${esc(where)}</small></span>
@@ -860,17 +935,25 @@ export class Carnet {
         </button>`
       : '')).join('');
     const people = this.leads.map((l, i) => {
-      if (l.kind !== 'person' || l.hero || asked.has(l.person.qid)) return '';
+      if (l.kind !== 'person' || l.hero || asked.has(l.person.qid) || followed.has(l.person.qid)) return '';
+      shown++;
       return `<div class="cross-person">${face(l.person)}<span class="cross-text"><b>${esc(l.person.name)}</b><small>${esc(l.person.role)}</small></span>
-          <button type="button" class="cn-go" data-act="lead" data-i="${i}" data-how="detour" title="Quelques étapes autour de ce moment, dans ses pas, puis retour ici">détour</button><button type="button" class="cn-go" data-act="lead" data-i="${i}" data-how="full" title="Toute son histoire, comme une branche de ce chemin">sa vie</button></div>`;
+          <button type="button" class="cn-go" data-act="lead" data-i="${i}" data-how="detour" title="Quelques moments de sa vie autour de celui-ci, puis retour ici">détour</button><button type="button" class="cn-go" data-act="lead" data-i="${i}" data-how="full" title="Toute son histoire, comme une branche de ce chemin">sa vie</button></div>`;
     }).join('');
     const detours = choices + people;
     const turns = forks + life;
-    return `<div class="film-cross" role="group" aria-label="Que faites-vous ?">
-        <div class="cross-title">${next ? 'Que faites-vous ?' : 'Et maintenant ?'}</div>
+    const nTurns = (st.forks?.length ?? 0) + this.leads.filter((l) => l.kind === 'person' && l.hero).length;
+    const plural = (n: number, word: string) => `${n} ${word}${n > 1 ? 's' : ''}`;
+    const count = [nTurns ? `⑂ ${plural(nTurns, 'bifurcation')}` : '', shown ? `↩ ${plural(shown, 'détour')}` : ''].filter(Boolean).join(' · ');
+    const open = this.crossOpen || !next;
+    return `<div class="film-cross${open ? ' open' : ''}" role="group" aria-label="Où aller ensuite ?">
+        <div class="cross-head">
+          <span class="cross-title">${next ? 'Où aller ensuite ?' : 'Et maintenant ?'}</span>
+          ${count && next ? `<button type="button" class="cross-toggle" data-act="cross" aria-expanded="${open}" title="${open ? 'Replier' : 'Les autres suites et les détours de cette étape'}">${count} ${open ? '▴' : '▾'}</button>` : ''}
+        </div>
         ${on}
-        ${turns ? `<div class="cross-group"><div class="cross-label">⑂ Bifurquer <span>· une autre suite</span></div>${turns}</div>` : ''}
-        ${detours ? `<div class="cross-group"><div class="cross-label">↩ Détours <span>· puis retour ici</span></div>${detours}</div>` : ''}
+        ${open && turns ? `<div class="cross-group"><div class="cross-label">⑂ Bifurquer <span>· une autre suite</span></div>${turns}</div>` : ''}
+        ${open && detours ? `<div class="cross-group"><div class="cross-label">↩ Détours <span>· puis retour ici</span></div>${detours}</div>` : ''}
       </div>`;
   }
 
@@ -905,7 +988,7 @@ export class Carnet {
     const thumbs = w.steps.map((s, j) => {
       const turns = (s.forks?.length ?? 0) + kids.filter((k) => k.parent!.step === j && !k.walk.id.startsWith(`${w.id}|bifurcation|${j}|`)).length;
       return `<button type="button" class="film-thumb${j === p.step ? ' on' : j <= p.seen ? ' done' : ''}${s.text ? '' : ' unwritten'}" data-act="dot" data-i="${j}" title="${esc(`${j + 1}. ${s.place} · ${formatWhen(s)}${s.beat ? ` — ${s.beat}` : ''}`)}">
-          ${s.image ? `<img alt="" src="${esc(viaServer(s.image))}" referrerpolicy="no-referrer" loading="lazy">` : ''}
+          ${thumbOf(s) ? `<img alt="" src="${esc(viaServer(thumbOf(s)!))}" referrerpolicy="no-referrer" loading="lazy">` : ''}
           <span class="film-thumb-place">${esc(s.place)}</span>
           ${turns ? `<span class="film-thumb-fork" aria-label="bifurcation">⑂</span>` : ''}
         </button>`;
@@ -1030,7 +1113,7 @@ export class Carnet {
     const known = this.journal.get(w.id);
     const mine = this.current === w.id && !this.paused;
     const go = mine ? 'En cours ●' : known && !known.done ? `Reprendre · étape ${known.step + 1} ▸` : known?.done ? 'Revivre ↺' : 'Commencer ▸';
-    const who = w.invented ? 'Personnage inventé' : `Personnage réel${w.hero ? ` · ${esc(w.hero.name)}` : ''}`;
+    const who = w.invented ? 'Fil thématique' : `Personnage réel${w.hero ? ` · ${esc(w.hero.name)}` : ''}`;
     const branch = playing && playing.walk.id !== w.id
       ? `<button type="button" class="cn-go" data-act="branch" data-i="${i}" title="L’ouvrir comme une branche du chemin en cours">⑂ Bifurquer ici</button>`
       : '';
@@ -1052,7 +1135,7 @@ export class Carnet {
     const life = h.person
       ? `<div class="cn-fork cn-life">
           ${face(h.person)}
-          <span class="cn-fork-text"><b>Vivre l’histoire de ${esc(h.person.name)}</b><small>À travers les fiches de sa vie, écrite par l’IA</small></span>
+          <span class="cn-fork-text"><b>Suivre la vie de ${esc(h.person.name)}</b><small>Étape par étape, à travers les fiches de sa vie</small></span>
           ${p && year !== undefined ? `<button type="button" class="cn-go" data-act="life" data-how="detour" title="Quelques étapes de sa vie autour de ${esc(formatYear(year))}">Un détour (${esc(formatYear(year))})</button>` : ''}
           <button type="button" class="cn-go cn-go-main" data-act="life" data-how="full">Tout son chemin ▸</button>
         </div>`
@@ -1074,12 +1157,12 @@ export class Carnet {
     const paths = this.journal.list();
     if (!paths.length) {
       return `<div class="cn-kicker">Mes chemins</div>
-        <p class="cn-empty">Aucun chemin commencé. Ouvrez une fiche : « ▶ Vivre cette histoire » propose ses rôles.</p>`;
+        <p class="cn-empty">Aucun chemin commencé. Ouvrez une fiche : « ▶ Parcourir cette histoire » propose ses parcours.</p>`;
     }
     const rows = paths.map((a) => {
       const n = a.walk.steps.length;
       const parent = a.parent && this.journal.get(a.parent.id);
-      const meta = [parent ? `${KIND_LABELS[a.kind]} de « ${parent.walk.title} »` : KIND_LABELS[a.kind], a.walk.hero?.name ?? (a.walk.invented ? 'Personnage inventé' : '')].filter(Boolean).join(' · ');
+      const meta = [parent ? `${KIND_LABELS[a.kind]} de « ${parent.walk.title} »` : KIND_LABELS[a.kind], a.walk.hero?.name ?? (a.walk.invented ? 'Fil thématique' : '')].filter(Boolean).join(' · ');
       const mine = a.walk.id === p?.walk.id;
       return `<div class="cn-path${mine ? ' playing' : ''}">
           <button type="button" class="cn-path-main" data-act="path" data-id="${esc(a.walk.id)}" title="${a.done ? 'Revivre ce chemin' : 'Reprendre à l’étape où vous étiez'}">
@@ -1103,7 +1186,7 @@ export class Carnet {
     const line = new Set(p ? [...this.ancestors(p), p].map((a) => a.walk.id) : []);
     return `<div class="cn-kicker">Les arbres des chemins <span class="cn-aside">· pris en plein, non pris en pointillés</span></div>
       ${roots.map((r, i) => `<details class="tr-root"${i === 0 || line.has(r.walk.id) ? ' open' : ''}>
-          <summary><b>${esc(r.walk.title)}</b><small>${esc(r.walk.hero?.name ?? (r.walk.invented ? 'Personnage inventé' : ''))} · ${r.done ? 'terminé' : `${r.seen + 1}/${r.walk.steps.length}`}</small></summary>
+          <summary><b>${esc(r.walk.title)}</b><small>${esc(r.walk.hero?.name ?? (r.walk.invented ? 'Fil thématique' : ''))} · ${r.done ? 'terminé' : `${r.seen + 1}/${r.walk.steps.length}`}</small></summary>
           <ol class="tr">${this.treeSteps(r, p, line)}</ol>
         </details>`).join('')}`;
   }
