@@ -87,6 +87,24 @@ describe('provider router', () => {
     expect(r.hasProvider('extract')).toBe(false);
   });
 
+  it('tries the AIs of a task in the order chosen on the settings page', async () => {
+    const hosts: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      hosts.push(new URL(url).host);
+      return completion('{"ok": true}');
+    }));
+    const settings: SettingsData = { env: {}, disabled: [], routes: { write: ['a', 'b', 'unknown'] } };
+    const r = new ProviderRouter(config(), { A_KEY: 'x', B_KEY: 'y' }, null, () => settings);
+    await r.completeJson('write', 's', 'u', (v) => v);
+    expect(hosts).toEqual(['a.test']);
+    expect(r.routes().write).toEqual({ order: ['a', 'b'], defaults: ['b'], custom: true });
+    // Left alone: the providers file's order.
+    expect(r.routes().extract).toMatchObject({ order: ['nokey', 'a', 'b'], custom: false });
+    // An empty order: no AI writes.
+    settings.routes = { write: [] };
+    expect(r.canRun('write')).toBe(false);
+  });
+
   it('tests a key without pausing the provider when it fails', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'bad key' }, 401)));
     const r = new ProviderRouter(config(), { A_KEY: 'x' });

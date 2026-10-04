@@ -185,6 +185,62 @@ export function mentionsOf(wikitext: string): Mention[] {
   return out;
 }
 
+/** What a section of an article holds for a step written there: its text, the articles it links, its pictures, its detailed articles. */
+export interface Section {
+  text: string;
+  /** Linked articles, in the order of the text, once each. */
+  links: string[];
+  /** Its files, as named ("Titanic leaving Southampton.jpg"). */
+  files: string[];
+  /** {{Article détaillé|…}}: the articles telling this part at length. */
+  detailed: string[];
+}
+
+const FILE = /\[\[\s*(?:fichier|file|image)\s*:\s*([^|\]]+)/gi;
+const GALLERY = /<gallery[^>]*>([\s\S]*?)<\/gallery>/gi;
+const DETAILED = /\{\{\s*(?:article d[ée]taill[ée]|article principal|main|main article|d[ée]taill[ée])\s*\|([^{}]+)\}\}/gi;
+const PICTURE = /\.(jpe?g|png|webp|tiff?)$/i;
+
+/**
+ * The section of an article a heading names (its subsections included), or
+ * the introduction for none ("Introduction", an infobox field): its text,
+ * links, pictures and detailed articles. Pure, for tests.
+ */
+export function sectionOf(wikitext: string, heading: string | null): Section {
+  const lines = wikitext.split('\n');
+  const want = (heading ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const title = (raw: string) => cleanWikitext(raw).replace(LINK, (_, a: string, b?: string) => b ?? a).replace(/\s+/g, ' ').trim().toLowerCase();
+  let from = 0;
+  let to = lines.findIndex((l) => HEADING.test(l));
+  if (to < 0) to = lines.length;
+  const at = want ? lines.findIndex((l) => { const h = l.match(HEADING); return !!h && title(h[2]!) === want; }) : -1;
+  if (at >= 0) {
+    const level = lines[at]!.match(HEADING)![1]!.length;
+    from = at + 1;
+    to = lines.findIndex((l, i) => i > at && (l.match(HEADING)?.[1]?.length ?? 99) <= level);
+    if (to < 0) to = lines.length;
+  }
+  const raw = lines.slice(from, to).join('\n');
+  const files: string[] = [];
+  const addFile = (f: string) => {
+    const name = f.trim().replace(/_/g, ' ');
+    if (PICTURE.test(name) && !files.includes(name)) files.push(name);
+  };
+  for (const m of raw.matchAll(FILE)) addFile(m[1]!);
+  for (const g of raw.matchAll(GALLERY)) for (const l of g[1]!.split('\n')) addFile(l.replace(/^\s*(?:fichier|file|image)\s*:/i, '').split('|')[0] ?? '');
+  const detailed = [...raw.matchAll(DETAILED)].flatMap((m) => params(m[1]!).filter((p) => !p.includes('=')).map((p) => p.trim())).filter(Boolean);
+  const links: string[] = [];
+  const text = cleanWikitext(raw).split('\n')
+    .filter((l) => !/^@@/.test(l.trim()) && !HEADING.test(l))
+    .map((l) => l.replace(/^[{|!*#:;]+[-}+]?\s*/, '').replace(LINK, (_, a: string, b?: string) => {
+      const target = a.split('#')[0]!.trim().replace(/_/g, ' ');
+      if (target && !NAMESPACE.test(target) && !target.startsWith(':') && !links.includes(target)) links.push(target);
+      return (b ?? a).trim();
+    }).trim())
+    .filter(Boolean).join('\n').replace(/[ \t]+/g, ' ');
+  return { text, links, files, detailed };
+}
+
 /** The links of an article's introduction (before its first heading), once each: the words linked and the article. Pure, for tests. */
 export function leadLinks(wikitext: string): { target: string; label: string }[] {
   const lead = cleanWikitext(wikitext.split(/^==[^=]/m)[0] ?? '');

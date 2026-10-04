@@ -139,12 +139,14 @@ export interface StepQuote {
   source: Source;
 }
 
-/** A turn the story may take from a step: another place of the same story, next; or another card, as a detour. */
+/** A turn the story may take from a step: another place of the same story, next; another card, or someone met there, as a detour. */
 export interface StepChoice {
   /** "Suivre les rescapés jusqu'à New York". */
   label: string;
   step?: WalkStep;
   poi?: PoiLite;
+  /** Someone present: a few moments of their life around this one, in their shoes. */
+  person?: StoryPerson;
 }
 
 /** A step's text, written when the visitor gets there (`pending` meanwhile). */

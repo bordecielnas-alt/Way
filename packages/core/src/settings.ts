@@ -12,6 +12,8 @@ export interface SettingsData {
   env: Record<string, string>;
   /** Provider ids turned off by hand. */
   disabled: string[];
+  /** The AIs each task tries, in order, as chosen by hand; a task left out follows the providers file. */
+  routes?: Partial<Record<'extract' | 'write', string[]>>;
   /** Interface and exploration preferences. */
   ui?: UiSettings;
   /** How much is kept on disk, and for how long before checking again. */
@@ -70,6 +72,17 @@ export function normalizeUi(raw: Partial<UiSettings> | undefined): UiSettings {
   };
 }
 
+/** Hand-chosen orders, each id once; undefined when none. */
+export function normalizeRoutes(raw: unknown): SettingsData['routes'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out: NonNullable<SettingsData['routes']> = {};
+  for (const task of ['extract', 'write'] as const) {
+    const list = (raw as Record<string, unknown>)[task];
+    if (Array.isArray(list)) out[task] = [...new Set(list.filter((x): x is string => typeof x === 'string'))];
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 const RELOAD_MS = 3000;
 
 export class SettingsFile {
@@ -111,6 +124,7 @@ export class SettingsFile {
         level2: typeof raw.level2 === 'boolean' ? raw.level2 : undefined,
         env: Object.fromEntries(Object.entries(raw.env ?? {}).filter(([, v]) => typeof v === 'string' && v)),
         disabled: Array.isArray(raw.disabled) ? raw.disabled.filter((x) => typeof x === 'string') : [],
+        routes: normalizeRoutes(raw.routes),
         ui: raw.ui ? normalizeUi(raw.ui) : undefined,
         cache: raw.cache && typeof raw.cache === 'object' ? raw.cache : undefined,
       };

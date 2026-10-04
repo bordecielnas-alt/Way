@@ -180,6 +180,25 @@ export async function pageImages(lang: string, title: string, limit = 6, width =
   }).slice(0, limit);
 }
 
+/** Files named by an article ("Titanic leaving Southampton.jpg"), as thumbnails about `width` wide, in the order given: pictures only. */
+export async function fileThumbs(lang: string, files: string[], width = 640): Promise<string[]> {
+  if (!files.length) return [];
+  const asked = files.slice(0, 50).map((f) => `File:${f}`);
+  const params = new URLSearchParams({
+    action: 'query', titles: asked.join('|'), prop: 'imageinfo', iiprop: 'url|mime|size', iiurlwidth: String(width), format: 'json', formatversion: '2',
+  });
+  const r = await fetchJson<ImagesResponse & { query?: { normalized?: { from: string; to: string }[] } }>(`https://${lang}.wikipedia.org/w/api.php?${params}`);
+  const norm = new Map((r.query?.normalized ?? []).map((n) => [n.from, n.to]));
+  const byTitle = new Map((r.query?.pages ?? []).map((p) => [p.title, p]));
+  return asked.flatMap((a) => {
+    const p = byTitle.get(norm.get(a) ?? a);
+    const i = p?.imageinfo?.[0];
+    if (!p || !i?.thumburl || !/^image\/(jpeg|png|webp)$/.test(i.mime ?? '') || NOT_A_PICTURE.test(p.title)) return [];
+    if ((i.width ?? 0) < 280 || (i.height ?? 0) < 180) return [];
+    return [i.thumburl];
+  });
+}
+
 interface LinksResponse {
   continue?: Record<string, string>;
   query?: {

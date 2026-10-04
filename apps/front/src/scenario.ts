@@ -400,10 +400,10 @@ export class Carnet {
     const st = p?.walk.steps[p.step];
     const c = st?.choices?.[k];
     if (!p || !st || !c) return;
-    if (c.poi) {
+    if (c.poi || c.person) {
       p.walk.steps[p.step] = { ...st, chosen: k };
       this.journal.save();
-      this.onLead({ kind: 'place', poi: c.poi }, 'detour', { year: st.year, walk: p.walk });
+      this.onLead(c.person ? { kind: 'person', person: c.person } : { kind: 'place', poi: c.poi! }, 'detour', { year: st.year, walk: p.walk });
       return;
     }
     if (!c.step) return;
@@ -616,8 +616,11 @@ export class Carnet {
           <div class="film-text skeleton-lines"><i></i><i></i><i></i></div>`;
     const choices = st.text && st.choices?.length
       ? `<div class="film-choices">${st.choices.map((c, k) => {
-          const where = c.poi ? `Détour : ${c.poi.title}` : c.step ? `${c.step.place} · ${formatYear(c.step.year)}` : '';
-          return `<button type="button" class="film-choice${st.chosen === k ? ' on' : ''}${c.poi ? ' away' : ''}" data-act="choice" data-i="${k}" title="${esc(where)}">${c.poi ? '⤴' : '↳'} ${esc(c.label)}</button>`;
+          const where = c.person ? `Détour dans les pas de ${c.person.name}, puis retour ici` : c.poi ? `Détour : ${c.poi.title}` : c.step ? `${c.step.place} · ${formatYear(c.step.year)}` : '';
+          const mark = c.person
+            ? `<span class="film-choice-face">${c.person.image ? `<img alt="" src="${esc(viaServer(c.person.image))}" referrerpolicy="no-referrer">` : esc(c.person.name.charAt(0))}</span>`
+            : c.poi ? '⤴' : '↳';
+          return `<button type="button" class="film-choice${st.chosen === k ? ' on' : ''}${c.poi || c.person ? ' away' : ''}" data-act="choice" data-i="${k}" title="${esc(where)}">${mark} ${esc(c.label)}</button>`;
         }).join('')}</div>`
       : '';
     const quote = st.quote

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bestMention, cleanWikitext, isPlace, labelOf, leadLinks, mentionsOf, phaseOf, rankMentions, yearsIn } from './skeleton.ts';
+import { bestMention, cleanWikitext, isPlace, labelOf, leadLinks, mentionsOf, phaseOf, rankMentions, sectionOf, yearsIn } from './skeleton.ts';
 
 const ARTICLE = `{{Infobox Navire
  | nom = RMS ''Titanic''
@@ -88,5 +88,37 @@ describe('the links of an introduction', () => {
     expect(leadLinks(ARTICLE)).toEqual([{ target: 'Naufrage du Titanic', label: 'voyage inaugural' }]);
     expect(leadLinks('Commandé par [[Edward Smith|le capitaine Smith]], puis [[Edward Smith]] et [[Belfast]].\n== Suite ==\n[[Paris]]'))
       .toEqual([{ target: 'Edward Smith', label: 'le capitaine Smith' }, { target: 'Belfast', label: 'Belfast' }]);
+  });
+});
+
+describe('the section telling a moment', () => {
+  const WIKI = [
+    'Le paquebot de la [[White Star Line]].',
+    '== Voyage inaugural ==',
+    '{{Article détaillé|Naufrage du Titanic}}',
+    '[[Fichier:Titanic leaving Southampton.jpg|vignette|Le départ de [[Southampton]].]]',
+    'Le 10 avril 1912, [[Edward Smith (officier de marine)|le commandant Smith]] fait appareiller.',
+    '=== Escale ===',
+    'À [[Cherbourg-en-Cotentin|Cherbourg]], le [[Nomadic]] amène les passagers.<gallery>',
+    'File:Nomadic.jpg|Le transbordeur',
+    'Carte.svg',
+    '</gallery>',
+    '== Postérité ==',
+    '[[Robert Ballard]] retrouve l’épave.',
+  ].join('\n');
+
+  it('keeps the section and its subsections: text, links, pictures, detailed articles', () => {
+    const s = sectionOf(WIKI, 'Voyage inaugural');
+    expect(s.text).toContain('le commandant Smith fait appareiller');
+    expect(s.text).toContain('le Nomadic amène');
+    expect(s.text).not.toContain('Ballard');
+    expect(s.links).toEqual(['Edward Smith (officier de marine)', 'Cherbourg-en-Cotentin', 'Nomadic']);
+    expect(s.files).toEqual(['Titanic leaving Southampton.jpg', 'Nomadic.jpg']);
+    expect(s.detailed).toEqual(['Naufrage du Titanic']);
+  });
+
+  it('reads the introduction for no heading, or one the article does not have', () => {
+    expect(sectionOf(WIKI, null).links).toEqual(['White Star Line']);
+    expect(sectionOf(WIKI, 'chantier').text).toBe('Le paquebot de la White Star Line.');
   });
 });
