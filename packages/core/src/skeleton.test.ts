@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bestMention, cleanWikitext, isPlace, labelOf, mentionsOf, phaseOf, rankMentions, yearsIn } from './skeleton.ts';
+import { bestMention, cleanWikitext, isPlace, labelOf, leadLinks, mentionsOf, phaseOf, rankMentions, yearsIn } from './skeleton.ts';
 
 const ARTICLE = `{{Infobox Navire
  | nom = RMS ''Titanic''
@@ -80,5 +80,13 @@ describe('the bones of a story, from the article’s links', () => {
     expect(isPlace({ lat: 41, lon: -40, type: 'waterbody', dim: null })).toBe(false);
     expect(isPlace({ lat: 49, lon: 0, type: null, dim: 400_000 })).toBe(false);
     expect(isPlace({ lat: null, lon: null, type: null, dim: null })).toBe(false); // a person, a concept
+  });
+});
+
+describe('the links of an introduction', () => {
+  it('keeps the links of the text before the first heading, once each, not the infobox’s', () => {
+    expect(leadLinks(ARTICLE)).toEqual([{ target: 'Naufrage du Titanic', label: 'voyage inaugural' }]);
+    expect(leadLinks('Commandé par [[Edward Smith|le capitaine Smith]], puis [[Edward Smith]] et [[Belfast]].\n== Suite ==\n[[Paris]]'))
+      .toEqual([{ target: 'Edward Smith', label: 'le capitaine Smith' }, { target: 'Belfast', label: 'Belfast' }]);
   });
 });

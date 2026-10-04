@@ -123,13 +123,28 @@ export interface WalkStep {
   choices?: StepChoice[];
   /** The choice taken here, if any. */
   chosen?: number;
+  /** "Autour de vous": a few dated, numbered facts of the article. */
+  facts?: string[];
+  /** A sentence of the article, word for word. */
+  quote?: StepQuote | null;
+  /** More pictures of the place and the moment. */
+  gallery?: string[];
+  /** Other cards close by, at the same moment: short detours. */
+  near?: PoiLite[];
 }
 
-/** A turn the story may take from a step: another place of the same story, next. */
+export interface StepQuote {
+  text: string;
+  /** The article it comes from. */
+  source: Source;
+}
+
+/** A turn the story may take from a step: another place of the same story, next; or another card, as a detour. */
 export interface StepChoice {
   /** "Suivre les rescapés jusqu'à New York". */
   label: string;
-  step: WalkStep;
+  step?: WalkStep;
+  poi?: PoiLite;
 }
 
 /** A step's text, written when the visitor gets there (`pending` meanwhile). */
@@ -139,6 +154,27 @@ export interface StepResponse {
   /** The people present, as the writer placed them. */
   cast: StoryPerson[];
   choices: StepChoice[];
+  facts: string[];
+  quote: StepQuote | null;
+  gallery: string[];
+  near: PoiLite[];
+}
+
+/** A link of a card's introduction, made something to act on: a person, a card, a place. */
+export interface CardLink {
+  /** The words linked in the text, e.g. "Edward Smith". */
+  label: string;
+  /** Its Wikipedia article. */
+  url: string;
+  kind: 'person' | 'card' | 'place';
+  person?: StoryPerson & { description?: string | null };
+  poi?: PoiLite;
+  lat?: number;
+  lon?: number;
+}
+
+export interface CardLinksResponse {
+  links: CardLink[];
 }
 
 /**

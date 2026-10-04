@@ -155,6 +155,31 @@ export async function pagesInfo(lang: string, titles: string[]): Promise<Map<str
   return out;
 }
 
+interface ImagesResponse {
+  query?: { pages?: { title: string; imageinfo?: { thumburl?: string; mime?: string; width?: number; height?: number }[] }[] };
+}
+
+/** Files that illustrate nothing of a story: flags, logos, icons, signatures, locator maps. */
+const NOT_A_PICTURE = /(flag|drapeau|logo|icon|ic[oô]ne|symbol|blason|coat[_ ]of[_ ]arms|armoiries|signature|locator|location[_ ]map|localisation|wikidata|commons|edit|question|disambig|portail|portal|pictogram|button|stub)/i;
+
+/**
+ * The pictures an article shows (photographs, paintings, engravings), as
+ * thumbnails about `width` wide: no flags, logos, icons or locator maps.
+ */
+export async function pageImages(lang: string, title: string, limit = 6, width = 640): Promise<string[]> {
+  const params = new URLSearchParams({
+    action: 'query', generator: 'images', titles: title, gimlimit: '50', prop: 'imageinfo',
+    iiprop: 'url|mime|size', iiurlwidth: String(width), redirects: '1', format: 'json', formatversion: '2',
+  });
+  const r = await fetchJson<ImagesResponse>(`https://${lang}.wikipedia.org/w/api.php?${params}`);
+  return (r.query?.pages ?? []).flatMap((p) => {
+    const i = p.imageinfo?.[0];
+    if (!i?.thumburl || !/^image\/(jpeg|png|webp)$/.test(i.mime ?? '') || NOT_A_PICTURE.test(p.title)) return [];
+    if ((i.width ?? 0) < 280 || (i.height ?? 0) < 180) return [];
+    return [i.thumburl];
+  }).slice(0, limit);
+}
+
 interface LinksResponse {
   continue?: Record<string, string>;
   query?: {
