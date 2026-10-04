@@ -155,47 +155,75 @@ export async function pagesInfo(lang: string, titles: string[]): Promise<Map<str
   return out;
 }
 
+type ImageMeta = Record<string, { value?: string } | undefined>;
+interface ImagePage {
+  title: string;
+  imageinfo?: { thumburl?: string; mime?: string; width?: number; height?: number; extmetadata?: ImageMeta }[];
+}
 interface ImagesResponse {
-  query?: { pages?: { title: string; imageinfo?: { thumburl?: string; mime?: string; width?: number; height?: number }[] }[] };
+  query?: { pages?: ImagePage[] };
+}
+
+/** A picture of an article: its file, its thumbnail, and its description on Commons (in the language asked when it has one). */
+export interface WikiPicture {
+  file: string;
+  url: string;
+  description: string | null;
 }
 
 /** Files that illustrate nothing of a story: flags, logos, icons, signatures, locator maps. */
 const NOT_A_PICTURE = /(flag|drapeau|logo|icon|ic[oô]ne|symbol|blason|coat[_ ]of[_ ]arms|armoiries|signature|locator|location[_ ]map|localisation|wikidata|commons|edit|question|disambig|portail|portal|pictogram|button|stub)/i;
+const DESCRIPTION_CHARS = 180;
+const IMAGE_PROPS = { iiprop: 'url|mime|size|extmetadata', iiextmetadatafilter: 'ImageDescription|ObjectName' };
+
+/** Commons descriptions are HTML, sometimes long: their text, a sentence or two. Pure, for tests. */
+export function describePicture(meta: ImageMeta | undefined): string | null {
+  const raw = meta?.ImageDescription?.value || meta?.ObjectName?.value || '';
+  const text = raw.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ').trim();
+  if (text.length < 4) return null;
+  if (text.length <= DESCRIPTION_CHARS) return text;
+  const cut = text.slice(0, DESCRIPTION_CHARS);
+  const end = cut.lastIndexOf('. ');
+  return end > 60 ? cut.slice(0, end + 1) : `${cut.replace(/\s+\S*$/, '')}…`;
+}
+
+function pictureOf(p: ImagePage): WikiPicture | null {
+  const i = p.imageinfo?.[0];
+  if (!i?.thumburl || !/^image\/(jpeg|png|webp)$/.test(i.mime ?? '') || NOT_A_PICTURE.test(p.title)) return null;
+  if ((i.width ?? 0) < 280 || (i.height ?? 0) < 180) return null;
+  return { file: p.title.replace(/^[^:]+:/, ''), url: i.thumburl, description: describePicture(i.extmetadata) };
+}
 
 /**
  * The pictures an article shows (photographs, paintings, engravings), as
  * thumbnails about `width` wide: no flags, logos, icons or locator maps.
  */
-export async function pageImages(lang: string, title: string, limit = 6, width = 640): Promise<string[]> {
+export async function pageImages(lang: string, title: string, limit = 6, width = 640): Promise<WikiPicture[]> {
   const params = new URLSearchParams({
-    action: 'query', generator: 'images', titles: title, gimlimit: '50', prop: 'imageinfo',
-    iiprop: 'url|mime|size', iiurlwidth: String(width), redirects: '1', format: 'json', formatversion: '2',
+    action: 'query', generator: 'images', titles: title, gimlimit: '50', prop: 'imageinfo', ...IMAGE_PROPS, iiextmetadatalanguage: lang,
+    iiurlwidth: String(width), redirects: '1', format: 'json', formatversion: '2',
   });
   const r = await fetchJson<ImagesResponse>(`https://${lang}.wikipedia.org/w/api.php?${params}`);
-  return (r.query?.pages ?? []).flatMap((p) => {
-    const i = p.imageinfo?.[0];
-    if (!i?.thumburl || !/^image\/(jpeg|png|webp)$/.test(i.mime ?? '') || NOT_A_PICTURE.test(p.title)) return [];
-    if ((i.width ?? 0) < 280 || (i.height ?? 0) < 180) return [];
-    return [i.thumburl];
-  }).slice(0, limit);
+  return (r.query?.pages ?? []).flatMap((p) => pictureOf(p) ?? []).slice(0, limit);
 }
 
 /** Files named by an article ("Titanic leaving Southampton.jpg"), as thumbnails about `width` wide, in the order given: pictures only. */
-export async function fileThumbs(lang: string, files: string[], width = 640): Promise<string[]> {
+export async function fileThumbs(lang: string, files: string[], width = 640): Promise<WikiPicture[]> {
   if (!files.length) return [];
   const asked = files.slice(0, 50).map((f) => `File:${f}`);
   const params = new URLSearchParams({
-    action: 'query', titles: asked.join('|'), prop: 'imageinfo', iiprop: 'url|mime|size', iiurlwidth: String(width), format: 'json', formatversion: '2',
+    action: 'query', titles: asked.join('|'), prop: 'imageinfo', ...IMAGE_PROPS, iiextmetadatalanguage: lang,
+    iiurlwidth: String(width), format: 'json', formatversion: '2',
   });
   const r = await fetchJson<ImagesResponse & { query?: { normalized?: { from: string; to: string }[] } }>(`https://${lang}.wikipedia.org/w/api.php?${params}`);
   const norm = new Map((r.query?.normalized ?? []).map((n) => [n.from, n.to]));
   const byTitle = new Map((r.query?.pages ?? []).map((p) => [p.title, p]));
-  return asked.flatMap((a) => {
+  return asked.flatMap((a, k) => {
     const p = byTitle.get(norm.get(a) ?? a);
-    const i = p?.imageinfo?.[0];
-    if (!p || !i?.thumburl || !/^image\/(jpeg|png|webp)$/.test(i.mime ?? '') || NOT_A_PICTURE.test(p.title)) return [];
-    if ((i.width ?? 0) < 280 || (i.height ?? 0) < 180) return [];
-    return [i.thumburl];
+    const pic = p && pictureOf(p);
+    // Named as the article names it: its caption there is found by that name.
+    return pic ? [{ ...pic, file: files[k]! }] : [];
   });
 }
 

@@ -7,7 +7,7 @@ import {
   cityAt, FLOWS, flowsIn, flowView, histToAstro, type CityRow, type Flow, type FlowDef, type FlowKind, type FlowsResponse,
   type FlowStatus,
 } from '@way/shared';
-import { setActivity } from './activity.ts';
+import { aiActivity, setActivity } from './activity.ts';
 import { findRoute, pointOn, withEffort, WaterGrid, type Pt, type Route } from './routes.ts';
 
 // Monde vivant: cities that swell and shrink with the timeline, and flows
@@ -115,6 +115,8 @@ export class LivingLayer {
   private known = new Map<string, { status: FlowStatus; flow: Flow | null }>();
   private drawn = new Map<string, Drawn>();
   private asking = false;
+  /** The AI reading the flows still pending, as the server names it. */
+  private reader: string | null = null;
   private pollTimer: number | undefined;
   private grid: WaterGrid | null = null;
   private gridLoading = false;
@@ -230,7 +232,11 @@ export class LivingLayer {
       this.asking = true;
       try {
         const r = await fetch(`/api/flows?${new URLSearchParams({ ids: ask.map((d) => d.id).join(',') })}`);
-        if (r.ok) for (const f of ((await r.json()) as FlowsResponse).flows) this.known.set(f.id, { status: f.status, flow: f.flow });
+        if (r.ok) {
+          const res = (await r.json()) as FlowsResponse;
+          this.reader = res.ai ?? null;
+          for (const f of res.flows) this.known.set(f.id, { status: f.status, flow: f.flow });
+        }
       } catch {
         /* asked again at the next change */
       } finally {
@@ -241,11 +247,11 @@ export class LivingLayer {
     const pending = status.filter((s) => s === 'pending').length;
     const noAi = status.filter((s) => s === 'no-ai').length;
     this.onStatus(
-      pending ? `L’IA lit ${pending > 1 ? `${pending} articles` : 'un article'} de Wikipédia pour tracer ${pending > 1 ? 'ces flux' : 'ce flux'}…`
+      pending ? `${this.reader ?? 'L’IA'} lit ${pending > 1 ? `${pending} articles` : 'un article'} de Wikipédia pour tracer ${pending > 1 ? 'ces flux' : 'ce flux'}…`
         : noAi ? `${noAi > 1 ? `${noAi} flux` : 'Un flux'} de cette période ${noAi > 1 ? 'attendent' : 'attend'} une IA pour être lu${noAi > 1 ? 's' : ''} (Réglages → clés).`
           : '',
     );
-    setActivity('flows', pending ? { label: 'IA · monde vivant', title: 'L’IA lit Wikipédia pour tracer les flux de la période', ai: true } : null);
+    setActivity('flows', pending ? aiActivity('monde vivant', 'Lecture de Wikipédia pour tracer les flux de la période', this.reader) : null);
     if (pending) this.pollTimer = window.setTimeout(() => void this.askFlows(), 6000);
     this.update();
   }

@@ -542,13 +542,27 @@ body.carnet-card .card { top: var(--carnet-top, 200px); animation: none; }
 .film-img.no-img::after { display: none; }
 .film-img.no-img figcaption { position: static; color: var(--ink); text-shadow: none; }
 .film-place { margin-top: 8px; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
-.film-beat {
-  margin: 6px 0 10px; padding: 6px 10px; border-left: 2px solid var(--gold); border-radius: 0 6px 6px 0;
-  background: var(--gold-soft); font-size: 13.5px; color: var(--ink);
+.film-img-caption { margin: 5px 2px 0; font-size: 11.5px; line-height: 1.35; font-style: italic; color: var(--muted); }
+/* A step reads like a section of an encyclopedia: its heading, its paragraphs, its pictures between them. */
+.film-heading {
+  margin: 2px 0 8px; padding-bottom: 5px; border-bottom: 1px solid rgba(217, 164, 65, 0.3);
+  font-family: var(--serif); font-weight: 500; font-size: 21px; line-height: 1.2; color: var(--ink);
 }
-.film-beat span { display: block; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); }
-.film-premise { margin: 0 0 8px; font-size: 13px; color: var(--ink-soft); font-style: italic; }
+.film-premise { margin: 0 0 10px; font-size: 13px; color: var(--ink-soft); font-style: italic; }
 .film-text { margin: 0; font-family: var(--serif); font-size: 16.5px; line-height: 1.55; }
+.film-article { display: grid; gap: 10px; }
+.film-par { margin: 0; font-family: var(--serif); font-size: 16px; line-height: 1.6; color: var(--ink); text-align: justify; hyphens: auto; }
+.film-lead { font-size: 16.5px; }
+.film-fig { margin: 2px 0; }
+.film-fig img { display: block; width: 100%; max-height: 230px; object-fit: cover; border-radius: 8px; background: rgba(255, 255, 255, 0.04); }
+.film-fig figcaption { margin-top: 5px; padding-left: 8px; border-left: 2px solid rgba(217, 164, 65, 0.45); font-size: 12px; line-height: 1.4; color: var(--ink-soft); }
+.film-box-title { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); }
+.film-sources { margin-top: 14px; padding-top: 8px; border-top: 1px solid var(--panel-border); }
+.film-sources ul { margin: 4px 0 0; padding-left: 16px; display: grid; gap: 2px; font-size: 12.5px; }
+.film-sources a { color: var(--info); text-decoration: none; }
+.film-sources a:hover { text-decoration: underline; }
+.film-ai { margin: 6px 0 0; font-size: 11.5px; line-height: 1.4; color: var(--muted); }
+.film-ai b { font-weight: 600; color: var(--ink-soft); }
 .film-writing { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-style: italic; color: var(--ink-soft); }
 .skeleton-lines { display: grid; gap: 7px; margin-top: 8px; }
 .skeleton-lines i {
@@ -558,10 +572,16 @@ body.carnet-card .card { top: var(--carnet-top, 200px); animation: none; }
 .skeleton-lines i:last-child { width: 60%; }
 /* "Que faites-vous ?": pinned under the step, always in sight. */
 .film-cross {
-  flex: none; max-height: 44%; overflow-y: auto; margin: 0 -12px; padding: 10px 12px 6px;
+  flex: none; max-height: 38%; overflow-y: auto; margin: 0 -12px; padding: 10px 12px 6px;
   border-top: 1px solid rgba(217, 164, 65, 0.35); background: rgba(217, 164, 65, 0.05);
 }
-.cross-title { margin-bottom: 6px; font-family: var(--serif); font-style: italic; font-size: 16px; color: var(--gold); }
+.cross-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.cross-toggle {
+  flex: none; padding: 3px 9px; border: 1px dashed rgba(127, 179, 224, 0.65); border-radius: 999px; background: rgba(127, 179, 224, 0.1);
+  color: var(--info); font: inherit; font-size: 12px; cursor: pointer;
+}
+.cross-toggle:hover, .cross-toggle:focus-visible { border-style: solid; background: rgba(127, 179, 224, 0.18); outline: none; }
+.cross-title { font-family: var(--serif); font-style: italic; font-size: 16px; color: var(--gold); }
 .cross-verb { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); }
 .cross-next {
   display: grid; gap: 1px; width: 100%; padding: 9px 12px; border: 1px solid var(--gold); border-radius: 10px;
@@ -803,6 +823,7 @@ body.scenario-on::after {
 .role-premise { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 12.5px; font-style: italic; color: var(--ink-soft); }
 .role-meta { font-size: 11px; color: var(--muted); }
 .role-go { flex: none; font-size: 12px; color: var(--gold); white-space: nowrap; }
+.roles-ai { margin-top: 4px; font-size: 11px; line-height: 1.4; color: var(--muted); }
 .role-wait { display: flex; align-items: center; gap: 8px; padding: 6px 4px; font-size: 12.5px; font-style: italic; color: var(--ink-soft); }
 .roles-more { margin-top: 2px; }
 @media (max-width: 640px) {
@@ -815,7 +836,8 @@ body.scenario-on::after {
   .film-img { height: 80px; }
   .film-img figcaption b { font-size: 19px; }
   .film-title { font-size: 19px; }
-  .film-text { font-size: 15.5px; }
+  .film-text, .film-par { font-size: 15px; text-align: left; }
+  .film-heading { font-size: 18px; }
   .film-cross { max-height: 36%; }
   .film-acts .sc-btn { display: none; }
   .film-drawer, .carnet:not(.playing) .film-drawer, .carnet.playing .film-drawer { position: relative; right: auto; max-height: 60vh; width: auto; align-self: stretch; }
@@ -842,22 +864,24 @@ body.scenario-on::after {
 .card-summary .card-link.person { text-decoration-style: dotted; }
 .card-summary .card-link:hover, .card-summary .card-link:focus-visible { color: var(--gold); text-decoration-color: var(--gold); outline: none; }
 /* ---------- a step's words, facts, people and pictures ---------- */
-.film-quote { margin: 10px 0 0; padding: 6px 0 6px 12px; border-left: 2px solid var(--gold); font-family: var(--serif); font-style: italic; font-size: 15px; color: var(--ink-soft); }
+.film-quote { margin: 2px 0; padding: 6px 0 6px 12px; border-left: 2px solid var(--gold); font-family: var(--serif); font-style: italic; font-size: 15px; color: var(--ink-soft); }
 .film-quote cite { display: block; margin-top: 3px; font-style: normal; font-family: inherit; font-size: 11px; }
 .film-quote cite a { color: var(--info); text-decoration: none; }
 .film-quote cite a:hover { text-decoration: underline; }
-.film-facts { margin-top: 10px; padding: 8px 12px; border-radius: 8px; background: rgba(217, 164, 65, 0.08); border: 1px solid rgba(217, 164, 65, 0.25); }
-.film-facts-title, .film-who-title { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); }
+.film-facts { margin-top: 12px; padding: 8px 12px; border-radius: 8px; background: rgba(217, 164, 65, 0.08); border: 1px solid rgba(217, 164, 65, 0.25); }
 .film-facts ul { margin: 4px 0 0; padding-left: 16px; display: grid; gap: 2px; font-size: 13px; color: var(--ink); }
-.film-who { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
-.film-who-title { margin-right: 4px; }
+.film-who { margin-top: 12px; }
+.film-who-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; margin-top: 6px; }
 .film-person {
-  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; border: 1px solid var(--panel-border); border-radius: 999px;
-  background: rgba(255, 255, 255, 0.03); color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 8px 4px 4px; border: 1px solid var(--panel-border); border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03); color: var(--ink); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
 }
+.film-person-text { min-width: 0; display: grid; }
+.film-person-text b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.film-person-text small { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .film-person .cn-fork-mark { width: 26px; height: 26px; font-size: 12px; }
 .film-person:hover, .film-person:focus-visible { border-color: rgba(217, 164, 65, 0.6); outline: none; }
-.film-gallery { display: flex; gap: 6px; margin-top: 10px; overflow-x: auto; padding-bottom: 2px; }
+.film-gallery { display: flex; gap: 6px; margin-top: 12px; overflow-x: auto; padding-bottom: 2px; }
 .film-pic { flex: none; width: 92px; height: 62px; padding: 0; border: 1px solid var(--panel-border); border-radius: 6px; overflow: hidden; background: rgba(255, 255, 255, 0.04); cursor: zoom-in; opacity: 0.75; }
 .film-pic img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .film-pic.on, .film-pic:hover, .film-pic:focus-visible { opacity: 1; border-color: var(--gold); outline: none; }

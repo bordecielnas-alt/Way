@@ -60,7 +60,7 @@ export class EntityMenu {
     const title = e.kind === 'person' ? e.person.name : e.kind === 'card' ? e.poi.title : e.name;
     const meta = e.kind === 'person' ? [e.person.role, life(e.person)].filter(Boolean).join(' · ') : e.kind === 'card' ? years(e.poi) : 'Lieu';
     const items = e.kind === 'person'
-      ? [item('follow', '👁', 'Suivre sur la carte'), item('person-paths', '🎭', 'Ses chemins'), item('life', '▸', 'Vivre sa vie')]
+      ? [item('follow', '👁', 'Suivre sur la carte'), item('person-paths', '🎭', 'Ses chemins'), item('life', '▸', 'Suivre sa vie')]
       : e.kind === 'card'
         ? [item('card', '📄', 'Sa fiche'), item('place-paths', '🎭', 'Ses chemins'), item('fly', '🗺', 'Voir sur la carte')]
         : [item('fly', '🗺', 'Y aller')];

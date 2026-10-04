@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { getResolution, gridDisk, latLngToCell } from 'h3-js';
 import { z } from 'zod';
 import {
-  bucketEnd, cellCenter, cellRadiusKm, cellsForPoint, distanceKm, formatCentury, formatYear, Category, DatePrecision,
+  AI_TAG, bucketEnd, cellCenter, cellRadiusKm, cellsForPoint, distanceKm, formatCentury, formatYear, Category, DatePrecision,
   Poi, type Source,
 } from '@way/shared';
 import { geocode, type Place, type SearchHit } from '@way/providers';
@@ -125,7 +125,8 @@ export async function runDeepJob(job: DeepJob, store: Store, router: ProviderRou
   const pois: Poi[] = [];
   for (const ev of answer.value.slice(0, MAX_EVENTS)) {
     const poi = await validate(ev, hits, { t0, t1, center, radiusKm }, store, pois);
-    if (poi) pois.push(poi);
+    // The card says which AI wrote it.
+    if (poi) pois.push({ ...poi, tags: [...poi.tags, `${AI_TAG}${answer.ai}`] });
   }
   await store.upsertPois(pois);
   return { found: pois.length, provider: answer.provider };

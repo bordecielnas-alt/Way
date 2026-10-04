@@ -2,9 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { dateToDecimal, forkWalk, walkOf, type PersonJourney, type PoiLite, type StoryStop } from '@way/shared';
 import { grounded } from './links.ts';
 import {
-  aliveIn, applyLabels, buildForks, buildScenarios, dayOf, orderSteps, stepKey, contextKey, describeContext, ExtractedScenarios, livedThen,
+  aliveIn, applyLabels, buildForks, buildScenarios, byThemes, cleanParagraphs, dayOf, headingIn, momentIn, namedInOrder, orderSteps, stepKey, contextKey, describeContext,
+  ExtractedScenarios, headingOf, livedThen, untilDeath, wikiForks,
   buildPersonWalk, choiceCandidates, detourAsk, ExtractedStep, fillPlan, namedAll, namesOverlap, nearCards, namedIn, nearMoment, passageAround, withoutFiller, personStops, plausibleYear, stepOf, StoryLabels, textFitsYear, yearOf,
 } from './story.ts';
+import { mentionsOf } from './skeleton.ts';
+
+/** A step's paragraphs as a writer gives them. */
+const COBH = [
+  'Le 11 avril 1912, le Titanic jette l’ancre au large de Queenstown, aujourd’hui Cobh, dernière escale avant la traversée.',
+  'Les tenders America et Ireland amènent 123 passagers, pour la plupart des émigrants irlandais de troisième classe.',
+];
 
 describe('story of a card', () => {
   it('keeps people born before the story ends', () => {
@@ -246,7 +254,8 @@ describe('steps written on arrival', () => {
   });
 
   it('tolerates a malformed step answer', () => {
-    const v = ExtractedStep.parse({ text: 'Vous débarquez à Cobh au petit matin, sous la pluie, avec les derniers passagers.', cast: ['P1', 'x'], choices: [{ label: 'Suivre les émigrants', to: 'C0' }, { to: 2 }] });
+    const v = ExtractedStep.parse({ paragraphs: [...COBH, null, 42], cast: ['P1', 'x'], choices: [{ label: 'Suivre les émigrants', to: 'C0' }, { to: 2 }] });
+    expect(v.paragraphs).toEqual(COBH);
     expect(v.cast).toEqual([1, 0]);
     expect(v.choices).toEqual([{ label: 'Suivre les émigrants', to: { kind: 'C', i: 0 } }, null]);
   });
@@ -282,7 +291,7 @@ describe('around a step', () => {
 
   it('reads a step answer: facts, a quote, choices to a place of the story or another card', () => {
     const v = ExtractedStep.parse({
-      text: 'Vous débarquez à Cobh au petit matin, sous la pluie, avec les derniers passagers qui montent à bord du paquebot.',
+      paragraphs: COBH,
       facts: ['11 avril 1912 : escale à Queenstown', 3], quote: 'court',
       choices: [{ label: 'Rejoindre le Carpathia', to: 'K1' }, { label: 'Rester à bord', to: 2 }, { label: 'Nulle part', to: 'X' }],
     });
@@ -309,7 +318,7 @@ describe('a step read from its whole passage', () => {
 
   it('reads a choice toward someone present', () => {
     const v = ExtractedStep.parse({
-      text: 'Vous débarquez à Cobh au petit matin, sous la pluie, avec les derniers passagers qui montent à bord du paquebot.',
+      paragraphs: COBH,
       choices: [{ label: 'Suivre Jack Phillips à la radio', to: 'P1' }],
     });
     expect(v.choices).toEqual([{ label: 'Suivre Jack Phillips à la radio', to: { kind: 'P', i: 1 } }]);
@@ -416,7 +425,89 @@ describe('a walk told in the order of its days', () => {
     const plan = ExtractedScenarios.parse({ scenarios: [{ title: 'Le voyage', premise: 'Vous êtes un émigrant.', invented: true, steps: [{ stop: 'S1', beat: 'Trouver une place' }], forks: [{ at: 'S1', label: 'Rester à terre', stops: ['S3', 'S4'] }, { at: 2 }] }] });
     expect(plan.scenarios[0]!.steps[0]).toMatchObject({ stop: 1, beat: 'Trouver une place' });
     expect(plan.scenarios[0]!.forks).toEqual([{ at: 1, label: 'Rester à terre', stops: [3, 4] }, null]);
-    const step = ExtractedStep.parse({ text: 'Vous débarquez à Cobh au petit matin, sous la pluie, avec les derniers passagers qui montent à bord.', next: 'Remonter à bord pour la traversée' });
-    expect(step.next).toBe('Remonter à bord pour la traversée');
+    const step = ExtractedStep.parse({ paragraphs: COBH, next: 'La traversée de l’Atlantique' });
+    expect(step.next).toBe('La traversée de l’Atlantique');
+    expect(headingOf('l’escale de Cherbourg')).toBe('L’escale de Cherbourg');
+    expect(headingOf('1912 · Embarquement des passagers · Cherbourg')).toBeNull();
+    expect(headingOf(null)).toBeNull();
+  });
+});
+
+describe('a step told like an encyclopedia', () => {
+  it('reads its paragraphs as a list, or as one text cut at its blank lines, and never too short', () => {
+    expect(ExtractedStep.parse({ text: COBH.join('\n\n') }).paragraphs).toEqual(COBH);
+    expect(ExtractedStep.parse({ paragraphs: COBH.join('\n\n') }).paragraphs).toEqual(COBH);
+    expect(() => ExtractedStep.parse({ paragraphs: ['Le paquebot fait escale à Cobh, puis repart.'] })).toThrow();
+  });
+
+  it('keeps no sentence speaking to the reader, no filler, and cuts a long paragraph in two', () => {
+    const facts = ['Le paquebot mouille à 11 h 30.', 'Deux tenders amènent 123 passagers.', 'Il repart à 13 h 30.'];
+    expect(cleanParagraphs([[facts[0], 'Vous montez à bord, le cœur battant.', ...facts.slice(1)].join(' ')])).toEqual([facts.join(' ')]);
+    expect(cleanParagraphs([[...facts, 'La prochaine étape de cette histoire se dirige vers Southampton.'].join(' ')])).toEqual([facts.join(' ')]);
+    // Too few left: the paragraph stays as written.
+    expect(cleanParagraphs(['Vous voyez le paquebot. Il part.'])).toEqual(['Vous voyez le paquebot. Il part.']);
+    const long = Array.from({ length: 8 }, (_, i) => `La phrase ${i} donne le détail des manœuvres du paquebot dans la rade, avec ses horaires.`).join(' ');
+    const cut = cleanParagraphs([long], 400);
+    expect(cut).toHaveLength(2);
+    expect(cut.join(' ')).toBe(long);
+  });
+
+  it('names who was there in the order the article does', () => {
+    const persons = [{ name: 'Edward Smith' }, { name: 'Jack Phillips' }, { name: 'Bruce Ismay' }];
+    expect(namedInOrder('Ismay reçoit le message que Phillips a transmis au commandant Smith.', persons)).toEqual([2, 1, 0]);
+  });
+
+  it('offers the cards of the themes shown, the others only when too few are', () => {
+    const cards = [{ id: 'a', category: 'battle' as const }, { id: 'b', category: 'trade' as const }, { id: 'c', category: 'city' as const }, { id: 'd', category: 'person' as const }];
+    expect(byThemes(cards, ['trade', 'settlement']).map((c) => c.id)).toEqual(['b', 'c']);
+    expect(byThemes(cards, ['trade']).map((c) => c.id)).toEqual(['b', 'a', 'c', 'd']);
+  });
+
+  it('prefers as detours the places the passage links to', () => {
+    const stops = [{ year: 1912 }, { year: 1912 }, { year: 1913 }, { year: 1912 }];
+    expect(choiceCandidates(stops, 0, [0], undefined, 5, (i) => (i === 2 ? 2 : 0))).toEqual([2, 1, 3]);
+  });
+
+  it('turns as the article tells it: someone a step names who goes on elsewhere, off the walk', () => {
+    const stops = [{ year: 1912, when: 1912.27 }, { year: 1912, when: 1912.28 }, { year: 1912, when: 1912.29 }, { year: 1912, when: 1912.3 }, { year: 1920 }];
+    const persons = [{ name: 'Edward Smith', born: 1850, died: 1912 }, { name: 'Molly Brown', born: 1867, died: 1932 }, { name: 'Jack Phillips', born: 1887, died: 1912 }];
+    const texts = ['Smith commande.', 'Molly Brown embarque à Cherbourg.', 'Smith fait route.', 'Molly Brown prend le canot 6.', 'Molly Brown témoigne.'];
+    const sc = { person: 0, steps: [{ stop: 0 }, { stop: 1 }, { stop: 2 }].map((x) => ({ ...x, text: '', cast: [] })) };
+    expect(wikiForks(sc, stops, texts, persons)).toEqual([{ at: 1, label: 'Suivre Molly Brown', person: 1, stops: [3, 4] }]);
+    // A planned fork following someone the article never places there is dropped; one following no one stays.
+    const planned = [{ at: 0, label: 'Suivre Phillips', person: 2, stops: [3] }, { at: 2, label: 'Rester à bord', person: null, stops: [3] }];
+    expect(wikiForks({ ...sc, forks: planned }, stops, texts, persons).map((f) => f.label)).toEqual(['Rester à bord', 'Suivre Molly Brown']);
+  });
+
+  it('ends a real person’s walk where they died, and follows someone on further in the article without days', () => {
+    const stops = [
+      { year: 1912, label: 'Port de départ', name: 'Southampton' }, { year: 1912, label: 'Lieu du naufrage', name: 'Naufrage du Titanic' },
+      { year: 1912, label: 'Arrivée des rescapés', name: 'New York' }, { year: 1912, label: 'Sauvetage', name: 'RMS Carpathia' },
+    ];
+    const steps = [0, 1, 2].map((stop) => ({ stop }));
+    expect(untilDeath(steps, stops, { died: 1912 })).toEqual([{ stop: 0 }, { stop: 1 }]);
+    expect(untilDeath(steps, stops, { died: 1937 })).toEqual(steps);
+    expect(untilDeath(steps, stops, undefined)).toEqual(steps);
+    const persons = [{ name: 'Edward Smith', born: 1850, died: 1912 }, { name: 'Arthur Rostron', born: 1869, died: 1940 }];
+    const texts = ['Smith commande.', 'Rostron reçoit l’appel.', 'Les rescapés arrivent.', 'Rostron recueille les rescapés.'];
+    const sc = { person: 0, steps: [{ stop: 0 }, { stop: 1 }].map((x) => ({ ...x, text: '', cast: [] })) };
+    expect(wikiForks(sc, stops, texts, persons)).toEqual([{ at: 1, label: 'Suivre Arthur Rostron', person: 1, stops: [3] }]);
+  });
+
+  it('finds where a life\'s article tells a moment: the place it links, that year first', () => {
+    const wiki = [
+      'Né à [[Comber]] en 1873.',
+      '== Carrière ==',
+      'En 1907, il dirige à [[Belfast]] les plans de l’[[Olympic]].',
+      'En 1912, il embarque à [[Southampton]] sur le Titanic.',
+      '== Mort ==',
+      'Il meurt en 1912 dans le naufrage, au large de [[Terre-Neuve]].',
+    ].join('\n');
+    const mentions = mentionsOf(wiki);
+    expect(momentIn(mentions, ['Southampton'], 1912)?.path[0]).toBe('Carrière');
+    expect(momentIn(mentions, ['Atlantique Nord'], 1912)?.target).toBe('Southampton');
+    expect(momentIn(mentions, ['Paris'], 1850)).toBeNull();
+    expect(headingIn(wiki, 'carrière')).toBe(true);
+    expect(headingIn(wiki, 'Comber')).toBe(false);
   });
 });

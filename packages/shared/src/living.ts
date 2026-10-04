@@ -156,6 +156,8 @@ export type FlowStatus = 'ready' | 'pending' | 'no-ai' | 'empty';
 /** GET /api/flows: the flows of a period, read or being read. */
 export interface FlowsResponse {
   flows: { id: string; status: FlowStatus; flow: Flow | null }[];
+  /** The AI reading the flows still pending. */
+  ai?: string | null;
 }
 
 /** Flows of these kinds lasting at least in part within [t0, t1] (historical years). */

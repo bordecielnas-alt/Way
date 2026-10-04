@@ -38,6 +38,8 @@ export class ViewService {
     private cfg: Config,
     /** Whether level 2 can run at all (an LLM and a search provider configured). */
     private canEnrich: () => boolean = () => false,
+    /** The AI level 2 goes to now, named for the visitor. */
+    private aiName: () => string | null = () => null,
   ) {
     bus.onKeysDone((keys) => this.onKeysDone(keys));
   }
@@ -144,7 +146,7 @@ export class ViewService {
       else continue;
       s.pending.add(k);
     }
-    s.send({ type: 'status', pending, ai });
+    s.send({ type: 'status', pending, ai, model: ai ? this.aiName() : null });
   }
 
   openSession(send: (msg: ServerMessage) => void): {

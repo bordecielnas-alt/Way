@@ -32,7 +32,7 @@ describe('provider router', () => {
     }));
     const r = new ProviderRouter(config(), { A_KEY: 'x', B_KEY: 'y' });
     const first = await r.completeJson('extract', 's', 'u', (v) => v as { ok: boolean });
-    expect(first).toEqual({ value: { ok: true }, provider: 'b' });
+    expect(first).toMatchObject({ value: { ok: true }, provider: 'b' });
     expect(calls).toEqual(['a.test', 'b.test']);
     // "a" is now cooling down: straight to "b".
     await r.completeJson('extract', 's', 'u', (v) => v);

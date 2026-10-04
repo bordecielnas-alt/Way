@@ -192,12 +192,51 @@ export interface Section {
   links: string[];
   /** Its files, as named ("Titanic leaving Southampton.jpg"). */
   files: string[];
+  /** Their captions in the article, by file, as text. */
+  captions: Record<string, string>;
   /** {{Article détaillé|…}}: the articles telling this part at length. */
   detailed: string[];
 }
 
-const FILE = /\[\[\s*(?:fichier|file|image)\s*:\s*([^|\]]+)/gi;
+const FILE_START = /\[\[\s*(?:fichier|file|image)\s*:/gi;
 const GALLERY = /<gallery[^>]*>([\s\S]*?)<\/gallery>/gi;
+/** A file link's parameters that lay it out ("vignette", "upright=1.2", "220px"): never its caption. */
+const FILE_OPTION = /^(thumb|thumbnail|vignette|miniature|frame|frameless|cadre|sans[_ ]cadre|border|bordure|left|right|center|centre|none|gauche|droite|n[ée]ant|upright|redresse|baseline|middle|top|bottom|sub|super|text-top|text-bottom|\d*x?\d+\s*px|(alt|lien|link|upright|redresse|page|class|lang|langue)\s*=[\s\S]*)$/i;
+const CAPTION_CHARS = 200;
+
+/** A caption's wikitext as text: links as their words, no markup. */
+function captionText(raw: string): string | null {
+  const text = cleanWikitext(raw).replace(LINK, (_, a: string, b?: string) => b ?? a).replace(/\s+/g, ' ').trim();
+  return text.length >= 3 ? text.slice(0, CAPTION_CHARS) : null;
+}
+
+/** The files a stretch of wikitext shows, as named, with their captions: linked ([[Fichier:…|…|caption]]) or in a gallery. Pure, for tests. */
+export function filesOf(raw: string): { file: string; caption: string | null }[] {
+  const out: { file: string; caption: string | null }[] = [];
+  const add = (name: string, caption: string | null) => {
+    const file = name.trim().replace(/_/g, ' ');
+    if (PICTURE.test(file) && !out.some((f) => f.file === file)) out.push({ file, caption });
+  };
+  for (const m of raw.matchAll(FILE_START)) {
+    // To the link's own end, past the links of its caption.
+    let depth = 0;
+    let j = m.index!;
+    for (; j < raw.length; j++) {
+      if (raw.startsWith('[[', j)) { depth++; j++; } else if (raw.startsWith(']]', j)) { depth--; j++; if (depth === 0) break; }
+    }
+    const [head = '', ...rest] = params(raw.slice(m.index! + 2, j - 1));
+    const caption = [...rest].reverse().find((p) => p.trim() && !FILE_OPTION.test(p.trim()));
+    add(head.replace(/^[^:]*:/, ''), caption ? captionText(caption) : null);
+  }
+  for (const g of raw.matchAll(GALLERY)) {
+    for (const l of g[1]!.split('\n')) {
+      const [head = '', ...rest] = params(l.replace(/^\s*(?:fichier|file|image)\s*:/i, ''));
+      const caption = [...rest].reverse().find((p) => p.trim() && !FILE_OPTION.test(p.trim()));
+      add(head, caption ? captionText(caption) : null);
+    }
+  }
+  return out;
+}
 const DETAILED = /\{\{\s*(?:article d[ée]taill[ée]|article principal|main|main article|d[ée]taill[ée])\s*\|([^{}]+)\}\}/gi;
 const PICTURE = /\.(jpe?g|png|webp|tiff?)$/i;
 
@@ -221,13 +260,9 @@ export function sectionOf(wikitext: string, heading: string | null): Section {
     if (to < 0) to = lines.length;
   }
   const raw = lines.slice(from, to).join('\n');
-  const files: string[] = [];
-  const addFile = (f: string) => {
-    const name = f.trim().replace(/_/g, ' ');
-    if (PICTURE.test(name) && !files.includes(name)) files.push(name);
-  };
-  for (const m of raw.matchAll(FILE)) addFile(m[1]!);
-  for (const g of raw.matchAll(GALLERY)) for (const l of g[1]!.split('\n')) addFile(l.replace(/^\s*(?:fichier|file|image)\s*:/i, '').split('|')[0] ?? '');
+  const shown = filesOf(raw);
+  const files = shown.map((f) => f.file);
+  const captions = Object.fromEntries(shown.flatMap((f) => (f.caption ? [[f.file, f.caption]] : [])));
   const detailed = [...raw.matchAll(DETAILED)].flatMap((m) => params(m[1]!).filter((p) => !p.includes('=')).map((p) => p.trim())).filter(Boolean);
   const links: string[] = [];
   const text = cleanWikitext(raw).split('\n')
@@ -238,7 +273,7 @@ export function sectionOf(wikitext: string, heading: string | null): Section {
       return (b ?? a).trim();
     }).trim())
     .filter(Boolean).join('\n').replace(/[ \t]+/g, ' ');
-  return { text, links, files, detailed };
+  return { text, links, files, captions, detailed };
 }
 
 /** The links of an article's introduction (before its first heading), once each: the words linked and the article. Pure, for tests. */

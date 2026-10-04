@@ -74,6 +74,14 @@ export type PoiLite = Pick<
   tags?: string[];
 };
 
+/** Tag naming the AI that wrote or translated a card's text: `ai:<model>`. */
+export const AI_TAG = 'ai:';
+
+/** The AI a card's tags name, if any. */
+export function aiOf(tags: readonly string[]): string | null {
+  return tags.find((t) => t.startsWith(AI_TAG))?.slice(AI_TAG.length) || null;
+}
+
 export function toLite(p: Poi): PoiLite {
   const { id, title, category, date_start, date_end, date_precision, lat, lon, importance, confidence, tags } = p;
   return { id, title, category, date_start, date_end, date_precision, lat, lon, importance, confidence, tags };

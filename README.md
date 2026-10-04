@@ -39,16 +39,21 @@ Wikipédia (chaque étape doit y être citée) : il faut une clé d'IA, chaque f
 Sur chaque fiche, **Le fil de l'histoire** (avec une clé d'IA) : les lieux et moments du sujet lus dans son article
 (pour le Titanic : construction à Belfast, départ de Southampton, escales de Cherbourg et Queenstown, arrivée du
 Carpathia à New York), ce qu'il a engendré et ses personnages (clic = les suivre sur la carte). Lieux et personnages
-doivent être cités dans l'article et se retrouver dans Wikidata ou sur la carte. Puis, sous « ▶ Vivre cette histoire »,
-trois **rôles** à jouer étape par étape : deux dans la peau d'un personnage réel, le dernier d'un personnage inventé,
-écrits selon votre lentille, vos thèmes et les fiches explorées juste avant. Chaque rôle a un but, un enjeu par étape,
-et ses étapes suivent l'ordre des jours quand l'article les date. Le carnet s'ouvre en colonne à droite (onglets
-Étape, Arbre, Fiche) ; sous l'étape, « Que faites-vous ? » : **Continuer** sur la route prévue, **Bifurquer** vers une
-autre suite prévue dès le plan (souvent dans les pas de quelqu'un d'autre), ou faire un **détour** puis revenir.
-Le même carrefour est tracé sur le globe (flèche dorée, bifurcations en pointillés bleus, cliquables), et l'étape
-suivante est écrite en sachant les choix faits. L'onglet Arbre montre les chemins pris et non pris. La caméra ne bouge
-que si l'étape sort de la vue, sans changer de hauteur ni d'inclinaison ; en quittant un chemin, une barre propose de
-revenir où vous étiez. Les scénarios sont imaginés par l'IA, mais seulement sur les étapes vérifiées. Boutons
+doivent être cités dans l'article et se retrouver dans Wikidata ou sur la carte. Puis, sous « ▶ Parcourir cette histoire »,
+trois **parcours** : deux suivent un personnage réel, le dernier un fil thématique (le fret, la foi, les techniques…),
+choisis selon votre lentille, vos thèmes et les fiches explorées juste avant ; leurs étapes suivent l'ordre des jours
+quand l'article les date, et le parcours d'une personne s'arrête à sa mort. Chaque étape est rédigée à l'arrivée comme
+une section d'encyclopédie, à la troisième personne, d'après la section de l'article Wikipédia qui raconte ce moment
+(et l'article qui la détaille) : plusieurs paragraphes, les images de la section avec leurs légendes, les personnes que
+l'article y nomme (« Présents »), des repères datés, une phrase citée mot pour mot, ses sources. Les étapes de la vie
+d'un personnage sont rédigées de même d'après son propre article. Le carnet s'ouvre en colonne à droite (onglets Étape,
+Arbre, Fiche) ; sous l'étape, « Où aller ensuite ? » : **Continuer** sur la route prévue, **Bifurquer** pour suivre
+quelqu'un que l'article retrouve plus loin, ou faire un **détour** (une personne, un lieu, un sujet que la section lie,
+ceux de vos thèmes d'abord) puis revenir. Le même carrefour est tracé sur le globe (flèche dorée, bifurcations en
+pointillés bleus, cliquables), et l'étape suivante est écrite en sachant les choix faits. L'onglet Arbre montre les
+chemins pris et non pris. L'IA au travail est nommée dans la barre d'état et sur tout ce qu'elle écrit (étapes,
+parcours, rôles des lieux, flux, fiches traduites ou rédigées). La caméra ne bouge que si l'étape sort de la vue, sans
+changer de hauteur ni d'inclinaison ; en quittant un chemin, une barre propose de revenir où vous étiez. Boutons
 ◂◂◂ … ▸▸▸ sous la timeline (ou ← ↓ → et Espace) : reculer, pause, avancer, jusqu'au jour près. Sons (et import de vos propres fichiers audio), ouverture
 au survol et filtre « Pendant ce temps » : Réglages → Interface. Taille et durée du cache (jusqu'à 100 Go) :
 Réglages → Cache.

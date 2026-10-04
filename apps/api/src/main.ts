@@ -16,7 +16,7 @@ const settings = createSettings(cfg);
 const router = createRouter(cfg, settings);
 const auth = new Auth(join(cfg.dataDir ?? devDir, 'auth.json'));
 const bus: JobBus = cfg.redisUrl ? new RedisBus(cfg.redisUrl) : new InlineBus(store, cfg, router);
-const views = new ViewService(store, bus, cfg, () => router.hasProvider('extract'));
+const views = new ViewService(store, bus, cfg, () => router.hasProvider('extract'), () => router.nextAi('extract'));
 const doors = new DoorService(store, () => normalizeUi(settings.get().ui).meanwhileMaxSpan, router);
 const { clio, borders } = createBorders(cfg);
 const polities = createPolities(cfg, clio, settings);
@@ -458,6 +458,35 @@ app.get('/api/step', async (req, reply) => {
   }, scenarioContext(q.data));
 });
 
+// A step of a real person's life, written like a card's from their article when the visitor gets there.
+const LifeStepQuery = ScenariosQuery.extend({
+  person: Qid,
+  title: z.string().trim().min(1).max(120),
+  premise: z.string().trim().max(300).default(''),
+  place: z.string().trim().min(1).max(200),
+  label: z.string().trim().max(120).default(''),
+  year: z.coerce.number().int().min(-10_000).max(3000),
+  lat: z.coerce.number().min(-90).max(90),
+  lon: z.coerce.number().min(-180).max(180),
+  poi: z.string().max(200).optional(),
+  /** The steps read before, as the walk tells them. */
+  lived: z.union([z.string().max(200), z.array(z.string().max(200)).max(20)]).optional(),
+  next: z.string().trim().max(200).optional(),
+  beat: z.string().trim().max(120).optional(),
+  chose: z.union([z.string().max(120), z.array(z.string().max(120)).max(8)]).optional(),
+  prefetch: z.enum(['0', '1']).default('0'),
+});
+app.get('/api/life-step', async (req, reply) => {
+  const q = LifeStepQuery.safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: q.error.issues });
+  const d = q.data;
+  return stories.lifeStep({
+    person: d.person, title: d.title, premise: d.premise, place: d.place, label: d.label, year: d.year, lat: d.lat, lon: d.lon,
+    poi: d.poi || null, lived: many(d.lived).slice(-10), next: d.next || null, beat: d.beat || null,
+    decisions: many(d.chose).slice(-6), prefetch: d.prefetch === '1',
+  }, scenarioContext(d));
+});
+
 // The links of a card's introduction, made something to act on (a person, a card, a place).
 app.get('/api/links', async (req, reply) => {
   const q = z.object({ lang: z.string().regex(/^[a-z]{2,3}$/).default('fr'), title: z.string().trim().min(1).max(300) }).safeParse(req.query);
@@ -488,7 +517,8 @@ app.get('/api/armies', async (req, reply) => {
 app.get('/api/flows', async (req, reply) => {
   const q = z.object({ ids: z.string().transform((s) => s.split(',').filter(Boolean).slice(0, 60)) }).safeParse(req.query);
   if (!q.success) return reply.code(400).send({ error: 'requête invalide' });
-  return flows.get(q.data.ids);
+  const res = await flows.get(q.data.ids);
+  return { ...res, ai: res.flows.some((f) => f.status === 'pending') ? router.nextAi('extract') : null };
 });
 
 // ---------- sounds imported by the owner (they replace the synthesized ones) ----------
