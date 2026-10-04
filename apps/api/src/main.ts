@@ -410,6 +410,29 @@ app.get('/api/detour', async (req, reply) => {
   }
 });
 
+// A step of a card's scenario, written when the visitor gets there (`pending` meanwhile), with the turns it may take.
+const StepQuery = ScenariosQuery.extend({
+  card: z.string().min(1).max(200),
+  title: z.string().trim().min(1).max(120),
+  premise: z.string().trim().max(300).default(''),
+  hero: z.string().regex(/^Q\d+$/).optional(),
+  invented: z.enum(['0', '1']).default('0'),
+  stop: z.coerce.number().int().min(0).max(500),
+  /** The walk's stops in order, e.g. "3,5,8". */
+  walk: z.string().regex(/^\d+(,\d+)*$/).max(400),
+  prefetch: z.enum(['0', '1']).default('0'),
+});
+app.get('/api/step', async (req, reply) => {
+  const q = StepQuery.safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: q.error.issues });
+  const poi = await store.getPoi(q.data.card);
+  if (!poi) return reply.code(404).send({ error: 'not found' });
+  const { title, premise, hero, invented, stop, walk, prefetch } = q.data;
+  return stories.step(poi, {
+    title, premise, hero: hero ?? null, invented: invented === '1', stop, walk: walk.split(',').map(Number), prefetch: prefetch === '1',
+  }, scenarioContext(q.data));
+});
+
 // Armies of the wars fought during a decade (first year, a multiple of 10).
 app.get('/api/armies', async (req, reply) => {
   const q = z.object({ decade: z.coerce.number().int().min(-3000).max(2030).refine((d) => d % 10 === 0) }).safeParse(req.query);

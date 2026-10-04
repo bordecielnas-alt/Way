@@ -3,7 +3,7 @@ import { walkOf, type PersonJourney, type StoryStop } from '@way/shared';
 import { grounded } from './links.ts';
 import {
   aliveIn, applyLabels, buildScenarios, contextKey, describeContext, ExtractedScenarios, livedThen,
-  buildPersonWalk, detourAsk, namedIn, nearMoment, personStops, plausibleYear, StoryLabels, textFitsYear, yearOf,
+  buildPersonWalk, choiceCandidates, detourAsk, ExtractedStep, fillPlan, namedIn, nearMoment, personStops, plausibleYear, stepOf, StoryLabels, textFitsYear, yearOf,
 } from './story.ts';
 
 describe('story of a card', () => {
@@ -82,7 +82,7 @@ describe('story of a card', () => {
     const v = StoryLabels.parse({ stops: [{ i: 'S0' }, { i: 1, label: 'Port de départ', phase: 'pendant', main: 'oui' }], people: 'none' });
     expect(v.stops).toEqual([null, { i: 1, label: 'Port de départ', phase: 'during', main: false }]);
     expect(v.people).toEqual([]);
-    const w = ExtractedScenarios.parse({ scenarios: [{ title: 'Sans étapes' }, sc(0, false, [step(0), { stop: 'x' } as never])] });
+    const w = ExtractedScenarios.parse({ scenarios: [{ title: 'Sans étapes' }, sc(0, false, [step(0), { text: 'Sans lieu.' } as never])] });
     expect(w.scenarios[0]).toBeNull();
     expect(w.scenarios[1]!.steps[1]).toBeNull();
   });
@@ -110,7 +110,7 @@ describe('labels over the bones of a story', () => {
   });
 
   it('dates a place by its sentence, else by the years its section gives most', () => {
-    const m = (year: number | null, section: string, years = year === null ? [] : [year]) => ({ target: 'x', path: [section], field: null, sentence: '', year, years, order: 0 });
+    const m = (year: number | null, section: string, years = year === null ? [] : [year]) => ({ target: 'x', path: [section], field: null, sentence: '', paragraph: '', year, years, order: 0 });
     const all = [m(1912, 'Naufrage'), m(1912, 'Naufrage'), m(1985, 'Naufrage'), m(1909, 'Construction')];
     const ok = (y: number) => y > 1800;
     const titanic = { start: 1909, end: 1912 };
@@ -223,5 +223,41 @@ describe('scenarios played on their own', () => {
     const detour = buildPersonWalk(item([{ stop: 1, text: 'Un.' }, { stop: 2, text: 'Deux.' }]), stops, andrews, source, { min: 2, max: 3, id: 'Q1|détour|1910' });
     expect(detour?.steps).toHaveLength(2);
     expect(detour?.id).toBe('Q1|détour|1910');
+  });
+});
+
+describe('steps written on arrival', () => {
+  const stops = [
+    { year: 1909, main: true }, { year: 1912, main: true }, { year: 1912, main: false }, { year: 1912, main: true },
+    { year: 1913, main: true }, { year: 1985, main: true }, { year: 1911, main: true },
+  ];
+
+  it('offers as choices the places not walked yet, from the step’s moment on, nearest first, main ones first', () => {
+    expect(choiceCandidates(stops, 1, [0, 1, 4])).toEqual([3, 2, 6, 5]);
+    // A real protagonist only where they live then.
+    expect(choiceCandidates(stops, 1, [0, 1], (y) => y < 1950)).toEqual([3, 2, 4, 6]);
+    expect(choiceCandidates(stops, 9, [])).toEqual([]);
+  });
+
+  it('turns a stop of the story into a step to walk, its text to be written', () => {
+    const story = { stops: [{ phase: 'during' as const, name: 'Cobh', label: 'Escale', year: 1912, lat: 51.8, lon: -8.3, poi: null, image: 'u.jpg' }] };
+    expect(stepOf(story, 0)).toEqual({ place: 'Cobh', label: 'Escale', year: 1912, lat: 51.8, lon: -8.3, poi: null, text: '', cast: [], stop: 0, image: 'u.jpg' });
+    expect(stepOf(story, 3)).toBeNull();
+  });
+
+  it('tolerates a malformed step answer', () => {
+    const v = ExtractedStep.parse({ text: 'Vous débarquez à Cobh au petit matin, sous la pluie, avec les derniers passagers.', cast: ['P1', 'x'], choices: [{ label: 'Suivre les émigrants', to: 'C0' }, { to: 2 }] });
+    expect(v.cast).toEqual([1, 0]);
+    expect(v.choices).toEqual([{ label: 'Suivre les émigrants', to: 0 }, null]);
+  });
+});
+
+describe('plans filled to the story', () => {
+  it('adds the main stops between a short plan’s first and last moments, in the story’s order', () => {
+    const stops = [{ year: 1907 }, { year: 1912 }, { year: 1912, main: false }, { year: 1912 }, { year: 1912 }, { year: 1985 }];
+    const plan = { title: 'T', premise: 'P', person: null, invented: true, steps: [{ stop: 4, text: '', cast: [] }, { stop: 1, text: '', cast: [] }] };
+    expect(fillPlan(plan, stops, [], 4).steps.map((s) => s.stop)).toEqual([1, 3, 4]);
+    // Long enough: untouched.
+    expect(fillPlan(plan, stops, [], 2)).toBe(plan);
   });
 });
