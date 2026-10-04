@@ -15,6 +15,8 @@ export interface Mention {
   /** The infobox field it fills ("chantier"), when in the infobox. */
   field: string | null;
   sentence: string;
+  /** The whole paragraph around it, as text. */
+  paragraph: string;
   /** The first year the sentence gives, else the last one of the paragraph before it. */
   year: number | null;
   /** Every year the sentence gives, in order. */
@@ -118,6 +120,8 @@ export function yearsIn(text: string): number[] {
   return out;
 }
 
+/** A paragraph as kept for the writers. */
+const PARAGRAPH_CHARS = 1400;
 const LINK = /\[\[([^[\]|]+)(?:\|([^[\]]*))?\]\]/g;
 const HEADING = /^(={2,6})\s*(.+?)\s*\1\s*$/;
 
@@ -171,6 +175,7 @@ export function mentionsOf(wikitext: string): Mention[] {
         path: path.map((p) => p.title).reverse(),
         field: field ? field[1]! : null,
         sentence,
+        paragraph: text.replace(/\s+/g, ' ').trim().slice(0, PARAGRAPH_CHARS),
         year: yearsIn(sentence)[0] ?? before,
         years: yearsIn(sentence),
         order: order++,

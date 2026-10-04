@@ -109,6 +109,8 @@ export interface PageInfo {
   type: string | null;
   /** Its size in meters, when given. */
   dim: number | null;
+  /** Its article's picture, a thumbnail. */
+  image: string | null;
 }
 
 interface InfoResponse {
@@ -118,6 +120,7 @@ interface InfoResponse {
     pages?: {
       title: string; missing?: boolean; pageprops?: { wikibase_item?: string };
       coordinates?: { lat: number; lon: number; globe?: string; type?: string; dim?: string | number; primary?: string | boolean }[];
+      thumbnail?: { source: string };
     }[];
   };
 }
@@ -129,8 +132,8 @@ export async function pagesInfo(lang: string, titles: string[]): Promise<Map<str
   for (let i = 0; i < titles.length; i += 50) chunks.push(titles.slice(i, i + 50));
   const one = async (chunk: string[]) => {
     const params = new URLSearchParams({
-      action: 'query', titles: chunk.join('|'), prop: 'coordinates|pageprops', ppprop: 'wikibase_item',
-      coprop: 'type|dim|globe', colimit: 'max', redirects: '1', format: 'json', formatversion: '2',
+      action: 'query', titles: chunk.join('|'), prop: 'coordinates|pageprops|pageimages', ppprop: 'wikibase_item',
+      coprop: 'type|dim|globe', colimit: 'max', piprop: 'thumbnail', pithumbsize: '480', pilimit: '50', redirects: '1', format: 'json', formatversion: '2',
     });
     const r = await fetchJson<InfoResponse>(`https://${lang}.wikipedia.org/w/api.php?${params}`);
     const byTitle = new Map<string, PageInfo>();
@@ -138,7 +141,7 @@ export async function pagesInfo(lang: string, titles: string[]): Promise<Map<str
       if (p.missing) continue;
       const c = p.coordinates?.find((x) => !x.globe || x.globe === 'earth');
       const dim = c?.dim === undefined ? null : Number(String(c.dim).replace(/km$/, '000').replace(/[^0-9.]/g, '')) || null;
-      byTitle.set(p.title, { title: p.title, qid: p.pageprops?.wikibase_item ?? null, lat: c?.lat ?? null, lon: c?.lon ?? null, type: c?.type ?? null, dim });
+      byTitle.set(p.title, { title: p.title, qid: p.pageprops?.wikibase_item ?? null, lat: c?.lat ?? null, lon: c?.lon ?? null, type: c?.type ?? null, dim, image: p.thumbnail?.source ?? null });
     }
     const norm = new Map((r.query?.normalized ?? []).map((n) => [n.from, n.to]));
     const redir = new Map((r.query?.redirects ?? []).map((n) => [n.from, n.to]));

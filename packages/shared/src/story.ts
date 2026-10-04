@@ -34,6 +34,8 @@ export interface StoryStop {
   poi: PoiLite | null;
   /** One of the story's own places (shown first); false for one its article only cites. Absent: main. */
   main?: boolean;
+  /** Its article's picture. */
+  image?: string | null;
 }
 
 export interface StoryPerson {
@@ -110,8 +112,33 @@ export interface WalkStep {
   lon: number;
   /** The place's card, when it has one. */
   poi: PoiLite | null;
+  /** What the character lives there; empty until written, when the visitor gets there. */
   text: string;
   cast: StoryPerson[];
+  /** The stop of the card's story it walks through (`ScenarioWalk.from`): its text is written from it. */
+  stop?: number;
+  /** The place's picture. */
+  image?: string | null;
+  /** Where the story may lead from here, offered once its text is written. */
+  choices?: StepChoice[];
+  /** The choice taken here, if any. */
+  chosen?: number;
+}
+
+/** A turn the story may take from a step: another place of the same story, next. */
+export interface StepChoice {
+  /** "Suivre les rescapés jusqu'à New York". */
+  label: string;
+  step: WalkStep;
+}
+
+/** A step's text, written when the visitor gets there (`pending` meanwhile). */
+export interface StepResponse {
+  status: StoryStatus;
+  text: string | null;
+  /** The people present, as the writer placed them. */
+  cast: StoryPerson[];
+  choices: StepChoice[];
 }
 
 /**
@@ -170,7 +197,7 @@ export function walkOf(from: PoiLite, story: Story, sc: StoryScenario): Scenario
       if (!s) return [];
       return [{
         place: s.poi?.title ?? s.name, label: s.label, year: s.year, lat: s.lat, lon: s.lon, poi: s.poi, text: st.text,
-        cast: st.cast.flatMap((c) => (story.people[c] ? [story.people[c]!] : [])),
+        cast: st.cast.flatMap((c) => (story.people[c] ? [story.people[c]!] : [])), stop: st.stop, image: s.image ?? null,
       }];
     }),
   };
