@@ -47,6 +47,10 @@
           </div>
           <p class="hint">Une clé gratuite suffit : Gemini ou Groq. Les suivantes servent de secours quand un quota est atteint.
             Les clés sont enregistrées sur le serveur (dossier <code>/data</code>) et ne sont jamais réaffichées en entier.</p>
+          <h2>Ordre des IA</h2>
+          <p class="hint">Pour chaque tâche, Orbis essaie les IA dans cet ordre et passe à la suivante quand l’une échoue,
+            est en pause ou a épuisé son quota du jour. Décochez une IA pour qu’elle ne serve pas à cette tâche.</p>
+          <div class="routes" id="routes"></div>
           <h2>Intelligence artificielle</h2>
           <div class="services" id="llm"></div>
           <h2>Recherche web</h2>

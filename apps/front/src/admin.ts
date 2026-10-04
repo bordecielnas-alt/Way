@@ -34,9 +34,16 @@ interface SettingsResponse {
   level2: { enabled: boolean; source: 'settings' | 'env' };
   variables: Record<string, Variable>;
   providers: ProviderStatus[];
+  routes: Record<Task, { order: string[]; defaults: string[]; custom: boolean }>;
   ui: UiPrefs;
   cache: CachePrefs;
 }
+
+type Task = 'write' | 'extract';
+const TASKS: [Task, string, string][] = [
+  ['write', 'Écriture', 'Scénarios, étapes des chemins, vies des personnages, détours : le texte que vous lisez. Mettez ici la meilleure IA.'],
+  ['extract', 'Lecture', 'Rôle des lieux et des personnes d’une histoire, faits extraits du web, traductions : des tâches courtes, nombreuses.'],
+];
 
 interface CachePrefs { maxGb: number; refreshDays: number; images: boolean }
 
@@ -196,17 +203,18 @@ document.querySelectorAll<HTMLElement>('[role=tab]').forEach((b) =>
 // ---------- AI settings ----------
 
 let current: SettingsResponse | null = null;
-/** Unsaved edits: variables (null = remove the saved value), switches. */
-const draft: { env: Record<string, string | null>; disabled: Set<string> | null; level2: boolean | null } = {
-  env: {}, disabled: null, level2: null,
-};
+/** Unsaved edits: variables (null = remove the saved value), switches, orders of the AIs (null = back to the default). */
+const draft: {
+  env: Record<string, string | null>; disabled: Set<string> | null; level2: boolean | null; routes: Partial<Record<Task, string[] | null>>;
+} = { env: {}, disabled: null, level2: null, routes: {} };
 
-const dirty = () => Object.keys(draft.env).length > 0 || draft.disabled !== null || draft.level2 !== null;
+const dirty = () => Object.keys(draft.env).length > 0 || draft.disabled !== null || draft.level2 !== null || Object.keys(draft.routes).length > 0;
 
 function resetDraft(): void {
   draft.env = {};
   draft.disabled = null;
   draft.level2 = null;
+  draft.routes = {};
 }
 
 async function loadSettings(): Promise<void> {
@@ -244,7 +252,65 @@ function renderSettings(): void {
   for (const [envName, providers] of groups) html[providers[0]!.type].push(serviceHtml(envName, providers));
   $('llm').innerHTML = html.llm.join('');
   $('search').innerHTML = html.search.join('');
+  $('routes').innerHTML = TASKS.map(([task, title, note]) => routeHtml(task, title, note)).join('');
   $('savebar').hidden = !dirty();
+}
+
+// ---------- order of the AIs, per task ----------
+
+/** A task's order as it will be saved. */
+function routeOf(task: Task): string[] {
+  const r = current!.routes[task];
+  const d = draft.routes[task];
+  return d === null ? r.defaults : d ?? r.order;
+}
+
+/** Follows the default order: nothing saved by hand, or about to be reset. */
+function routeIsDefault(task: Task): boolean {
+  return draft.routes[task] === null || (draft.routes[task] === undefined && !current!.routes[task].custom);
+}
+
+function setRoute(task: Task, order: string[]): void {
+  const r = current!.routes[task];
+  const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+  if (same(order, r.order)) delete draft.routes[task];
+  else draft.routes[task] = order;
+}
+
+function routeHtml(task: Task, title: string, note: string): string {
+  const order = routeOf(task);
+  const llms = current!.providers.filter((p) => p.type === 'llm');
+  const byId = new Map(llms.map((p) => [p.id, p]));
+  const used = order.flatMap((id) => byId.get(id) ?? []);
+  const unused = llms.filter((p) => !order.includes(p.id));
+  const row = (p: ProviderStatus, k: number | null) => {
+    const [cls, label] = stateOf(p);
+    const svc = SERVICES[p.keyEnv ?? p.urlEnv ?? '']?.name ?? p.id;
+    const move = (dir: number, sign: string, hint: string, off: boolean) =>
+      `<button type="button" class="ghost route-move" data-route-move="${task}|${p.id}|${dir}" title="${hint}" aria-label="${hint}" ${off ? 'disabled' : ''}>${sign}</button>`;
+    return `
+      <li class="route-row${k === null ? ' unused' : ''}">
+        <span class="route-rank">${k === null ? '' : k + 1}</span>
+        <label class="check" title="${k === null ? 'Utiliser pour cette tâche' : 'Ne plus utiliser pour cette tâche'}">
+          <input type="checkbox" data-route-use="${task}|${p.id}" ${k === null ? '' : 'checked'} />
+          <span><b>${esc(svc)}</b> <span class="sub">${esc(p.model ?? p.defaultModel ?? '')}</span></span></label>
+        <span class="state"><span class="dot ${cls}"></span>${esc(label)}</span>
+        ${k === null ? '' : `${move(-1, '↑', 'Monter', k === 0)}${move(1, '↓', 'Descendre', k === used.length - 1)}`}
+      </li>`;
+  };
+  const ready = used.some((p) => p.configured && !disabledSet().has(p.id));
+  return `
+    <div class="card route">
+      <div class="service-head">
+        <strong>${esc(title)}</strong>
+        <span class="sub">${esc(note)}</span>
+      </div>
+      <ol class="route-list">${used.map((p, k) => row(p, k)).join('')}${unused.map((p) => row(p, null)).join('')}</ol>
+      <div class="route-foot">
+        <span class="sub">${ready ? '' : '⚠ Aucune IA configurée dans cet ordre : cette tâche ne se fera pas.'}</span>
+        ${routeIsDefault(task) ? '<span class="sub">Ordre par défaut</span>' : `<button type="button" class="link" data-route-reset="${task}">Revenir à l’ordre par défaut</button>`}
+      </div>
+    </div>`;
 }
 
 function serviceHtml(envName: string, providers: ProviderStatus[]): string {
@@ -322,6 +388,12 @@ aiPanel.addEventListener('change', (e) => {
   if (!current) return;
   if (input.id === 'level2') {
     draft.level2 = input.checked === current.level2.enabled ? null : input.checked;
+  } else if (input.dataset.routeUse) {
+    const [task, id] = input.dataset.routeUse.split('|') as [Task, string];
+    const order = routeOf(task).filter((x) => x !== id);
+    setRoute(task, input.checked ? [...order, id] : order);
+    renderKeepingFocus();
+    return;
   } else if (input.dataset.provider) {
     const set = new Set(disabledSet());
     if (input.checked) set.delete(input.dataset.provider);
@@ -340,6 +412,22 @@ aiPanel.addEventListener('click', async (e) => {
   if (btn.dataset.clear) {
     draft.env[btn.dataset.clear] = null;
     renderKeepingFocus();
+  } else if (btn.dataset.routeMove) {
+    const [task, id, dir] = btn.dataset.routeMove.split('|') as [Task, string, string];
+    const order = [...routeOf(task)];
+    const i = order.indexOf(id);
+    const j = i + Number(dir);
+    if (i < 0 || j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j]!, order[i]!];
+    setRoute(task, order);
+    renderSettings();
+    // The arrow stays under the pointer's row: focus it again for keyboard moves.
+    aiPanel.querySelector<HTMLButtonElement>(`[data-route-move="${task}|${id}|${dir}"]:not(:disabled)`)?.focus();
+  } else if (btn.dataset.routeReset) {
+    const task = btn.dataset.routeReset as Task;
+    if (current!.routes[task].custom) draft.routes[task] = null;
+    else delete draft.routes[task];
+    renderSettings();
   } else if (btn.dataset.test) {
     const id = btn.dataset.test;
     if (dirty() && !(await save())) return;
@@ -380,6 +468,7 @@ async function save(): Promise<boolean> {
         env: draft.env,
         ...(draft.disabled ? { disabled: [...draft.disabled] } : {}),
         ...(draft.level2 !== null ? { level2: draft.level2 } : {}),
+        ...(Object.keys(draft.routes).length ? { routes: draft.routes } : {}),
       },
     });
     resetDraft();

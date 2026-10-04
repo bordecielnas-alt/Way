@@ -106,14 +106,26 @@ export class ProviderRouter {
     return this.settings?.().level2 ?? this.level2Default;
   }
 
+  /** The AIs tried for a task, in order: as chosen on the settings page, else the providers file's. */
+  route(task: Task): string[] {
+    const own = this.settings?.().routes?.[task];
+    return own ? own.filter((id) => this.cfg.providers[id]?.type === 'llm') : this.cfg.routes[task];
+  }
+
+  /** Each task's order now, the providers file's, and whether the settings page chose it. */
+  routes(): Record<Task, { order: string[]; defaults: string[]; custom: boolean }> {
+    const one = (task: Task) => ({ order: this.route(task), defaults: this.cfg.routes[task], custom: !!this.settings?.().routes?.[task] });
+    return { extract: one('extract'), write: one('write') };
+  }
+
   /** Is at least one LLM usable for `task` right now? */
   canRun(task: Task): boolean {
-    return this.enabled && this.cfg.routes[task].some((id) => this.available(id));
+    return this.enabled && this.route(task).some((id) => this.available(id));
   }
 
   /** Configured at all (keys present), regardless of quotas. */
   hasProvider(task: Task): boolean {
-    return this.enabled && this.cfg.routes[task].some((id) => this.usable(id));
+    return this.enabled && this.route(task).some((id) => this.usable(id));
   }
 
   /** Variables the settings page may set: keys, URLs and model overrides. */
@@ -207,7 +219,7 @@ export class ProviderRouter {
   async completeJson<T>(
     task: Task, system: string, user: string, parse: (value: unknown) => T, maxTokens?: number,
   ): Promise<{ value: T; provider: string } | null> {
-    for (const id of this.cfg.routes[task]) {
+    for (const id of this.route(task)) {
       if (!this.available(id)) continue;
       const value = await this.call(id, task, async () => {
         const text = await this.complete(id, system, user, this.cfg.providers[id]!.timeoutMs, maxTokens);

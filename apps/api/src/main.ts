@@ -117,6 +117,7 @@ function settingsView() {
     level2: { enabled: router.enabled, source: saved.level2 === undefined ? 'env' : 'settings' },
     variables,
     providers: router.status(),
+    routes: router.routes(),
     ui: normalizeUi(saved.ui),
     cache: normalizeCache(saved.cache, cfg.cache.maxBytes),
   };
@@ -128,6 +129,8 @@ const SettingsBody = z.object({
   level2: z.boolean().nullable().optional(),
   env: z.record(z.string(), z.string().max(500).nullable()).optional(),
   disabled: z.array(z.string()).optional(),
+  /** Each task's AIs in order; null goes back to the providers file's. */
+  routes: z.object({ extract: z.array(z.string()).max(40).nullable(), write: z.array(z.string()).max(40).nullable() }).partial().optional(),
   ui: z.object({
     sounds: z.boolean(),
     volume: z.number().min(0).max(1),
@@ -148,7 +151,7 @@ app.put('/api/settings', async (req, reply) => {
   const cur = settings.get();
   const ui = body.data.ui ? normalizeUi({ ...normalizeUi(cur.ui), ...body.data.ui }) : cur.ui;
   const cache = body.data.cache ? normalizeCache({ ...normalizeCache(cur.cache, cfg.cache.maxBytes), ...body.data.cache }, cfg.cache.maxBytes) : cur.cache;
-  const next = { level2: cur.level2, env: { ...cur.env }, disabled: [...cur.disabled], ui, cache };
+  const next = { level2: cur.level2, env: { ...cur.env }, disabled: [...cur.disabled], routes: cur.routes, ui, cache };
   if (body.data.level2 !== undefined) next.level2 = body.data.level2 ?? undefined;
   for (const [name, value] of Object.entries(body.data.env ?? {})) {
     if (!allowed.has(name)) return reply.code(400).send({ error: `variable inconnue : ${name}` });
@@ -157,13 +160,23 @@ app.put('/api/settings', async (req, reply) => {
     else delete next.env[name];
   }
   if (body.data.disabled) next.disabled = body.data.disabled.filter((id) => ids.has(id));
+  if (body.data.routes) {
+    const llms = new Set(router.status().filter((p) => p.type === 'llm').map((p) => p.id));
+    const routes = { ...next.routes };
+    for (const task of ['extract', 'write'] as const) {
+      const list = body.data.routes[task];
+      if (list === null) delete routes[task];
+      else if (list) routes[task] = [...new Set(list.filter((id) => llms.has(id)))];
+    }
+    next.routes = Object.keys(routes).length ? routes : undefined;
+  }
   settings.save(next);
   // A smaller budget applies at once.
   if (body.data.cache) {
     media.evict();
     void checkCache();
   }
-  req.log.info({ level2: next.level2, vars: Object.keys(next.env), disabled: next.disabled }, 'settings saved');
+  req.log.info({ level2: next.level2, vars: Object.keys(next.env), disabled: next.disabled, routes: next.routes }, 'settings saved');
   return settingsView();
 });
 
