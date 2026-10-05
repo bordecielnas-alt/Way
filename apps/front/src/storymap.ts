@@ -11,8 +11,9 @@ import { greatCircle } from './living.ts';
 // own card is ringed: a door into its own story. Cleared with the card.
 // While a path plays, its steps instead, numbered, the one played in gold,
 // the route lived drawn plain, the route ahead dashed; from the step played,
-// where it may go: the way on (an arrow), its turning points (blue dashes)
-// and the places of its detours, each clickable.
+// where it may go, as the film's crossroads says it: the way on (an arrow),
+// another route (a plain line, one way) and the places of its crochets (blue
+// dashes, they come back), each clickable.
 
 /** Where a path may go from the step played. */
 export interface RouteOption {
@@ -23,7 +24,7 @@ export interface RouteOption {
   lon: number;
 }
 
-const OPTION_COLORS: Record<RouteOption['kind'], string> = { next: '#f2c66d', fork: '#7fb3e0', detour: '#f4ead6' };
+const OPTION_COLORS: Record<RouteOption['kind'], string> = { next: '#f2c66d', fork: '#f4ead6', detour: '#7fb3e0' };
 
 const PHASE_COLORS: Record<StoryPhase, string> = { before: '#5b8fd1', during: '#d9a441', after: '#d673b1' };
 /** Names of the main places show from this far (meters), the dots from farther. */
@@ -69,7 +70,8 @@ export class StoryLayer {
         const far = o.lat !== here.lat || o.lon !== here.lon;
         if (far) {
           this.line(here, o, o.kind === 'next' ? Material.fromType('PolylineArrow', { color: color.withAlpha(0.95) })
-            : Material.fromType('PolylineDash', { color: color.withAlpha(o.kind === 'fork' ? 0.9 : 0.6), dashLength: o.kind === 'fork' ? 14 : 6 }), o.kind === 'next' ? 9 : o.kind === 'fork' ? 3 : 2);
+            : o.kind === 'fork' ? Material.fromType('Color', { color: color.withAlpha(0.7) })
+            : Material.fromType('PolylineDash', { color: color.withAlpha(0.9), dashLength: 8 }), o.kind === 'next' ? 9 : 2.5);
         }
         if (o.kind === 'next' || !far) return;
         const position = Cartesian3.fromDegrees(o.lon, o.lat, 1500);

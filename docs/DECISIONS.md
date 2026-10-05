@@ -366,6 +366,24 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
 - **Balayage** : les royaumes suivis passent avant les autres ; leur fiche et leurs régions sont revérifiées
   (3 royaumes par passage). La page Réglages indique combien de royaumes sont suivis de près.
 
+## Pellicule, crochets et fils
+
+- **À droite on lit, en bas on avance** : un chemin joué est une pellicule en bas de l'écran, à la place de la
+  frise (cachée pendant la lecture, elle revient en pause). La fiche n'est plus un onglet du carnet : elle s'ouvre
+  à droite seulement si on la demande (bouton « Fiche » du bandeau), puis suit les étapes jusqu'à ce qu'on la ferme.
+  Ses propres parcours ne sont écrits que si on l'a demandée : l'IA écrit l'étape d'abord.
+- **Trois gestes au carrefour** : « Étape suivante » (le gros bouton) ; « Faire un crochet » (quelques pas de
+  côté qui reviennent d'eux-mêmes, en bleu pointillé partout : carrefour, pellicule, globe) ; « Changer de route »
+  (aller simple, trait plein : bifurcation prévue, toute une vie, un lieu à travers les siècles, le monde à ce
+  moment). Un crochet pris depuis un crochet revient au même endroit que lui : jamais de parenthèse dans une
+  parenthèse. Le bandeau d'un crochet porte toujours « ↩ Retour à… ».
+- **Fils** : les trois parcours d'une histoire suivent quelqu'un, une chose, une idée (plus deux personnes et un
+  fil). Deux fils sont faits de fiches, sans IA pour les tracer : *Rester ici* (requête Wikidata autour du lieu
+  comme la porte « ici, plus tard », 8 moments au plus, les plus connus et espacés dans le temps, ceux d'après
+  1900 comptant pour un tiers) et *Le monde vers telle année* (fiches du cache dans la tranche de l'année, complétées
+  par Wikidata, une par thème, à 700 km au moins les unes des autres, thèmes affichés d'abord, puis en tournée depuis
+  l'endroit où l'on est). Leurs étapes sont rédigées à l'arrivée d'après l'introduction de l'article de chaque fiche.
+
 ## Hors V1 (prévu)
 
 Histogramme de densité, carnet de voyage, brouillard de connaissance, fils rouges,

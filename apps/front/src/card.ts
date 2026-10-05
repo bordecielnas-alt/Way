@@ -1,5 +1,5 @@
 import {
-  ACTIVITY_LABELS, aiOf, CATEGORY_LABELS, DOOR_KINDS, type Army, type JourneyStop, type PersonJourney, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
+  ACTIVITY_LABELS, aiOf, threadOf, THREAD_LABELS, CATEGORY_LABELS, DOOR_KINDS, type Army, type JourneyStop, type PersonJourney, formatPoiDate, formatYear, type Door, type DoorKind, type DoorsResponse, type Poi,
   type PoiLite, type PolityInfo, type PolityRulerInfo, toLite, FLOW_LABELS, type CityRow, type Flow, type FlowDef, type FlowStage,
   STORY_PHASES, STORY_PHASE_LABELS, type Story, type StoryPerson, type StoryResponse, type StoryStop,
   THEMES, walkOf, type CardLink, type CardLinksResponse, type ScenarioContext, type ScenariosResponse, type ScenarioWalk,
@@ -108,6 +108,8 @@ export class Card {
   pathsThrough: (poi: PoiLite) => ScenarioWalk[] = () => [];
   /** One of the card's roles chosen: its path plays. */
   onPlay: (walk: ScenarioWalk) => void = () => undefined;
+  /** A walk made of cards from this one: the place across the centuries, or the world at its moment. */
+  onThread: (kind: 'place' | 'era', poi: PoiLite) => void = () => undefined;
   /** The card is out of sight (behind a path played): its roles are asked when it shows. */
   waitRoles: () => boolean = () => false;
   /** Where the visitor is in a path, if started. */
@@ -823,9 +825,11 @@ export class Card {
   }
 
   /**
-   * "▶ Parcourir cette histoire": the card's paths, each to read at once
-   * (whom or what it follows, where the visitor is in it, the AI that traced
-   * it); the paths met elsewhere that pass here open in the carnet.
+   * "Partir sur un fil": the card's paths, each to read at once (whom or
+   * what it follows: someone, a thing, an idea; where the visitor is in it,
+   * the AI that traced it), then two that need no AI: this place across the
+   * centuries, the world at its moment; the paths met elsewhere that pass
+   * here open in the carnet.
    */
   private renderPaths(): void {
     const box = this.root.querySelector<HTMLElement>('.card-paths');
@@ -834,7 +838,7 @@ export class Card {
     const ids = new Set(this.walks.map((w) => w.id));
     const others = this.scenariosOn ? this.pathsThrough(poi).filter((w) => !ids.has(w.id)) : [];
     const pending = this.pathsStatus === 'pending';
-    if (!this.scenariosOn || (!this.walks.length && !others.length && !pending)) {
+    if (!this.scenariosOn) {
       box.hidden = true;
       box.innerHTML = '';
       return;
@@ -850,7 +854,7 @@ export class Card {
       return `<button type="button" class="role${mine ? ' playing' : ''}" data-role="${i}" title="${esc(w.premise)}">
           <span class="ruler-portrait role-portrait">${portrait}</span>
           <span class="role-text">
-            <span class="role-who">${w.invented ? 'Fil thématique' : esc(w.hero?.name ?? 'Personnage réel')}</span>
+            <span class="role-who">${THREAD_LABELS[threadOf(w)]}${w.hero ? ` · ${esc(w.hero.name)}` : ''}</span>
             <b class="role-title">${esc(w.title)}</b>
             <span class="role-premise">${esc(w.premise)}</span>
             <span class="role-meta">${w.steps.length} étapes${turns ? ` · ${turns} bifurcation${turns > 1 ? 's' : ''}` : ''}</span>
@@ -861,16 +865,25 @@ export class Card {
     const who = this.pathsAi ? esc(this.pathsAi) : 'L’IA';
     const waiting = pending ? `<div class="role-wait"><span class="sc-note-dot" aria-hidden="true"></span>${this.walks.length ? `${who} trace un autre parcours…` : `${who} trace des parcours dans cette histoire…`}</div>` : '';
     const planners = [...new Set(this.walks.flatMap((w) => (w.ai ? [w.ai] : [])))];
+    // Two more, made of cards, no AI to wait for: this place across the centuries (not a whole country), the world at its moment.
+    const fil = (kind: 'place' | 'era', icon: string, title: string, sub: string) =>
+      `<button type="button" class="fil" data-thread="${kind}" title="${esc(sub)}"><span class="fil-icon" aria-hidden="true">${icon}</span><span class="fil-text"><b>${esc(title)}</b><small>${esc(sub)}</small></span></button>`;
+    const threads = `<div class="fils">
+        ${poi.category !== 'polity' ? fil('place', '⌛', THREAD_LABELS.place, `${poi.title} à travers les siècles`) : ''}
+        ${fil('era', '◍', `Le monde vers ${formatYear(poi.date_start)}`, 'Une époque, plusieurs thèmes : pouvoir, guerre, foi, commerce, savoirs…')}
+      </div>`;
     box.hidden = false;
-    box.innerHTML = `<div class="roles-title">▶ Parcourir cette histoire${this.walks.length ? ` <span>· ${this.walks.length} parcours</span>` : ''}</div>
+    box.innerHTML = `<div class="roles-title">Partir sur un fil${this.walks.length ? ` <span>· ${this.walks.length} parcours dans cette histoire</span>` : ''}</div>
       ${this.walks.map(role).join('')}
       ${waiting}
       ${planners.length && !pending ? `<div class="roles-ai">Parcours tracés par ${planners.map(esc).join(', ')} d’après l’article ; chaque étape est rédigée d’après Wikipédia à l’arrivée.</div>` : ''}
+      ${threads}
       ${others.length ? `<button type="button" class="sc-link roles-more">+ ${others.length} autre${others.length > 1 ? 's' : ''} chemin${others.length > 1 ? 's' : ''} passe${others.length > 1 ? 'nt' : ''} par ici ›</button>` : ''}`;
     box.querySelectorAll<HTMLButtonElement>('.role').forEach((b) => b.addEventListener('click', () => {
       const w = this.walks[Number(b.dataset.role)];
       if (w && this.playing?.id !== w.id) this.onPlay(w);
     }));
+    box.querySelectorAll<HTMLButtonElement>('.fil').forEach((b) => b.addEventListener('click', () => this.onThread(b.dataset.thread as 'place' | 'era', poi)));
     box.querySelectorAll<HTMLImageElement>('.role img').forEach((img) => img.addEventListener('error', () => img.remove()));
     box.querySelector('.roles-more')?.addEventListener('click', () => this.onPaths({ poi, walks: this.walks, status: this.pathsStatus }));
   }

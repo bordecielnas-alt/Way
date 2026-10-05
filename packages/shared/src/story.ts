@@ -10,9 +10,28 @@ import { formatDay, formatYear } from './years.ts';
 // Places and moments quote the article; people are Wikidata humans;
 // scenarios are planned by the AI over those checked stops, for the way the
 // visitor looks at the world (lens, themes) and the path that led them to the
-// card: two follow real people, the last a thread of the story chosen for that
-// view. Steps are told as an encyclopedia would, from Wikipedia, never in
-// someone's shoes.
+// card: one follows a real person, one a thing (a cargo, a ship, money), one
+// an idea (a faith, a technique, a law), chosen for that view. Two more need
+// no story: a place across the centuries, and the world at one moment, a
+// theme per step. Steps are told as an encyclopedia would, from Wikipedia,
+// never in someone's shoes.
+
+/** What a walk follows: someone, a thing, an idea, a place across time, or one moment across the world. */
+export const WALK_THREADS = ['person', 'thing', 'idea', 'place', 'era'] as const;
+export type WalkThread = (typeof WALK_THREADS)[number];
+
+export const THREAD_LABELS: Record<WalkThread, string> = {
+  person: 'Suivre quelqu’un',
+  thing: 'Suivre une chose',
+  idea: 'Suivre une idée',
+  place: 'Rester ici',
+  era: 'Une époque, plusieurs thèmes',
+};
+
+/** What a walk follows, for walks kept before they said so: a real person, else a thing. */
+export function threadOf(w: { thread?: WalkThread; hero: { qid: string } | null }): WalkThread {
+  return w.thread ?? (w.hero ? 'person' : 'thing');
+}
 
 export const STORY_PHASES = ['before', 'during', 'after'] as const;
 export type StoryPhase = (typeof STORY_PHASES)[number];
@@ -67,6 +86,8 @@ export interface StoryScenario {
   person: number | null;
   /** Follows no one in particular: a thread of the story chosen for the visitor's view (the freight, the faith…). */
   invented: boolean;
+  /** Such a thread: a thing (the freight, a ship) or an idea (the faith, a technique). */
+  thread?: 'thing' | 'idea';
   /** Turning points planned with the walk: where the story could go another way. */
   forks?: ScenarioFork[];
   /** The AI that planned it, e.g. "gemini-2.5-flash". */
@@ -248,6 +269,8 @@ export interface ScenarioWalk {
   title: string;
   premise: string;
   invented: boolean;
+  /** What it follows (absent from walks kept before: see `threadOf`). */
+  thread?: WalkThread;
   /** The real person followed, if any. */
   hero: StoryPerson | null;
   steps: WalkStep[];
@@ -317,6 +340,7 @@ export function walkOf(from: PoiLite, story: Story, sc: StoryScenario): Scenario
     title: sc.title,
     premise: sc.premise,
     invented: sc.invented,
+    thread: hero ? 'person' : sc.thread ?? 'thing',
     hero,
     from,
     source: story.source,
@@ -342,6 +366,7 @@ export function forkWalk(walk: ScenarioWalk, at: number, k: number): ScenarioWal
     title: f.label,
     premise: f.hero ? `L’histoire suit désormais ${f.hero.name}${role}, à partir de ${st.place}.` : walk.premise,
     invented: f.hero ? false : walk.invented,
+    thread: hero ? 'person' : walk.thread,
     hero,
     from: walk.from,
     source: walk.source,
@@ -355,7 +380,11 @@ export function forkWalk(walk: ScenarioWalk, at: number, k: number): ScenarioWal
 /** A short detour (2-3 steps) branching off a walk: around a person, or at a place's card, near a year. */
 export type DetourKind = 'person' | 'card';
 
-/** A real person's life as a scenario, across the cards where they appear, or a detour (`pending` while an AI writes it). */
+/**
+ * A real person's life as a scenario, across the cards where they appear, or a
+ * detour (`pending` while an AI writes it); also a place across the centuries
+ * or the world at one moment, made of cards (no AI to wait for).
+ */
 export interface PersonScenarioResponse {
   status: StoryStatus;
   walk: ScenarioWalk | null;

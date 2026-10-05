@@ -39,14 +39,15 @@ describe('story of a card', () => {
     expect(first!.person).toBe(0);
   });
 
-  it('keeps two real people, one each, then an invented character', () => {
+  it('keeps one real person, then a thing and an idea', () => {
     const walk = [step(0), step(1)];
+    const thread = (kind: 'thing' | 'idea') => ({ ...sc(null, true, walk), thread: kind });
     const out = buildScenarios([
-      sc(null, true, walk), sc(1, false, walk), sc(1, false, walk), sc(0, false, walk), sc(2, false, walk), sc(null, true, walk),
+      thread('thing'), sc(1, false, walk), thread('thing'), sc(0, false, walk), thread('idea'),
     ], stops, people);
-    expect(out.map((x) => (x.invented ? 'invented' : x.person))).toEqual([1, 0, 'invented']);
-    // Too few people: invented characters fill in.
-    expect(buildScenarios([sc(null, true, walk), sc(null, true, walk), sc(9, false, walk)], stops, []).map((x) => x.invented)).toEqual([true, true]);
+    expect(out.map((x) => (x.invented ? x.thread : x.person))).toEqual([1, 'thing', 'idea']);
+    // No people: threads fill in, a thread without its kind is a thing.
+    expect(buildScenarios([sc(null, true, walk), thread('idea'), sc(9, false, walk)], stops, []).map((x) => x.thread)).toEqual(['thing', 'idea']);
   });
 
   it('follows the person the premise names, whatever number the model gave', () => {

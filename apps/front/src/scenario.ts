@@ -1,32 +1,36 @@
 import {
-  forkWalk, formatWhen, formatYear, type Door, type PoiLite, type ScenarioWalk, type Source, type StepChoice, type StepPicture, type StepQuote, type StoryPerson,
-  type WalkLead,
+  forkWalk, formatWhen, formatYear, threadOf, THREAD_LABELS, type Door, type PoiLite, type ScenarioWalk, type Source, type StepChoice, type StepPicture,
+  type StepQuote, type StoryPerson, type WalkLead,
 } from '@way/shared';
 import type { Entity } from './entity.ts';
 import { viaServer } from './media.ts';
 import type { RouteOption } from './storymap.ts';
 
-// The carnet de route, as a column beside the map: the step played, told
-// like a short illustrated article from Wikipedia (its place's picture, its
-// heading, its paragraphs and the section's pictures, who was there, its
-// sources and the AI that wrote it), and pinned under it the crossroads,
-// "Où aller ensuite ?": go on along the planned route,
-// turn away at one of its turning points, or take a short detour and come
-// back. The same crossroads is drawn on the globe from the step. Tabs give
-// the tree of the paths taken and not taken from this story, and the card of
-// the step's place. A step's text is written when the visitor gets there,
-// knowing the turns taken. Paused, the column folds to a bar.
-// Every scenario started is a path, kept in "Mes chemins" with its progress.
-// Paths branch: a turning point or someone's whole life is a branch of the
-// path played, a detour a few steps that come back; a breadcrumb climbs
-// back up. At the end of a path, ways on: a person, what it led to, another
-// path through the same place, or back to the trunk. Quitting does not
-// fly the map back: a bar offers to.
+// The carnet de route, a film along the bottom of the map where the timeline
+// was: to the right one reads (the card, only when asked), along the bottom
+// one goes on. A band says a path plays (what it follows, its step, quit);
+// under it the step played, told like a short illustrated article from
+// Wikipedia (its place's picture, its heading, its paragraphs and the
+// section's pictures, who was there, its sources and the AI that wrote it),
+// beside it the crossroads: one big way on along the planned route, then a
+// crochet (a few steps that come back here by themselves) or another route
+// (a one-way turn: a turning point, someone's whole life, the place across
+// the centuries, the world at that moment). The same crossroads is drawn on
+// the globe from the step. Under them, the reel of steps, each with its date.
+// A crochet is a parenthesis: its reel rises above the path it leaves, the
+// way back is always in the band, and no crochet opens inside a crochet.
+// A step's text is written when the visitor gets there, knowing the turns
+// taken. Paused, the film folds to a bar and the timeline comes back.
+// Every scenario started is a path, kept in "Mes chemins" with its progress;
+// "Plan des chemins" draws the tree of the paths taken and not taken. At the
+// end of a path, ways on: a person, what it led to, another path through
+// the same place, or back to the path left. Quitting does not fly the map
+// back: a bar offers to.
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-/** A path's place in the tree: started on its own, a short detour, or a whole path opened from another. */
+/** A path's place in the tree: started on its own, a crochet that comes back, or another route taken from one. */
 export type PathKind = 'trunk' | 'detour' | 'branch';
 
 export interface Path {
@@ -64,8 +68,16 @@ export interface Here {
   poi?: PoiLite;
 }
 
-const KIND_LABELS: Record<PathKind, string> = { trunk: 'Chemin', detour: 'Détour', branch: 'Branche' };
+const KIND_LABELS: Record<PathKind, string> = { trunk: 'Chemin', detour: 'Crochet', branch: 'Autre route' };
 const KIND_ICONS: Record<PathKind, string> = { trunk: '●', detour: '↩', branch: '⑂' };
+
+/** Where another route may start from a step: the place across the centuries, or the world at that moment. */
+export interface ThreadAt {
+  poi: PoiLite | null;
+  year: number;
+  lat: number;
+  lon: number;
+}
 /** Paths remembered in this browser. */
 const PATHS_KEY = 'orbis:paths';
 const PATHS_MAX = 60;
@@ -208,9 +220,8 @@ export interface StepDoors {
   effect: Door | null;
 }
 
-type Drawer = 'paths' | 'here' | 'tree' | 'suites';
-/** What the column shows while a path plays: the step, the tree of its paths, the card of its place. */
-export type CarnetTab = 'step' | 'tree' | 'card';
+/** Opened above the film (or alone): my paths, a place's or person's paths, the trees, the plan of the path played, the ways on. */
+type Drawer = 'paths' | 'here' | 'tree' | 'plan' | 'suites';
 
 /** "de Napoléon", "d’Edward". */
 const of = (name: string) => (/^[aeiouyàâéèêëîïôöùûü]/i.test(name) ? `d’${name}` : `de ${name}`);
@@ -221,11 +232,10 @@ const face = (p: { name: string; image: string | null }) =>
 export class Carnet {
   private journal = new Journal();
   private current: string | null = null;
-  /** Clicked elsewhere: the path waits, its people leave the map; the column folds to a bar. */
+  /** Clicked elsewhere: the path waits, its people leave the map; the film folds to a bar. */
   private paused = false;
-  /** What is opened beside the column (or alone): paths, a place's or person's paths, the forest, the ways on. */
+  /** What is opened above the film (or alone). */
   private drawer: Drawer | null = null;
-  private tab: CarnetTab = 'step';
   private here: Here | null = null;
   /** Something being prepared (a detour, a life written by an AI). */
   private note: string | null = null;
@@ -235,8 +245,6 @@ export class Carnet {
   private back: string | null = null;
   /** "Explorer autour" unfolded. */
   private around = false;
-  /** The crossroads unfolded: its turning points and detours, not only the way on. */
-  private crossOpen = false;
   /** What the buttons shown point to. */
   private leads: Lead[] = [];
   private walksShown: ScenarioWalk[] = [];
@@ -258,20 +266,22 @@ export class Carnet {
   onReturn: () => void = () => undefined;
   /** The path played, its step or its state changed (cards mark it). */
   onChange: () => void = () => undefined;
-  /** A card to open beside the film. */
+  /** A card to open, on the right of the film. */
   onOpenCard: (poi: PoiLite) => void = () => undefined;
-  /** A crossroads taken: a short detour around the step's year, or the whole path. */
+  /** A crossroads taken: a crochet around the step's year, or the whole path as another route. */
   onLead: (lead: Lead, how: 'detour' | 'full', at: LeadFrom) => void = () => undefined;
+  /** Another route from a step: its place across the centuries, or the world at its moment. */
+  onThread: (kind: 'place' | 'era', at: ThreadAt) => void = () => undefined;
   /** A walk met: remembered for the search bar. */
   onMet: (walk: ScenarioWalk) => void = () => undefined;
   /** A card's doors (meanwhile, what led there), for a step's crossroads. */
   doorsFor: (poi: PoiLite) => Promise<StepDoors> = async () => ({ meanwhile: null, cause: null, effect: null });
   /** A name to act on (someone present at the step): its menu opens under it. */
   onEntity: (anchor: HTMLElement, e: Entity) => void = () => undefined;
-  /** A tab of the column shown. */
-  onTab: (tab: CarnetTab) => void = () => undefined;
-  /** The title of the card beside the step, if one is open (its tab). */
-  cardTitle: () => string | null = () => null;
+  /** The card open on the right, if any (the band's button then closes it). */
+  cardOpen: () => string | null = () => null;
+  /** The card on the right closed from the band. */
+  onCloseCard: () => void = () => undefined;
 
   constructor(private root: HTMLElement, private known: () => ScenarioWalk[]) {
     root.addEventListener('click', (e) => this.click(e));
@@ -317,8 +327,16 @@ export class Carnet {
    */
   play(walk: ScenarioWalk, step = 0, branch?: PathKind, on?: { id: string; step: number }): void {
     if (!walk.steps[step]) return;
-    const from = on ? this.journal.get(on.id) ?? null : this.playingPath;
-    const fromStep = on ? on.step : from?.step ?? 0;
+    let from = on ? this.journal.get(on.id) ?? null : this.playingPath;
+    let fromStep = on ? on.step : from?.step ?? 0;
+    // No crochet inside a crochet: one taken from a crochet comes back where that one would.
+    if (branch === 'detour' && from?.kind === 'detour' && from.parent) {
+      const back = this.journal.get(from.parent.id);
+      if (back) {
+        fromStep = from.parent.step;
+        from = back;
+      }
+    }
     const first = this.current !== walk.id || this.paused;
     const now = Date.now();
     const known = this.journal.get(walk.id);
@@ -339,7 +357,6 @@ export class Carnet {
     this.drawer = null;
     this.note = null;
     this.back = null;
-    if (this.tab === 'tree' && first) this.tab = 'step';
     this.show(first);
   }
 
@@ -431,7 +448,7 @@ export class Carnet {
     this.openDrawer('paths');
   }
 
-  /** The card beside the step changed (its tab's title). */
+  /** The card on the right opened or closed (the band's button says so). */
   refreshCard(): void {
     if (this.playingPath && !this.paused) this.render();
   }
@@ -502,7 +519,6 @@ export class Carnet {
     const first = this.paused;
     this.paused = false;
     if (this.drawer === 'suites') this.drawer = null;
-    if (this.tab === 'card') this.tab = 'step';
     this.show(first);
   }
 
@@ -552,7 +568,7 @@ export class Carnet {
 
   private show(first: boolean): void {
     const p = this.playingPath!;
-    // Laid out first: the map flies to the part the column leaves visible.
+    // Laid out first: the map flies to the part the film leaves visible.
     this.render();
     this.onStep(p.walk, p.step, first);
     // Written by the step's writer, or still to be: those of a life come with a few lines, made a full step on arrival.
@@ -573,11 +589,17 @@ export class Carnet {
         return this.drawer === d ? this.closeDrawer() : this.openDrawer(d);
       }
       case 'close-drawer': return this.closeDrawer();
-      case 'tab': {
-        const tab = b.dataset.tab as CarnetTab;
-        this.tab = this.tab === tab && tab !== 'step' ? 'step' : tab;
-        this.render();
-        return this.onTab(this.tab);
+      case 'step-card': {
+        if (this.cardOpen()) return this.onCloseCard();
+        const st = p?.walk.steps[p.step];
+        const poi = st?.poi ?? p?.walk.from;
+        if (poi) this.onOpenCard(poi);
+        return;
+      }
+      case 'thread': {
+        const st = p?.walk.steps[p.step];
+        if (st) this.onThread(b.dataset.kind as 'place' | 'era', { poi: st.poi, year: st.year, lat: st.lat, lon: st.lon });
+        return;
       }
       case 'pause': return this.pause();
       case 'resume': return this.resume();
@@ -592,9 +614,6 @@ export class Carnet {
       case 'retry':
         if (p) this.onNeedText(p.walk, p.step);
         return;
-      case 'cross':
-        this.crossOpen = !this.crossOpen;
-        return this.render();
       case 'finish': return this.finish();
       case 'back': return this.quit();
       case 'return':
@@ -727,15 +746,14 @@ export class Carnet {
   private render(): void {
     const p = this.playingPath;
     const playing = !!p && !this.paused;
-    const tab = playing ? (this.tab === 'card' && !this.cardTitle() ? 'step' : this.tab) : 'step';
     document.body.classList.toggle('scenario-on', playing);
     document.body.classList.toggle('carnet-open', playing);
-    document.body.classList.toggle('carnet-card', playing && tab === 'card');
+    document.body.classList.toggle('carnet-detour', playing && p!.kind === 'detour');
     const note = this.note ? `<div class="sc-note"><span class="sc-note-dot" aria-hidden="true"></span>${esc(this.note)}</div>` : '';
     const count = this.journal.list().length;
     const drawer = this.drawer ? this.drawerView(this.drawer, p) : '';
     let bottom: string;
-    if (playing) bottom = this.film(p!, note, tab);
+    if (playing) bottom = this.film(p!, note);
     else if (p) bottom = this.bar(p, note);
     else if (this.back) bottom = this.backBar(note);
     else if (note) bottom = `<div class="film-bar panel">${note}</div>`;
@@ -748,14 +766,9 @@ export class Carnet {
       img.closest('.film-img')?.classList.add('no-img');
       img.remove();
     }));
-    this.root.querySelector('.film-thumb.on')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    this.root.querySelectorAll('.film-thumb.on').forEach((t) => t.scrollIntoView({ block: 'nearest', inline: 'center' }));
     this.root.querySelector('.tr-step.here')?.scrollIntoView({ block: 'nearest' });
-    if (playing) {
-      // The card's tab shows the card under the column's head.
-      const film = this.root.querySelector('.film');
-      if (film) document.body.style.setProperty('--carnet-top', `${Math.round(film.getBoundingClientRect().bottom + 8)}px`);
-      this.onRoute(p!.walk, p!.step, routeOptions(p!.walk, p!.step));
-    }
+    if (playing) this.onRoute(p!.walk, p!.step, routeOptions(p!.walk, p!.step));
   }
 
   /** Paused: a bar to resume. */
@@ -783,34 +796,44 @@ export class Carnet {
       </div>`;
   }
 
-  /** The column: its head and tabs, the step played (or the tree), the crossroads pinned under it, the reel of steps. */
-  private film(p: Path, note: string, tab: CarnetTab): string {
+  /**
+   * The film: the band (that a path plays, what it follows, the step, the
+   * card on demand, the plan, and quit, or the way back from a crochet), the
+   * step and its crossroads side by side, the reel along the bottom.
+   */
+  private film(p: Path, note: string): string {
     const w = p.walk;
-    const protagonist = w.invented ? 'Fil thématique' : w.hero ? esc(w.hero.name) : 'Personnage réel';
+    const st = w.steps[p.step]!;
+    const parent = (p.parent && this.journal.get(p.parent.id)) || null;
+    const crochet = p.kind === 'detour' && !!parent;
     const family = this.familyOf(p);
-    const card = this.cardTitle();
-    const tabs = `<nav class="film-tabs" role="tablist" aria-label="Carnet">
-        <button type="button" role="tab" class="film-tab${tab === 'step' ? ' on' : ''}" aria-selected="${tab === 'step'}" data-act="tab" data-tab="step">Étape ${p.step + 1}/${w.steps.length}</button>
-        <button type="button" role="tab" class="film-tab${tab === 'tree' ? ' on' : ''}" aria-selected="${tab === 'tree'}" data-act="tab" data-tab="tree" title="Les chemins pris et non pris de cette histoire">⑂ Arbre${family > 1 ? ` <span class="cn-count">${family}</span>` : ''}</button>
-        ${card ? `<button type="button" role="tab" class="film-tab film-tab-card${tab === 'card' ? ' on' : ''}" aria-selected="${tab === 'card'}" data-act="tab" data-tab="card" title="La fiche de ce lieu">Fiche · ${esc(card)}</button>` : ''}
-      </nav>`;
-    const body = tab === 'tree'
-      ? `<div class="film-pane"><div class="cn-kicker">L’arbre de ce chemin <span class="cn-aside">· pris en plein, non pris en pointillés</span></div><ol class="tr">${this.treeSteps(this.ancestors(p)[0] ?? p, p, new Set([...this.ancestors(p), p].map((a) => a.walk.id)))}</ol></div>`
-      : tab === 'step' ? `<div class="film-pane">${this.stepView(p)}</div>${note}${this.cross(p)}` : '';
-    return `<section class="film panel tab-${tab}" aria-label="Chemin en cours">
-        <header class="film-head">
-          <span class="film-kicker"><span class="sc-live" aria-hidden="true"></span>${protagonist}${p.kind !== 'trunk' ? ` · <span class="cn-kind">${KIND_LABELS[p.kind]}</span>` : ''}</span>
+    const cardPoi = st.poi ?? w.from;
+    const open = this.cardOpen();
+    const backTo = crochet ? parent!.walk.steps[p.parent!.step] : null;
+    const exit = crochet
+      ? `<button type="button" class="film-back" data-act="back" title="Fermer la parenthèse : « ${esc(parent!.walk.title)} » reprend à l’étape ${p.parent!.step + 1}">↩ Retour à ${esc(backTo?.place ?? parent!.walk.title)}</button>`
+      : `<button type="button" class="sc-btn film-quit" data-act="quit" title="${parent ? `Quitter cette route et revenir à « ${esc(parent.walk.title)} »` : 'Quitter ce chemin'}">✕ Quitter</button>`;
+    return `<section class="film panel${crochet ? ' crochet' : ''}" aria-label="Chemin en cours">
+        <header class="film-band">
+          <span class="sc-live" aria-hidden="true"></span>
+          <span class="film-mode">${crochet ? '↪ Crochet' : p.kind === 'branch' ? '⑂ Autre route' : 'En route'}</span>
+          <span class="film-thread">${THREAD_LABELS[threadOf(w)]}${w.hero ? ` · ${esc(w.hero.name)}` : ''}</span>
+          <h2 class="film-title" title="${esc(w.premise)}">${esc(w.title)}</h2>
+          <span class="film-count">étape ${p.step + 1} / ${w.steps.length}</span>
+          ${parent ? `<span class="film-from">depuis <button type="button" class="sc-link" data-act="crumb" data-id="${esc(parent.walk.id)}" data-step="${p.parent!.step}" title="Revenir à ce chemin, à l’étape d’où part celui-ci">${esc(parent.walk.title)}</button>, étape ${p.parent!.step + 1}</span>` : ''}
           <span class="film-acts">
-            <button type="button" class="sc-btn${this.drawer === 'paths' ? ' on' : ''}" data-act="drawer" data-view="paths" title="Mes chemins">🎭 <span class="cn-count">${this.journal.list().length}</span></button>
-            <button type="button" class="sc-icon" data-act="pause" title="Mettre en pause" aria-label="Mettre en pause">⏸</button>
-            <button type="button" class="sc-icon sc-quit" data-act="quit" title="${p.parent ? 'Quitter ce chemin et revenir à celui d’où il part' : 'Quitter ce chemin'}" aria-label="Quitter ce chemin">✕</button>
+            ${cardPoi ? `<button type="button" class="sc-btn film-card-btn${open ? ' on' : ''}" data-act="step-card" aria-pressed="${!!open}" title="${open ? 'Fermer la fiche de droite' : 'Ouvrir à droite la fiche de ce lieu'}">${open ? 'Fermer la fiche' : `Fiche · ${esc(cardPoi.title)}`}</button>` : ''}
+            <button type="button" class="sc-btn${this.drawer === 'plan' ? ' on' : ''}" data-act="drawer" data-view="plan" title="Le plan des chemins de cette histoire : pris et non pris">⑂ Plan${family > 1 ? ` <span class="cn-count">${family}</span>` : ''}</button>
+            <button type="button" class="sc-btn${this.drawer === 'paths' ? ' on' : ''}" data-act="drawer" data-view="paths" title="Tous les chemins commencés">Mes chemins <span class="cn-count">${this.journal.list().length}</span></button>
+            <button type="button" class="sc-icon" data-act="pause" title="Mettre en pause : la frise revient" aria-label="Mettre en pause">⏸</button>
+            ${exit}
           </span>
         </header>
-        <h2 class="film-title">${esc(w.title)}</h2>
-        ${this.crumbs(p)}
-        ${tabs}
-        ${body}
-        ${tab === 'card' ? '' : this.reel(p)}
+        <div class="film-main">
+          <div class="film-pane">${this.stepView(p)}</div>
+          <div class="film-side">${note}${this.cross(p)}</div>
+        </div>
+        ${this.reel(p)}
       </section>`;
   }
 
@@ -883,77 +906,93 @@ export class Carnet {
   }
 
   /**
-   * "Où aller ensuite ?": the way on along the planned route first, then the
-   * turning points (a branch of this path), then the detours (a few steps,
-   * then back here), folded under their count to leave the article room;
-   * at the end of the path, the ways on.
+   * "Où aller ensuite ?": one big way on along the planned route; then a
+   * crochet (a few steps that come back here by themselves: a place of the
+   * story, someone met), or another route, one way (a turning point, someone's
+   * whole life, this place across the centuries, the world at this moment).
+   * Inside a crochet, no crochet: back now, or another route. At the end of a
+   * crochet the way back is the big one.
    */
   private cross(p: Path): string {
     const w = p.walk;
     const st = w.steps[p.step]!;
     const next = w.steps[p.step + 1];
-    const parent = p.parent && this.journal.get(p.parent.id);
+    const parent = (p.parent && this.journal.get(p.parent.id)) || null;
+    const crochet = p.kind === 'detour' && !!parent;
+    const backTo = parent ? parent.walk.steps[p.parent!.step] : null;
+    const resumes = parent ? `« ${esc(parent.walk.title)} » reprend à l’étape ${p.parent!.step + 1}` : '';
     const on = next
-      ? `<button type="button" class="cross-next" data-act="next" title="L’étape suivante du chemin prévu (→)">
-          <span class="cross-verb">Continuer ▸</span>
-          <b>${esc(st.next ?? next.beat ?? `Aller à ${next.place}`)}</b>
+      ? `<button type="button" class="cross-next" data-act="next" title="L’étape suivante (→)">
+          <span class="cross-verb">${crochet ? 'Suite du crochet' : 'Étape suivante'} ▸</span>
+          <b>${esc(st.next ?? next.beat ?? next.place)}</b>
           <small>${esc(next.place)} · ${esc(formatWhen(next))}</small>
         </button>`
-      : `<div class="cross-end">
-          <span class="cross-verb">Fin de ce chemin</span>
+      : `${parent ? `<button type="button" class="cross-next cross-back" data-act="back" title="${resumes}">
+          <span class="cross-verb">${crochet ? 'Fin du crochet' : 'Fin de cette route'}</span>
+          <b>↩ Retour à ${esc(backTo?.place ?? parent.walk.title)}</b>
+          <small>${resumes}</small>
+        </button>` : ''}
+        <div class="cross-end">
+          ${parent ? '' : '<span class="cross-verb">Fin de ce chemin</span>'}
           <div class="cross-end-acts">
-            ${parent ? `<button type="button" class="sc-btn sc-primary" data-act="back">↩ Revenir à « ${esc(parent.walk.title)} »</button>` : ''}
             <button type="button" class="sc-btn${parent ? '' : ' sc-primary'}" data-act="drawer" data-view="suites">Et ensuite ? ▸</button>
             <button type="button" class="sc-link" data-act="finish">Terminer ✓</button>
           </div>
         </div>`;
+
+    // ⑂ Another route, one way: the turning points planned, the protagonist's whole life, the place across the centuries, the world then.
     const forks = (st.forks ?? []).map((f, k) => {
       const to = f.steps[0];
       const taken = this.journal.get(`${w.id}|bifurcation|${p.step}|${k}`);
-      return `<button type="button" class="cross-fork" data-act="fork" data-i="${k}" title="Une autre suite de l’histoire : une branche de ce chemin, vous pourrez revenir ici">
+      return `<button type="button" class="cross-fork" data-act="fork" data-i="${k}" title="Une autre suite de l’histoire : vous la suivez désormais">
           ${f.hero ? face(f.hero) : '<span class="cross-icon" aria-hidden="true">⑂</span>'}
           <span class="cross-text"><b>${esc(f.label)}</b><small>${f.hero ? `avec ${esc(f.hero.name)} · ` : ''}${to ? `${esc(to.place)} · ${esc(formatWhen(to))}` : ''}${taken ? ` · ${taken.done ? 'parcourue' : `reprendre ${taken.step + 1}/${taken.walk.steps.length}`}` : ''}</small></span>
         </button>`;
     }).join('');
-    // Someone a turning point follows is no detour as well.
+    const life = this.leads.map((l, i) => (l.kind === 'person' && l.hero
+      ? `<button type="button" class="cross-fork" data-act="lead" data-i="${i}" data-how="full" title="Toute son histoire : vous la suivez désormais">
+          ${face(l.person)}<span class="cross-text"><b>Toute la vie ${esc(of(l.person.name))}</b><small>à travers les fiches de sa vie</small></span>
+        </button>`
+      : '')).join('');
+    const thread = threadOf(w);
+    const place = st.poi && thread !== 'place'
+      ? `<button type="button" class="cross-fork" data-act="thread" data-kind="place" title="Ce lieu d’époque en époque, chaque étape d’après son propre article">
+          <span class="cross-icon" aria-hidden="true">⌛</span><span class="cross-text"><b>Rester ici à travers les siècles</b><small>${esc(st.poi.title)}, d’époque en époque</small></span>
+        </button>`
+      : '';
+    const era = thread !== 'era'
+      ? `<button type="button" class="cross-fork" data-act="thread" data-kind="era" title="Le même moment ailleurs : un thème par étape (pouvoir, guerre, foi, commerce, savoirs…)">
+          <span class="cross-icon" aria-hidden="true">◍</span><span class="cross-text"><b>Le monde vers ${esc(formatYear(st.year))}</b><small>une époque, plusieurs thèmes</small></span>
+        </button>`
+      : '';
+    const route = forks + life + place + era;
+
+    // ↪ A crochet, then back here: a place of the story, someone met (a few moments of their life).
     const followed = new Set((st.forks ?? []).flatMap((f) => (f.hero ? [f.hero.qid] : [])));
-    let shown = 0;
     const choices = st.text ? (st.choices ?? []).map((c, k) => {
       if (c.person && followed.has(c.person.qid)) return '';
-      shown++;
-      const where = c.person ? `quelques moments de sa vie, puis retour` : c.poi ? `${c.poi.title}, puis retour` : c.step ? `${c.step.place} · ${formatWhen(c.step)}, puis la suite` : '';
-      return `<button type="button" class="cross-detour${st.chosen === k ? ' on' : ''}" data-act="choice" data-i="${k}" title="Un détour, puis retour sur le chemin">
+      const where = c.person ? 'quelques moments de sa vie, puis retour ici' : c.poi ? `${c.poi.title}, puis retour ici` : c.step ? `${c.step.place} · ${formatWhen(c.step)}, puis la route reprend` : '';
+      return `<button type="button" class="cross-detour${st.chosen === k ? ' on' : ''}" data-act="choice" data-i="${k}" title="Un crochet : quelques pas de côté, puis retour sur la route">
           ${c.person ? face(c.person) : '<span class="cross-icon" aria-hidden="true">↪</span>'}
           <span class="cross-text"><b>${esc(c.label)}</b><small>${esc(where)}</small></span>
         </button>`;
     }).join('') : '';
     const asked = new Set((st.choices ?? []).flatMap((c) => (c.person ? [c.person.qid] : [])));
-    // The protagonist's whole life is another suite (a branch); someone met, a detour or theirs.
-    const life = this.leads.map((l, i) => (l.kind === 'person' && l.hero
-      ? `<button type="button" class="cross-fork" data-act="lead" data-i="${i}" data-how="full" title="Toute son histoire, comme une branche de ce chemin">
-          ${face(l.person)}<span class="cross-text"><b>Toute la vie ${esc(of(l.person.name))}</b><small>à travers les fiches de sa vie</small></span>
-        </button>`
-      : '')).join('');
     const people = this.leads.map((l, i) => {
       if (l.kind !== 'person' || l.hero || asked.has(l.person.qid) || followed.has(l.person.qid)) return '';
-      shown++;
       return `<div class="cross-person">${face(l.person)}<span class="cross-text"><b>${esc(l.person.name)}</b><small>${esc(l.person.role)}</small></span>
-          <button type="button" class="cn-go" data-act="lead" data-i="${i}" data-how="detour" title="Quelques moments de sa vie autour de celui-ci, puis retour ici">détour</button><button type="button" class="cn-go" data-act="lead" data-i="${i}" data-how="full" title="Toute son histoire, comme une branche de ce chemin">sa vie</button></div>`;
+          <button type="button" class="cn-go cn-crochet" data-act="lead" data-i="${i}" data-how="detour" title="Quelques moments de sa vie autour de celui-ci, puis retour ici">↪ crochet</button><button type="button" class="cn-go" data-act="lead" data-i="${i}" data-how="full" title="Toute son histoire : vous la suivez désormais">⑂ sa vie</button></div>`;
     }).join('');
-    const detours = choices + people;
-    const turns = forks + life;
-    const nTurns = (st.forks?.length ?? 0) + this.leads.filter((l) => l.kind === 'person' && l.hero).length;
-    const plural = (n: number, word: string) => `${n} ${word}${n > 1 ? 's' : ''}`;
-    const count = [nTurns ? `⑂ ${plural(nTurns, 'bifurcation')}` : '', shown ? `↩ ${plural(shown, 'détour')}` : ''].filter(Boolean).join(' · ');
-    const open = this.crossOpen || !next;
-    return `<div class="film-cross${open ? ' open' : ''}" role="group" aria-label="Où aller ensuite ?">
-        <div class="cross-head">
-          <span class="cross-title">${next ? 'Où aller ensuite ?' : 'Et maintenant ?'}</span>
-          ${count && next ? `<button type="button" class="cross-toggle" data-act="cross" aria-expanded="${open}" title="${open ? 'Replier' : 'Les autres suites et les détours de cette étape'}">${count} ${open ? '▴' : '▾'}</button>` : ''}
-        </div>
+    const detours = crochet
+      ? (next ? `<button type="button" class="cross-detour" data-act="back" title="${resumes}">
+          <span class="cross-icon" aria-hidden="true">↩</span><span class="cross-text"><b>Revenir tout de suite à ${esc(backTo?.place ?? parent!.walk.title)}</b><small>${resumes}</small></span>
+        </button>` : '')
+      : choices + people;
+    return `<div class="film-cross" role="group" aria-label="Où aller ensuite ?">
+        <div class="cross-title">${next ? 'Où aller ensuite ?' : 'Et maintenant ?'}</div>
         ${on}
-        ${open && turns ? `<div class="cross-group"><div class="cross-label">⑂ Bifurquer <span>· une autre suite</span></div>${turns}</div>` : ''}
-        ${open && detours ? `<div class="cross-group"><div class="cross-label">↩ Détours <span>· puis retour ici</span></div>${detours}</div>` : ''}
+        ${detours ? `<div class="cross-group crochet"><div class="cross-label">${crochet ? '↩ Revenir' : '↪ Faire un crochet'} <span>· ${crochet ? 'pas de crochet dans un crochet' : 'on revient ici'}</span></div>${detours}</div>` : ''}
+        ${route ? `<div class="cross-group route"><div class="cross-label">⑂ Changer de route <span>· aller simple</span></div>${route}</div>` : ''}
       </div>`;
   }
 
@@ -980,24 +1019,49 @@ export class Carnet {
       </details>`;
   }
 
-  /** The reel of steps: each with its place and moment; ⑂ where the story may turn. */
+  /**
+   * The reel along the bottom, where the timeline was: each step with its
+   * picture, place and date (its theme when the walk crosses the world at one
+   * moment); ⑂ where the story may turn. A crochet's reel rises above the
+   * path it leaves, which stays under it, dimmed, the step it comes back to marked.
+   */
   private reel(p: Path): string {
     const w = p.walk;
     const last = p.step + 1 >= w.steps.length;
+    const parent = p.kind === 'detour' && p.parent ? this.journal.get(p.parent.id) : undefined;
+    const own = this.thumbs(p, true);
+    const nav = (inner: string, cls = '') => `<div class="film-reel${cls}">
+        <button type="button" class="sc-icon" data-act="prev" ${p.step === 0 ? 'disabled' : ''} aria-label="Étape précédente" title="Étape précédente (←)">◂</button>
+        <div class="film-thumbs" role="group" aria-label="Étapes">${inner}</div>
+        <button type="button" class="sc-icon film-next" data-act="next" ${last ? 'disabled' : ''} aria-label="Étape suivante" title="Étape suivante (→)">▸</button>
+      </div>`;
+    if (!parent) return nav(own);
+    const back = parent.walk.steps[p.parent!.step];
+    const ret = `<span class="film-thumb film-return" title="La fin du crochet : retour à ${esc(back?.place ?? parent.walk.title)}"><span class="film-thumb-place">↩ ${esc(back?.place ?? '')}</span><span class="film-thumb-date">retour</span></span>`;
+    return `${nav(own + ret, ' film-reel-crochet')}
+      <div class="film-reel film-reel-under" aria-label="Le chemin d’où part ce crochet">
+        <span class="film-under-label">${esc(parent.walk.title)}</span>
+        <div class="film-thumbs">${this.thumbs(parent, false, p.parent!.step)}</div>
+      </div>`;
+  }
+
+  /** A path's steps as frames: the one played lit (`playing`), or the one a crochet comes back to marked (`mark`). */
+  private thumbs(a: Path, playing: boolean, mark = -1): string {
+    const w = a.walk;
     const kids = this.journal.children(w.id);
-    const thumbs = w.steps.map((s, j) => {
+    const label = threadOf(w) === 'era';
+    return w.steps.map((s, j) => {
       const turns = (s.forks?.length ?? 0) + kids.filter((k) => k.parent!.step === j && !k.walk.id.startsWith(`${w.id}|bifurcation|${j}|`)).length;
-      return `<button type="button" class="film-thumb${j === p.step ? ' on' : j <= p.seen ? ' done' : ''}${s.text ? '' : ' unwritten'}" data-act="dot" data-i="${j}" title="${esc(`${j + 1}. ${s.place} · ${formatWhen(s)}${s.beat ? ` — ${s.beat}` : ''}`)}">
+      const state = playing ? (j === a.step ? ' on' : j <= a.seen ? ' done' : '') : (j === mark ? ' mark' : j <= a.seen ? ' done' : '');
+      const act = playing ? `data-act="dot" data-i="${j}"` : `data-act="tree-step" data-id="${esc(w.id)}" data-step="${j}"`;
+      return `<button type="button" class="film-thumb${state}${s.text ? '' : ' unwritten'}" ${act} title="${esc(`${j + 1}. ${s.place} · ${formatWhen(s)}${s.beat ? ` — ${s.beat}` : ''}`)}">
           ${thumbOf(s) ? `<img alt="" src="${esc(viaServer(thumbOf(s)!))}" referrerpolicy="no-referrer" loading="lazy">` : ''}
+          <span class="film-thumb-n">${j + 1}${label ? ` · ${esc(s.label)}` : ''}</span>
           <span class="film-thumb-place">${esc(s.place)}</span>
+          <span class="film-thumb-date">${esc(formatWhen(s))}</span>
           ${turns ? `<span class="film-thumb-fork" aria-label="bifurcation">⑂</span>` : ''}
         </button>`;
     }).join('');
-    return `<div class="film-reel">
-        <button type="button" class="sc-icon" data-act="prev" ${p.step === 0 ? 'disabled' : ''} aria-label="Étape précédente" title="Étape précédente (←)">◂</button>
-        <div class="film-thumbs" role="group" aria-label="Étapes">${thumbs}</div>
-        <button type="button" class="sc-icon film-next" data-act="next" ${last ? 'disabled' : ''} aria-label="Étape suivante" title="Étape suivante (→)">▸</button>
-      </div>`;
   }
 
   /** How many paths the tree of the path played holds (its trunk and every branch). */
@@ -1064,6 +1128,10 @@ export class Carnet {
   private drawerView(d: Drawer, p: Path | null): string {
     const body = d === 'here' && this.here ? this.hereView(this.here, p)
       : d === 'tree' ? this.forestView(p)
+      : d === 'plan' && p ? `<div class="cn-kicker">Plan des chemins <span class="cn-aside">· pris en plein, non pris en pointillés</span></div>
+          ${this.crumbs(p)}
+          <ol class="tr">${this.treeSteps(this.ancestors(p)[0] ?? p, p, new Set([...this.ancestors(p), p].map((a) => a.walk.id)))}</ol>
+          <footer class="sc-foot"><button type="button" class="sc-link" data-act="drawer" data-view="tree">Les plans de tous mes chemins ›</button></footer>`
       : d === 'suites' && p ? this.suites(p)
       : this.pathsView(p);
     return `<section class="film-drawer panel" role="dialog" aria-label="Chemins">
@@ -1113,7 +1181,7 @@ export class Carnet {
     const known = this.journal.get(w.id);
     const mine = this.current === w.id && !this.paused;
     const go = mine ? 'En cours ●' : known && !known.done ? `Reprendre · étape ${known.step + 1} ▸` : known?.done ? 'Revivre ↺' : 'Commencer ▸';
-    const who = w.invented ? 'Fil thématique' : `Personnage réel${w.hero ? ` · ${esc(w.hero.name)}` : ''}`;
+    const who = `${THREAD_LABELS[threadOf(w)]}${w.hero ? ` · ${esc(w.hero.name)}` : ''}`;
     const branch = playing && playing.walk.id !== w.id
       ? `<button type="button" class="cn-go" data-act="branch" data-i="${i}" title="L’ouvrir comme une branche du chemin en cours">⑂ Bifurquer ici</button>`
       : '';
@@ -1162,7 +1230,7 @@ export class Carnet {
     const rows = paths.map((a) => {
       const n = a.walk.steps.length;
       const parent = a.parent && this.journal.get(a.parent.id);
-      const meta = [parent ? `${KIND_LABELS[a.kind]} de « ${parent.walk.title} »` : KIND_LABELS[a.kind], a.walk.hero?.name ?? (a.walk.invented ? 'Fil thématique' : '')].filter(Boolean).join(' · ');
+      const meta = [parent ? `${KIND_LABELS[a.kind]} de « ${parent.walk.title} »` : KIND_LABELS[a.kind], a.walk.hero?.name ?? THREAD_LABELS[threadOf(a.walk)]].filter(Boolean).join(' · ');
       const mine = a.walk.id === p?.walk.id;
       return `<div class="cn-path${mine ? ' playing' : ''}">
           <button type="button" class="cn-path-main" data-act="path" data-id="${esc(a.walk.id)}" title="${a.done ? 'Revivre ce chemin' : 'Reprendre à l’étape où vous étiez'}">
@@ -1186,7 +1254,7 @@ export class Carnet {
     const line = new Set(p ? [...this.ancestors(p), p].map((a) => a.walk.id) : []);
     return `<div class="cn-kicker">Les arbres des chemins <span class="cn-aside">· pris en plein, non pris en pointillés</span></div>
       ${roots.map((r, i) => `<details class="tr-root"${i === 0 || line.has(r.walk.id) ? ' open' : ''}>
-          <summary><b>${esc(r.walk.title)}</b><small>${esc(r.walk.hero?.name ?? (r.walk.invented ? 'Fil thématique' : ''))} · ${r.done ? 'terminé' : `${r.seen + 1}/${r.walk.steps.length}`}</small></summary>
+          <summary><b>${esc(r.walk.title)}</b><small>${esc(r.walk.hero?.name ?? THREAD_LABELS[threadOf(r.walk)])} · ${r.done ? 'terminé' : `${r.seen + 1}/${r.walk.steps.length}`}</small></summary>
           <ol class="tr">${this.treeSteps(r, p, line)}</ol>
         </details>`).join('')}`;
   }
