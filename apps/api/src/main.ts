@@ -5,7 +5,7 @@ import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { ClientMessage, THEMES, type ScenarioContext, type ServerMessage } from '@way/shared';
 import {
-  cacheBudget, createMedia, normalizeCache, CACHE_MAX_GB, createBorders, createFlows, createPeople, createStories, createPolities, createSoundFiles, SOUND_MAX_BYTES, SOUND_TYPES, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, findCards, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, type JobBus,
+  cacheBudget, createMedia, normalizeCache, CACHE_MAX_GB, createBorders, createFlows, createPeople, createStories, createPolities, createSoundFiles, SOUND_MAX_BYTES, SOUND_TYPES, createRouter, SNAPSHOTS_BEFORE, createSettings, createStore, devDir, normalizeUi, DoorService, enforceCacheLimit, findCards, ensureBorders, InlineBus, listSnapshots, loadConfig, loadPoiDetail, RedisBus, ThreadService, type JobBus,
 } from '@way/core';
 import { Auth, COOKIE, readCookie } from './auth.ts';
 import { ViewService, type View } from './views.ts';
@@ -25,6 +25,7 @@ polities.startRefining();
 const people = createPeople(cfg, settings);
 const flows = createFlows(cfg, router);
 const stories = createStories(cfg, store, router);
+const threads = new ThreadService(store);
 const media = createMedia(cfg, settings);
 const soundFiles = createSoundFiles(cfg);
 const mode = {
@@ -483,6 +484,47 @@ app.get('/api/life-step', async (req, reply) => {
   return stories.lifeStep({
     person: d.person, title: d.title, premise: d.premise, place: d.place, label: d.label, year: d.year, lat: d.lat, lon: d.lon,
     poi: d.poi || null, lived: many(d.lived).slice(-10), next: d.next || null, beat: d.beat || null,
+    decisions: many(d.chose).slice(-6), prefetch: d.prefetch === '1',
+  }, scenarioContext(d));
+});
+
+// Walks made of cards, no AI to wait for: a place across the centuries, the world at one moment.
+app.get<{ Params: { id: string } }>('/api/poi/:id/across-time', async (req, reply) => {
+  const poi = await store.getPoi(req.params.id);
+  if (!poi) return reply.code(404).send({ error: 'not found' });
+  return threads.place(poi);
+});
+const EraQuery = ScenariosQuery.extend({
+  year: z.coerce.number().int().min(-10_000).max(3000),
+  lat: z.coerce.number().min(-90).max(90),
+  lon: z.coerce.number().min(-180).max(180),
+});
+app.get('/api/era', async (req, reply) => {
+  const q = EraQuery.safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: q.error.issues });
+  return threads.era(q.data.year, { lat: q.data.lat, lon: q.data.lon }, scenarioContext(q.data).themes);
+});
+
+// A step of such a walk, written from the card's own article when the visitor gets there.
+const CardStepQuery = ScenariosQuery.extend({
+  card: z.string().min(1).max(200),
+  thread: z.enum(['place', 'era']),
+  title: z.string().trim().min(1).max(120),
+  premise: z.string().trim().max(300).default(''),
+  label: z.string().trim().max(120).default(''),
+  lived: z.union([z.string().max(200), z.array(z.string().max(200)).max(20)]).optional(),
+  next: z.string().trim().max(200).optional(),
+  chose: z.union([z.string().max(120), z.array(z.string().max(120)).max(8)]).optional(),
+  prefetch: z.enum(['0', '1']).default('0'),
+});
+app.get('/api/card-step', async (req, reply) => {
+  const q = CardStepQuery.safeParse(req.query);
+  if (!q.success) return reply.code(400).send({ error: q.error.issues });
+  const d = q.data;
+  const poi = await store.getPoi(d.card);
+  if (!poi) return reply.code(404).send({ error: 'not found' });
+  return stories.cardStep(poi, {
+    thread: d.thread, title: d.title, premise: d.premise, label: d.label, lived: many(d.lived).slice(-10), next: d.next || null,
     decisions: many(d.chose).slice(-6), prefetch: d.prefetch === '1',
   }, scenarioContext(d));
 });

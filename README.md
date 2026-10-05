@@ -39,18 +39,26 @@ Wikipédia (chaque étape doit y être citée) : il faut une clé d'IA, chaque f
 Sur chaque fiche, **Le fil de l'histoire** (avec une clé d'IA) : les lieux et moments du sujet lus dans son article
 (pour le Titanic : construction à Belfast, départ de Southampton, escales de Cherbourg et Queenstown, arrivée du
 Carpathia à New York), ce qu'il a engendré et ses personnages (clic = les suivre sur la carte). Lieux et personnages
-doivent être cités dans l'article et se retrouver dans Wikidata ou sur la carte. Puis, sous « ▶ Parcourir cette histoire »,
-trois **parcours** : deux suivent un personnage réel, le dernier un fil thématique (le fret, la foi, les techniques…),
-choisis selon votre lentille, vos thèmes et les fiches explorées juste avant ; leurs étapes suivent l'ordre des jours
-quand l'article les date, et le parcours d'une personne s'arrête à sa mort. Chaque étape est rédigée à l'arrivée comme
+doivent être cités dans l'article et se retrouver dans Wikidata ou sur la carte. Puis, sous « Partir sur un fil »,
+trois **parcours** : l'un suit **quelqu'un** (un personnage réel), l'un **une chose** (le fret, un navire, une relique,
+l'argent), l'un **une idée** (une foi, une technique, une loi), choisis selon votre lentille, vos thèmes et les fiches
+explorées juste avant ; leurs étapes suivent l'ordre des jours quand l'article les date, et le parcours d'une personne
+s'arrête à sa mort. Deux autres fils, sans IA pour les tracer : **Rester ici** (le même lieu d'époque en époque, les
+moments les plus connus alentour d'après Wikidata) et **Le monde vers telle année** (une fiche par thème — pouvoir,
+guerre, foi, commerce, savoirs… —, loin les unes des autres, en tournée depuis l'endroit où vous êtes). Chaque étape est rédigée à l'arrivée comme
 une section d'encyclopédie, à la troisième personne, d'après la section de l'article Wikipédia qui raconte ce moment
 (et l'article qui la détaille) : plusieurs paragraphes, les images de la section avec leurs légendes, les personnes que
 l'article y nomme (« Présents »), des repères datés, une phrase citée mot pour mot, ses sources. Les étapes de la vie
-d'un personnage sont rédigées de même d'après son propre article. Le carnet s'ouvre en colonne à droite (onglets Étape,
-Arbre, Fiche) ; sous l'étape, « Où aller ensuite ? » : **Continuer** sur la route prévue, **Bifurquer** pour suivre
-quelqu'un que l'article retrouve plus loin, ou faire un **détour** (une personne, un lieu, un sujet que la section lie,
-ceux de vos thèmes d'abord) puis revenir. Le même carrefour est tracé sur le globe (flèche dorée, bifurcations en
-pointillés bleus, cliquables), et l'étape suivante est écrite en sachant les choix faits. L'onglet Arbre montre les
+d'un personnage, et celles des deux fils faits de fiches, sont rédigées de même d'après leur propre article. **À droite on
+lit, en bas on avance** : le chemin se joue dans une pellicule en bas de l'écran, à la place de la frise (un bandeau dit
+ce qui se joue, ce qu'il suit, l'étape, et propose Quitter ; l'étape à gauche, le carrefour à droite, les étapes datées
+dessous) ; la fiche du lieu ne s'ouvre à droite que si on la demande (bouton « Fiche » du bandeau), puis suit les
+étapes. « Où aller ensuite ? » : un gros bouton **Étape suivante**, puis **Faire un crochet** (une personne, un lieu que
+la section lie, ceux de vos thèmes d'abord : quelques pas de côté qui reviennent d'eux-mêmes ; le crochet passe en bleu,
+sa pellicule se soulève au-dessus de la route estompée, « ↩ Retour à… » reste dans le bandeau, et on n'ouvre pas de
+crochet dans un crochet) ou **Changer de route** (aller simple : une bifurcation prévue, toute une vie, ce lieu à
+travers les siècles, le monde à ce moment). Le même carrefour est tracé sur le globe (flèche dorée pour la suite, trait plein pour une
+autre route, pointillés bleus pour un crochet, cliquables), et l'étape suivante est écrite en sachant les choix faits. « Plan » montre les
 chemins pris et non pris. L'IA au travail est nommée dans la barre d'état et sur tout ce qu'elle écrit (étapes,
 parcours, rôles des lieux, flux, fiches traduites ou rédigées). La caméra ne bouge que si l'étape sort de la vue, sans
 changer de hauteur ni d'inclinaison ; en quittant un chemin, une barre propose de revenir où vous étiez. Boutons

@@ -21,15 +21,15 @@ import type { Store } from './store/types.ts';
 // linked Wikidata humans are its people. Then an AI only labels them (their
 // part in the story, the main ones), from those sentences. Scenarios are
 // planned over the same stops, for the visitor's lens and themes and the
-// cards that led them here: two follow real people, the last a thread of the
-// story chosen for that view. Each step is written on arrival as a short
+// cards that led them here: one follows a real person, one a thing of the
+// story (the freight, a ship), one an idea (the faith, a technique). Each step is written on arrival as a short
 // illustrated section of an encyclopedia, from the article's own section
 // about it: its people, its pictures and captions, the subjects it links to.
 // All kept on disk.
 
 /** Bump when the reading changes: stories are read again. */
 const STORY_VERSION = 14;
-const SCENARIOS_VERSION = 17;
+const SCENARIOS_VERSION = 18;
 const PERSON_VERSION = 5;
 /** What scenario writers read of an article besides the stops' own sentences: its start. */
 const SCENARIO_ARTICLE_CHARS = 5_000;
@@ -43,8 +43,8 @@ const MAIN_STOPS = 14;
 const PEOPLE_LOOKUP = 120;
 const MAX_PEOPLE = 10;
 const MAX_SCENARIOS = 3;
-/** Real people followed by scenarios; the rest are invented characters. */
-const REAL_SCENARIOS = 2;
+/** Real people followed by scenarios; the others follow a thing, then an idea. */
+const REAL_SCENARIOS = 1;
 const MAX_CAST = 4;
 /** People shown at a written step: the protagonist, then those its passage names, in its order. */
 const STEP_CAST = 6;
@@ -90,6 +90,8 @@ const SUMMARY_CHARS = 1200;
 /** And of the subject's: its section around the step's paragraph, and the start of the article detailing it. */
 const SECTION_CHARS = 4500;
 const DETAILED_CHARS = 3500;
+/** A card's step without a summary: the start of its article's introduction. */
+const CARD_LEAD_CHARS = 1500;
 /** People offered to a step: those its passage names first, then the story's. */
 const STEP_PEOPLE = 14;
 const SECTION_LINKS = 60;
@@ -148,6 +150,7 @@ const ScenarioItem = z.object({
   premise: z.string().trim().min(10).max(260),
   person: Index.nullish().catch(null),
   invented: z.boolean().catch(false),
+  thread: z.enum(['thing', 'idea']).nullish().catch(null),
   steps: z.array(z.object({
     stop: Index,
     /** Written later, on arrival (a life's walk still comes with its texts). */
@@ -198,12 +201,13 @@ export const ExtractedStep = StepAnswer;
 const SCENARIOS_SYSTEM = `You plan reading paths for a visitor of a historical globe: walks through the story of a subject, step by step. Each step is written later, when the visitor gets there, as a short illustrated section of an encyclopedia, in the third person: nobody's shoes, no role to play. You choose whom or what each path follows and where it goes.
 You get how the visitor looks at the world (lens and themes shown on the map, with the angle to take) and the cards they explored before, the checked stops of the story (S0, S1...: date, part in the story, place, and the article's sentence about it; ★ marks the main ones), its people (P0, P1..., with their sentence), and the start of the subject's Wikipedia article.
 Paths come in a set of ${MAX_SCENARIOS} (you may be asked for one of them at a time):
-- the first ${REAL_SCENARIOS} follow REAL people of the list (person = their index, a different one each, invented = false): those whose part in the story best fits the angle;
-- the last one follows no one in particular but a THREAD of the story chosen for the angle and the themes shown (person = null, invented = true): e.g. for a merchant, the freight, the fares and the shipowner's accounts; for a pilgrim, the chaplains, the prayers and the memorials; for a scholar, the engineering and the inquiries. Never an invented character.
-  If fewer than ${REAL_SCENARIOS} people are listed, write threads instead.
+- one follows a REAL person of the list (person = their index, invented = false, thread = null): the one whose part in the story best fits the angle;
+- one follows a THING of the story (person = null, invented = true, thread = "thing"): a cargo, a commodity, a ship, a building, money, a weapon, a book, a relic… whatever moves or lasts through the stops, chosen for the angle and the themes shown (for a merchant, the freight and its prices; for a pilgrim, a relic; for a strategist, the guns);
+- one follows an IDEA (person = null, invented = true, thread = "idea"): a faith, a technique, a law, a science, a style, a way of trading or ruling, as the story spreads, tests or changes it, chosen for the angle and the themes shown.
+  Never an invented character. If no people are listed, write a thing and an idea, then another thing.
 The angle is mandatory: it decides who or what is followed, what the premise says and which stops the path goes through, the stops about the themes shown first. When a card explored before connects to this subject, the premise starts from that link.
 A path tells a story, not a tour: a thread (what the person did or faced, what the theme shows), stops where that thread meets the events, toward the turning point of the story.
-For each path: title (French, a few words, like an article's title, e.g. "Thomas Andrews, l'architecte à bord", "Le fret du Titanic"), premise (French, one or two sentences in the third person and the style of Wikipedia, presenting whom or what the path follows and from what angle; never "vous", never "Vous êtes"), person, invented, steps (one per stop the path goes through, in the order of time, to the day when the stops give dates, across the phases: ${MIN_PLAN_STEPS} to ${MAX_STEPS} when the stops allow, never fewer than 3; mostly main stops, others where the angle leads there; each: stop = the number of one of the stops; text = "" (written later); beat = in French, 3 to 8 words, the step's heading, like the title of an encyclopedia's section, from the stop's sentence (e.g. "L'appareillage de Southampton", "Les messages d'alerte du Baltic"); cast = the numbers of the listed people the article places there at that moment (on board, on site), the person followed included when real, at most ${MAX_CAST}; nobody who was not yet born, already dead, or elsewhere), forks.
+For each path: title (French, a few words, like an article's title, e.g. "Thomas Andrews, l'architecte à bord", "Le fret du Titanic"), premise (French, one or two sentences in the third person and the style of Wikipedia, presenting whom or what the path follows and from what angle; never "vous", never "Vous êtes"), person, invented, thread, steps (one per stop the path goes through, in the order of time, to the day when the stops give dates, across the phases: ${MIN_PLAN_STEPS} to ${MAX_STEPS} when the stops allow, never fewer than 3; mostly main stops, others where the angle leads there; each: stop = the number of one of the stops; text = "" (written later); beat = in French, 3 to 8 words, the step's heading, like the title of an encyclopedia's section, from the stop's sentence (e.g. "L'appareillage de Southampton", "Les messages d'alerte du Baltic"); cast = the numbers of the listed people the article places there at that moment (on board, on site), the person followed included when real, at most ${MAX_CAST}; nobody who was not yet born, already dead, or elsewhere), forks.
 forks: 1 or 2 other threads the story could follow from a step, each at a different step: at = the stop number of the step it leaves from; label = in French, 3 to 9 words, the other thread, starting with "Suivre" when it follows someone (e.g. "Suivre Molly Brown dans le canot 6", "Suivre le Carpathia jusqu'à New York"); person = the number of a listed person whose sentence places them there, followed from then on (null to keep the same thread; when the path follows a REAL person, a fork always follows someone else); stops = 1 to ${FORK_STOPS} listed stops that other thread goes through, in the order of time, those whose sentences name that person first, none of the path's own later steps.
 Rules, all mandatory:
 - Only the stops and people listed.
@@ -419,9 +423,9 @@ export function buildForks(
  * Scenarios that only walk through kept stops, steps in the order of time,
  * at least two of them; the cast among the people alive then (Ballard, born
  * in 1942, is not on the quay in 1912), a real protagonist only at steps of
- * their adult life; up to two following real people (one each), then
- * threads of the story, three at most; their turning points; the AI that
- * planned each. Pure, for tests.
+ * their adult life; one following a real person, then threads of the story
+ * (a thing first, then an idea), three at most; their turning points; the AI
+ * that planned each. Pure, for tests.
  */
 export function buildScenarios(items: (ScenarioItem & { ai?: string })[], stops: PlanStops, persons: Persons): StoryScenario[] {
   const real: StoryScenario[] = [];
@@ -450,10 +454,14 @@ export function buildScenarios(items: (ScenarioItem & { ai?: string })[], stops:
       followed.add(person);
       real.push({ ...base, person, invented: false });
     } else if (sc.invented) {
-      invented.push({ ...base, person: null, invented: true });
+      invented.push({ ...base, person: null, invented: true, thread: sc.thread ?? 'thing' });
     }
   }
-  return [...real, ...invented.slice(0, MAX_SCENARIOS - real.length)];
+  // A thing and an idea before a second of either.
+  const thing = invented.find((x) => x.thread === 'thing');
+  const idea = invented.find((x) => x.thread === 'idea');
+  const threads = [thing, idea, ...invented.filter((x) => x !== thing && x !== idea)].filter((x): x is StoryScenario => !!x);
+  return [...real, ...threads.slice(0, MAX_SCENARIOS - real.length)];
 }
 
 /**
@@ -808,6 +816,19 @@ export interface LifeStepAsk {
   prefetch: boolean;
 }
 
+/** A step of a walk made of cards (a place across the centuries, the world at one moment), written from the card's article. */
+export interface CardStepAsk {
+  thread: 'place' | 'era';
+  title: string;
+  premise: string;
+  /** The step's part in the walk: its theme ("Religion et croyances"), or what the card is ("Bataille"). */
+  label: string;
+  lived: string[];
+  next: string | null;
+  decisions: string[];
+  prefetch: boolean;
+}
+
 /** A step not written (yet): `ai`, the one at work. */
 function noStep(status: StepResponse['status'], ai: string | null = null): StepResponse {
   return { status, text: null, cast: [], choices: [], next: null, facts: [], quote: null, gallery: [], near: [], sources: [], ai };
@@ -894,6 +915,8 @@ interface StepFrame {
   title: string;
   premise: string;
   hero: StoryPerson | null;
+  /** Whom or what the path follows when no one, as told to the writer. */
+  follows?: string;
   beat: string | null;
   decisions: string[];
   /** The steps read before, as told to the writer. */
@@ -1221,6 +1244,19 @@ export class StoryService {
     return this.queueStep(key, ask.prefetch, () => this.writeLifeStep(ask, ctx));
   }
 
+  /**
+   * A step of a walk made of cards, written when the visitor gets there like
+   * the others: from the card's own article (its introduction, its pictures,
+   * who it names). Written once per walk and view.
+   */
+  async cardStep(poi: Poi, ask: CardStepAsk, ctx: ScenarioContext): Promise<StepResponse> {
+    if (!poi.wiki_title) return noStep('none');
+    const key = `card${STEP_VERSION}|${poi.id}|${normalize(ask.title)}|${normalize(ask.next ?? '')}|${normalize(ask.decisions.join(' ')).slice(-160)}|${contextKey(ctx)}`;
+    const done = this.stepCache[key];
+    if (done) return this.stepOut(done, null);
+    return this.queueStep(key, ask.prefetch, () => this.writeCardStep(poi, ask, ctx));
+  }
+
   private queueStep(key: string, later: boolean, write: () => Promise<StepEntry>): StepResponse {
     if ((this.failed.get(key) ?? 0) > Date.now()) return noStep('none');
     if (!this.router.canRun('write')) return noStep('no-ai');
@@ -1386,6 +1422,24 @@ export class StoryService {
     }, ctx);
   }
 
+  private async writeCardStep(poi: Poi, ask: CardStepAsk, ctx: ScenarioContext): Promise<StepEntry> {
+    const lang = poi.wiki_lang ?? 'fr';
+    const page = await wikipedia.pageWikitext(lang, poi.wiki_title!);
+    if (!page) throw new Error('no article for this card');
+    // Its introduction tells what it is and when.
+    const section = sectionOf(page.wikitext, null);
+    return this.compose({
+      lang, page, heading: null, section, paragraph: poi.summary || section.text.slice(0, CARD_LEAD_CHARS), subject: poi.title, pictures: page.title,
+      source: { url: page.url, title: `Wikipédia : ${page.title}`, kind: 'wikipedia' },
+      place: { name: poi.wiki_title!, title: poi.title, label: ask.label, year: poi.date_start, when: null, lat: poi.lat, lon: poi.lon, image: poi.image_url ?? null },
+      title: ask.title, premise: ask.premise, hero: null, beat: null, decisions: ask.decisions,
+      follows: ask.thread === 'place'
+        ? 'It stays at one place across the centuries: each step is another moment of the same place, told from its own article.'
+        : `It looks at one moment across the world, one theme per step: this step's theme is « ${ask.label} ».`,
+      lived: ask.lived, next: ask.next, forks: [], candidates: [], people: [], exclude: new Set([poi.id]),
+    }, ctx);
+  }
+
   /**
    * A step written from its ground (the article's section about it, the place)
    * and its frame (the path around it): the AI writes its paragraphs from
@@ -1419,7 +1473,7 @@ export class StoryService {
       describeContext(ctx),
       '',
       `Path: « ${f.title} ». ${f.premise}`,
-      f.hero ? `It follows ${f.hero.name} ${life(f.hero)}, ${f.hero.role}.` : 'It follows no one in particular: a thread of the story, from the angle above.',
+      f.hero ? `It follows ${f.hero.name} ${life(f.hero)}, ${f.hero.role}.` : f.follows ?? 'It follows no one in particular: a thread of the story, from the angle above.',
       f.lived.length ? `Steps already read: ${f.lived.join(' → ')}.` : 'This is the first step.',
       f.decisions.length ? `Turns the visitor took, oldest first: ${f.decisions.map((d) => `« ${d} »`).join(' → ')}. The last one led here.` : 'No turn taken yet.',
       '',
@@ -1730,12 +1784,13 @@ export class StoryService {
       return answer.value.scenarios.filter((x): x is ScenarioItem => !!x).map((x) => ({ ...x, ai: answer.ai }));
     };
     // One scenario per request: three at once take a small model past its time limit, or it writes only one.
-    // The first real one and the invented one together, then the second real one (another person).
-    const real = (taken: string) => ask(`This time write exactly ONE scenario, following a REAL person of the list${taken ? ` other than ${taken}` : ''} (invented = false).`);
-    const invented = () => ask('This time write exactly ONE scenario, following an INVENTED character (person = null, invented = true).');
+    // The real person and the thing together, then the idea.
+    const real = (taken: string) => ask(`This time write exactly ONE scenario, following a REAL person of the list${taken ? ` other than ${taken}` : ''} (invented = false, thread = null).`);
+    const thread = (kind: 'thing' | 'idea') => ask(`This time write exactly ONE scenario, following ${kind === 'thing' ? 'a THING of the story' : 'an IDEA'} (person = null, invented = true, thread = "${kind}").`)
+      .then((xs) => xs.map((x) => ({ ...x, invented: true, thread: kind })));
     const items: (ScenarioItem & { ai?: string })[] = [];
     const wantReal = Math.min(REAL_SCENARIOS, story.people.length);
-    const settled = await Promise.allSettled([wantReal ? real('') : invented(), invented()]);
+    const settled = await Promise.allSettled([wantReal ? real('') : thread('idea'), thread('thing')]);
     for (const r of settled) if (r.status === 'fulfilled') items.push(...r.value);
     // A real person's plan is filled first with the stops whose paragraph names them.
     const names = (sc: StoryScenario) => (i: number) => {
@@ -1750,11 +1805,14 @@ export class StoryService {
       return forks.length ? { ...rest, forks } : rest;
     });
     if (build().length) first(build());
-    // Whatever is still missing (a second real person, a failed request), alone, a few times at most.
+    // Whatever is still missing (the idea, a failed request), alone, a few times at most.
     for (let tries = 0; tries < MAX_SCENARIOS; tries++) {
       const built = build();
       const followed = built.filter((x) => !x.invented);
-      const next = followed.length < wantReal ? real(followed.map((x) => `P${x.person}`).join(', ')) : built.length < MAX_SCENARIOS ? invented() : null;
+      const has = (k: 'thing' | 'idea') => built.some((x) => x.thread === k);
+      const next = followed.length < wantReal ? real(followed.map((x) => `P${x.person}`).join(', '))
+        : built.length >= MAX_SCENARIOS ? null
+        : !has('thing') ? thread('thing') : !has('idea') ? thread('idea') : thread('thing');
       if (!next) break;
       items.push(...await next.catch(() => [] as ScenarioItem[]));
       if (build().length) first(build());
