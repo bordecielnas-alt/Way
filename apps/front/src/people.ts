@@ -8,13 +8,14 @@ import { armyFigure, clashFigure, FIGURE_STYLES, figureId, PALETTE, personFigure
 import { armyAt, presenceAt, type Presence, type Way } from './journey.ts';
 import { fetchCached } from './localcache.ts';
 import { commonsImage, loadImage, viaServer } from './media.ts';
+import { bindMenu } from './menus.ts';
 import { findRoute, straightRoute, WaterGrid, type Route } from './routes.ts';
 
 // People followed on the map (chosen by the viewer, remembered in the
 // browser) and the armies of the wars under way, moving with the timeline.
 
 interface Followed { qid: string; name: string; color: string }
-interface Prefs { followed: Followed[]; style: FigureStyle; armies: boolean; trails: boolean; open: boolean }
+interface Prefs { followed: Followed[]; style: FigureStyle; armies: boolean; trails: boolean }
 const KEY = 'way:people';
 const TWEEN_MS = 800;
 /** Armies are shown for windows up to this many years (beyond, too many wars at once). */
@@ -27,7 +28,7 @@ const WAY_BUDGET_MS = 25;
 const WAYS_KEPT = 6000;
 
 function loadPrefs(): Prefs {
-  const d: Prefs = { followed: [], style: 'figurine', armies: true, trails: true, open: false };
+  const d: Prefs = { followed: [], style: 'figurine', armies: true, trails: true };
   try {
     const p = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Prefs>;
     return {
@@ -35,7 +36,6 @@ function loadPrefs(): Prefs {
       style: FIGURE_STYLES.some((s) => s.value === p.style) ? p.style! : d.style,
       armies: p.armies ?? d.armies,
       trails: p.trails ?? d.trails,
-      open: p.open ?? d.open,
     };
   } catch {
     return d;
@@ -125,18 +125,8 @@ export class PeopleLayer {
     this.results = root.querySelector('.people-results')!;
     this.note = root.querySelector('.people-note')!;
     this.count = root.querySelector('.people-count')!;
-    const toggle = root.querySelector<HTMLButtonElement>('.people-toggle')!;
-    const setOpen = (open: boolean) => {
-      this.body.hidden = !open;
-      toggle.setAttribute('aria-expanded', String(open));
-      root.classList.toggle('open', open);
-    };
-    setOpen(this.prefs.open);
-    toggle.addEventListener('click', () => {
-      this.prefs.open = this.body.hidden;
-      setOpen(this.prefs.open);
-      this.save();
-    });
+    // A menu of the bar on top, open while it is used.
+    bindMenu(root, root.querySelector<HTMLButtonElement>('.people-toggle')!, this.body);
     const search = root.querySelector<HTMLInputElement>('.people-search')!;
     search.addEventListener('input', () => {
       clearTimeout(this.searchTimer);
@@ -543,7 +533,7 @@ export class PeopleLayer {
     }
     for (const key of [...this.actors.keys()]) if (!seen.has(key)) this.removeActor(key);
     this.animate();
-    if (this.prefs.open) this.renderList();
+    if (!this.body.hidden) this.renderList();
   }
 
   /** The clash sign over a battle, popping in when the armies meet. */

@@ -8,19 +8,21 @@ import {
   add, clearNext, crochet, emptyQueue, goTo, move, parseQueue, progressOf, remove, start, stepOf, takeShelf, updateStep, type Queue,
 } from './queue.ts';
 import type { RouteOption } from './storymap.ts';
+import type { TimeMark } from './timeline.ts';
 
-// The player: the reader tells, the card explains. Along the bottom, while a
-// path plays, a step is told in two or three sentences (its place, its
-// moment, who was there), above it a frieze puts the file on time; "Suivant"
-// goes on, step by step. "Lire en entier" opens the step's place on the right,
-// its card holding the step as a section of an article. The file works like a
-// music player's queue (queue.ts): a scenario fills it, a crochet slips a few
-// steps in at its head and the file goes on by itself after them, "Bifurquer"
-// sets what comes next aside (a route not taken) for another route. Clicking
-// elsewhere on the map opens that place's card and the player waits, folded
-// to a bar: nothing to quit, the camera is the visitor's until "Reprendre".
-// A step's text is written when the visitor gets there, knowing the turns
-// taken; the file is kept in this browser.
+// The scenario's card, on the left: the step told as an article (its
+// picture, its place and moment, two or three sentences, then the whole
+// section on demand, who was there, the crochets), and at its foot the
+// player: the file's steps, "Suivant" step by step. It folds down to its
+// player, it never closes by itself: what is clicked on the map opens its own
+// card on the right, and both are read side by side. The general timeline
+// stays, the file's steps marked on it. The file works like a music player's
+// queue (queue.ts): a scenario fills it, a crochet slips a few steps in at its
+// head and the file goes on by itself after them, "Bifurquer" sets what comes
+// next aside (a route not taken) for another route. Clicking elsewhere only
+// gives the camera to the visitor until "Suivant" (or ◎). A step's text is
+// written when the visitor gets there, knowing the turns taken; the file is
+// kept in this browser.
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -61,11 +63,13 @@ const OLD_PATHS_KEY = 'orbis:paths';
 const SAME_PLACE_KM = 40;
 const MAX_FORKS = 3;
 const MAX_DECISIONS = 6;
-/** Crochets offered on a step, the next steps shown, the steps on the frieze around the one now. */
+/** Crochets offered on a step; the steps drawn on the globe around the one now; on the timeline. */
 const MAX_CHIPS = 4;
-const NEXT_SHOWN = 3;
-const FRIEZE_BEFORE = 12;
-const FRIEZE_AFTER = 16;
+const ROUTE_BEFORE = 12;
+const ROUTE_AFTER = 16;
+const MARKS_AROUND = 30;
+/** Steps of the file shown in the player, around the one now. */
+const PIPS = 9;
 /** Steps seen listed in the file's panel. */
 const SEEN_SHOWN = 8;
 
@@ -187,15 +191,14 @@ const figure = (g: StepPicture) => `<figure class="sa-fig">
   </figure>`;
 
 /**
- * A step in full, as a section of the article of its place, for the card:
- * which step of the file it is, its heading, its paragraphs with the
- * section's pictures between them, a sentence of the article, the facts to
- * keep, who was there, its sources and the AI that wrote it. `n`: its
- * number in the file; `writer`: the AI writing it, while it does.
+ * A step in full, as a section of an article: its picture at the head, then
+ * (in `body`) its paragraphs with the section's pictures between them, a
+ * sentence of the article, the facts to keep, who was there, its sources and
+ * the AI that wrote it. `writer`: the AI writing it, while it does.
  */
-export function stepArticle(walk: ScenarioWalk, j: number, n: string, writer: string | null): string {
+export function stepParts(walk: ScenarioWalk, j: number, writer: string | null): { head: StepPicture | null; body: string } {
   const st = walk.steps[j];
-  if (!st) return '';
+  if (!st) return { head: null, body: '' };
   const pics = (st.gallery ?? []).map(pictureOf);
   const head = st.image ? { src: st.image, caption: null } : pics.shift() ?? null;
   const paragraphs = st.text ? st.text.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean) : [];
@@ -210,7 +213,7 @@ export function stepArticle(walk: ScenarioWalk, j: number, n: string, writer: st
   const article = paragraphs.length
     ? `<div class="sa-article">${paragraphs.map((t, k) => {
       const at = slots.indexOf(k);
-      return `<p class="sa-par${k === 0 ? ' sa-lead' : ''}">${esc(t)}</p>${at >= 0 ? figure(inline[at]!) : ''}${k === quoteAt ? quote : ''}`;
+      return `<p class="sa-par">${esc(t)}</p>${at >= 0 ? figure(inline[at]!) : ''}${k === quoteAt ? quote : ''}`;
     }).join('')}</div>`
     : `<div class="sa-writing"><span class="sc-note-dot" aria-hidden="true"></span>${writer ? esc(writer) : 'L’IA'} écrit cette étape d’après l’article de Wikipédia sur ${esc(st.place)}…</div>
       <div class="skeleton-lines"><i></i><i></i><i></i><i></i><i></i></div>`;
@@ -233,49 +236,35 @@ export function stepArticle(walk: ScenarioWalk, j: number, n: string, writer: st
         <ul>${sources.filter((s) => s.url).map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title.replace(/^Wikipédia : /, ''))}</a></li>`).join('')}</ul>
         <p class="sa-ai">${credit}${walk.ai ? ` Chemin tracé par ${esc(walk.ai)}.` : ''}</p></footer>`
     : '';
-  return `<div class="sa-kicker"><span class="sa-n">${esc(n)}</span>L’étape ${esc(n)} de votre file raconte ce moment · ${esc(walk.title)}</div>
-      <h3 class="sa-heading">${esc(st.beat ?? st.label)}<small>${esc(st.place)} · ${esc(formatWhen(st))}</small></h3>
-      ${head ? `<figure class="sa-img"><img alt="" src="${esc(viaServer(head.src))}" referrerpolicy="no-referrer"></figure>` : ''}
-      <p class="sa-img-caption"${head?.caption ? '' : ' hidden'}>${esc(head?.caption ?? '')}</p>
-      ${article}
-      ${facts}
-      ${who}
-      ${pictures}
-      ${footer}`;
+  return { head, body: `${article}${facts}${who}${pictures}${footer}` };
 }
 
-/** A step in full, shown somewhere: its people open their menu, its pictures take the head's place. */
-export function bindArticle(el: HTMLElement, step: WalkStep, onEntity: (anchor: HTMLElement, e: Entity) => void): void {
-  el.addEventListener('click', (e) => {
-    const b = (e.target as Element).closest<HTMLElement>('[data-act]');
-    if (!b || !el.contains(b)) return;
-    if (b.dataset.act === 'who') {
-      const person = step.cast[Number(b.dataset.i)];
-      if (person) onEntity(b, { kind: 'person', person });
-    } else if (b.dataset.act === 'pic' && b.dataset.url) {
-      const img = el.querySelector<HTMLImageElement>('.sa-img img');
-      if (img) img.src = b.dataset.url;
-      else el.querySelector('.sa-heading')?.insertAdjacentHTML('afterend', `<figure class="sa-img"><img alt="" src="${esc(b.dataset.url)}" referrerpolicy="no-referrer"></figure>`);
-      const caption = el.querySelector<HTMLElement>('.sa-img-caption');
-      if (caption) {
-        caption.textContent = b.dataset.caption ?? '';
-        caption.hidden = !b.dataset.caption;
-      }
-      el.querySelectorAll('.sa-pic').forEach((x) => x.classList.toggle('on', x === b));
-    }
-  });
-  el.querySelectorAll<HTMLImageElement>('img').forEach((img) => img.addEventListener('error', () => img.closest('figure')?.remove() ?? img.remove()));
-}
-
-/** Above the player (or alone): the file, the routes to take instead, a place's or person's paths, the ways on at the end. */
+/** In the scenario's card, in place of the step: the file, the routes to take instead, a place's or person's paths, the ways on at the end. */
 type Panel = 'queue' | 'routes' | 'here' | 'suites';
+
+/** The scenario's card: open, folded down to its player, or put away (a button brings the file back). */
+type View = 'open' | 'folded' | 'closed';
+
+/** The step now, with its walk and its item in the file. */
+type Playing = NonNullable<ReturnType<typeof stepOf>>;
+
+/** The step's section in full under its récit: left open, it stays open from step to step. */
+const ARTICLE_KEY = 'orbis:article';
 
 export class Player {
   private q: Queue = emptyQueue();
-  /** Clicked elsewhere: the file waits, the player folds to a bar, the camera is the visitor's. */
+  /** Clicked elsewhere: the file waits where it is, the camera is the visitor's (the card stays as it is). */
   private paused = true;
-  /** Closed: only a button to open the file again shows. */
-  private folded = false;
+  private view: View = 'open';
+  private article = (() => {
+    try {
+      return localStorage.getItem(ARTICLE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  })();
+  /** What the card's body shows, to keep where it was read when it is drawn again. */
+  private shownKey = '';
   /** Scenarios turned off in the filters. */
   private enabled = true;
   private panel: Panel | null = null;
@@ -288,7 +277,7 @@ export class Player {
   private leads: Lead[] = [];
   private walksShown: ScenarioWalk[] = [];
   private afterShown: WalkLead[] = [];
-  /** The items on the frieze (and drawn on the globe), from this one. */
+  /** The items drawn on the globe, from this one. */
   private shownFrom = 0;
 
   /** A step to show: map, timeline, its card and its people go there; `first`: the file started or taken up again. */
@@ -299,12 +288,10 @@ export class Player {
   onNeedText: (walk: ScenarioWalk, step: number) => void = () => undefined;
   /** Paused (or nothing plays any more): the people of the step leave the map. */
   onPause: () => void = () => undefined;
-  /** The step now, its text or the state changed (cards mark it, the card's step follows). */
+  /** The step now, its text or the state changed (the cards of the places mark it). */
   onChange: () => void = () => undefined;
-  /** "Lire en entier": the step in full, in its place's card on the right. */
-  onRead: (walk: ScenarioWalk, step: number) => void = () => undefined;
-  /** Does the card on the right show the step now in full? */
-  readOpen: () => boolean = () => false;
+  /** The file's steps around the one now, to mark on the general timeline (none when nothing is in it). */
+  onMarks: (marks: TimeMark[]) => void = () => undefined;
   /** A card to open (from the paths of a place). */
   onOpenCard: (poi: PoiLite) => void = () => undefined;
   /** A crossroads taken: a crochet around the step's year, or the whole path as another route. */
@@ -394,20 +381,28 @@ export class Player {
   add(poi: PoiLite): void {
     const empty = !stepOf(this.q, this.q.at);
     this.q = add(this.q, cardWalk(poi));
-    this.folded = false;
+    if (this.view === 'closed') this.view = 'folded';
     if (empty) this.paused = true;
     this.commit();
   }
 
-  /** A step of the file chosen (on the frieze, the panel, a card). */
+  /** A step of the file chosen (in the player, on the timeline, the panel, a card): the scenario's card shows it. */
   goTo(i: number): void {
     if (!this.q.items[i]) return;
     const first = this.paused;
     this.q = goTo(this.q, i);
+    if (this.view === 'closed') this.view = 'open';
     this.play(first);
   }
 
-  /** Clicked elsewhere on the globe: the file waits, the player folds to a bar; with none played, the panel closes. */
+  /** "Lire l'étape" (on a place's card): the scenario's card opens on the step now. */
+  unfold(): void {
+    this.view = 'open';
+    this.panel = null;
+    this.render();
+  }
+
+  /** Clicked elsewhere on the globe: the file waits where it is, the camera is the visitor's; with none played, the panel closes. */
   pause(): void {
     if (!this.playingNow) {
       if (this.panel) this.closePanel();
@@ -435,9 +430,10 @@ export class Player {
     this.commit();
   }
 
-  /** The paths through a place or a person, above the player. */
+  /** The paths through a place or a person, in the scenario's card. */
   showHere(here: Here): void {
     this.here = here;
+    this.view = 'open';
     this.openPanel('here');
   }
 
@@ -467,9 +463,9 @@ export class Player {
     else if (kind === 'choice') this.choose(Number(n));
   }
 
-  /** The card on the right opened or closed ("Lire en entier" says so). */
+  /** Drawn again (a place's card opened or closed beside it). */
   refresh(): void {
-    if (this.playingNow) this.render();
+    this.render();
   }
 
   /** What is being prepared ("L'IA écrit un crochet…"), or null. */
@@ -546,7 +542,7 @@ export class Player {
     const s = stepOf(this.q, this.q.at);
     if (!s) return this.commit();
     this.paused = false;
-    this.folded = false;
+    if (this.view === 'closed') this.view = 'open';
     if (this.panel !== 'queue') this.panel = null;
     this.note = null;
     this.writer = null;
@@ -586,10 +582,10 @@ export class Player {
     if (w) this.crochet(w, this.cursor);
   }
 
-  /** Nothing in the file any more after "Terminer": the player goes. */
+  /** "Terminer", or the card put away: the scenario's card goes, the file stays (a button brings it back). */
   private finish(): void {
     this.paused = true;
-    this.folded = true;
+    this.view = 'closed';
     this.panel = null;
     this.onPause();
     this.commit();
@@ -607,18 +603,33 @@ export class Player {
         return this.panel === p ? this.closePanel() : this.openPanel(p);
       }
       case 'close-panel': return this.closePanel();
-      case 'read':
-        if (s) this.onRead(s.walk, s.item.step);
-        return;
-      case 'pause': return this.pause();
       case 'resume': return this.resume();
       case 'fold':
-        this.folded = true;
+        this.view = 'folded';
         this.panel = null;
         return this.render();
-      case 'unfold':
-        this.folded = false;
+      case 'unfold': return this.unfold();
+      case 'close': return this.finish();
+      case 'article':
+        this.article = !this.article;
+        try {
+          localStorage.setItem(ARTICLE_KEY, this.article ? '1' : '0');
+        } catch {
+          /* not remembered */
+        }
         return this.render();
+      case 'pic': {
+        // A picture of the section takes the head's place.
+        const img = this.root.querySelector<HTMLImageElement>('.sc-img img');
+        if (img && b.dataset.url) img.src = b.dataset.url;
+        const caption = this.root.querySelector<HTMLElement>('.sc-img-caption');
+        if (caption) {
+          caption.textContent = b.dataset.caption ?? '';
+          caption.hidden = !b.dataset.caption;
+        }
+        this.root.querySelectorAll('.sa-pic').forEach((x) => x.classList.toggle('on', x === b));
+        return;
+      }
       case 'prev': return this.go(-1);
       case 'next': return this.go(1);
       case 'goto': return this.goTo(n);
@@ -694,127 +705,172 @@ export class Player {
     const s = this.enabled ? stepOf(this.q, this.q.at) : null;
     const playing = !!s && !this.paused;
     document.body.classList.toggle('scenario-on', playing);
-    document.body.classList.toggle('player-open', playing);
     const note = this.note ? `<div class="sc-note"><span class="sc-note-dot" aria-hidden="true"></span>${esc(this.note)}</div>` : '';
     const panel = this.panel && this.enabled ? this.panelView(this.panel) : '';
-    let bottom = '';
-    if (playing) bottom = this.full();
-    else if (s && !this.folded) bottom = this.compact(note);
-    else if (note) bottom = `<div class="player-note panel">${note}</div>`;
-    else if (s && !this.panel) {
-      bottom = `<button type="button" class="player-launch panel" data-act="unfold" title="Le lecteur et sa file">☰ Ma file <span class="cn-count">${this.q.items.length - this.q.at}</span></button>`;
-    }
-    this.root.hidden = !panel && !bottom;
-    this.root.className = `player-root${playing ? ' playing' : ''}${this.panel ? ' with-panel' : ''}`;
-    this.root.innerHTML = `${panel}${bottom}`;
+    // Open whenever a panel shows; folded down to its player; put away, a button brings the file back.
+    const state = panel || (s && this.view === 'open') ? 'open' : s && this.view === 'folded' ? 'folded' : s ? 'closed' : note ? 'note' : 'none';
+    let html = '';
+    if (state === 'open') {
+      html = `<section class="sc-card${s?.item.crochet ? ' in-crochet' : ''}" aria-label="Le scénario">
+          ${this.head(s)}
+          <div class="sc-body">${note}${panel || (s ? this.stepView(s) : '')}</div>
+          ${s ? this.foot(s, true) : ''}
+        </section>`;
+    } else if (state === 'folded') {
+      html = `<section class="sc-card folded${s!.item.crochet ? ' in-crochet' : ''}" aria-label="Le lecteur">${note}${this.foot(s!, false)}</section>`;
+    } else if (state === 'closed') {
+      html = `${note ? `<div class="sc-alone">${note}</div>` : ''}<button type="button" class="sc-launch" data-act="unfold" title="Le scénario et sa file">☰ Ma file <span class="cn-count">${this.q.items.length - this.q.at}</span></button>`;
+    } else if (state === 'note') html = `<div class="sc-alone">${note}</div>`;
+    document.body.classList.toggle('sc-open', state === 'open');
+    document.body.classList.toggle('sc-folded', state === 'folded');
+    // Drawn again on the same step (its text came, a note): it stays where it was read.
+    const key = `${state}|${this.panel ?? ''}|${this.q.items[this.q.at]?.key ?? ''}`;
+    const scroll = key === this.shownKey ? this.root.querySelector('.sc-body')?.scrollTop ?? 0 : 0;
+    this.shownKey = key;
+    this.root.hidden = state === 'none';
+    this.root.className = `scenario-root ${state}`;
+    this.root.innerHTML = html;
+    const body = this.root.querySelector('.sc-body');
+    if (body) body.scrollTop = scroll;
     this.root.querySelectorAll<HTMLImageElement>('img').forEach((img) => img.addEventListener('error', () => {
-      img.closest('.pl-img')?.classList.add('no-img');
+      const head = img.closest('.sc-img');
+      if (head) head.classList.add('no-img');
+      else img.closest('figure')?.remove();
       img.remove();
     }));
+    this.onMarks(s ? this.marks() : []);
     if (playing) this.route();
   }
 
-  /** The steps on the frieze and the globe, where the step now may go. */
+  /** The steps drawn on the globe around the one now, where the step now may go. */
   private route(): void {
     const s = stepOf(this.q, this.q.at)!;
-    const from = this.shownFrom;
-    const steps = this.q.items.slice(from, this.q.at + FRIEZE_AFTER).map((_, k) => stepOf(this.q, from + k)!.step);
+    const from = Math.max(0, this.q.at - ROUTE_BEFORE);
+    this.shownFrom = from;
+    const steps = this.q.items.slice(from, this.q.at + ROUTE_AFTER).map((_, k) => stepOf(this.q, from + k)!.step);
     const next = stepOf(this.q, this.q.at + 1)?.step ?? null;
     this.onRoute(steps, this.q.at - from, routeOptions(s.walk, s.item.step, next), steps.map((_, k) => this.label(from + k)));
   }
 
-  /** Paused: a bar to take the file up again; the timeline is back. */
-  private compact(note: string): string {
-    const s = stepOf(this.q, this.q.at)!;
-    const n = this.q.items.length;
-    const img = thumbOf(s.step);
-    return `<section class="player compact panel" aria-label="Le lecteur, en pause">
-        <span class="pl-thumb">${img ? `<img alt="" src="${esc(viaServer(img))}" referrerpolicy="no-referrer">` : ''}</span>
-        <span class="pl-compact-text">
-          <span class="pl-paused"><span aria-hidden="true">⏸</span> En pause · ${esc(s.walk.title)} · ${this.q.at + 1}/${n}</span>
-          <span class="pl-compact-step"><b>${esc(s.step.place)}</b> ${esc(formatWhen(s.step))}${s.step.text ? ` — « ${esc(recitOf(s.step))} »` : ''}</span>
-        </span>
-        <button type="button" class="pl-resume" data-act="resume" title="La caméra revient à l’étape ; la fiche ouverte reste ouverte">▶ Reprendre<small>${esc(s.step.place)}</small></button>
-        <button type="button" class="sc-icon" data-act="panel" data-view="queue" title="La file et l’historique" aria-label="La file et l’historique">☰</button>
-        <button type="button" class="sc-icon" data-act="fold" title="Ranger le lecteur (la file reste)" aria-label="Ranger le lecteur">✕</button>
-        ${note}
-      </section>`;
+  /** The file's steps around the one now, for the general timeline. */
+  private marks(): TimeMark[] {
+    const from = Math.max(0, this.q.at - MARKS_AROUND);
+    const to = Math.min(this.q.items.length, this.q.at + MARKS_AROUND + 1);
+    return this.q.items.slice(from, to).map((it, k) => {
+      const i = from + k;
+      const t = stepOf(this.q, i)!.step;
+      return {
+        i, year: t.when ?? t.year, state: i === this.q.at ? 'now' : i < this.q.at ? 'done' : 'todo', crochet: !!it.crochet,
+        title: `${this.label(i)}. ${t.place} · ${formatWhen(t)}`,
+      };
+    });
+  }
+
+  /** The card's head: what the file follows; ✕ puts it away (the file stays). */
+  private head(s: Playing | null): string {
+    const close = s
+      ? '<button type="button" class="sc-icon" data-act="close" title="Ranger le scénario (la file reste)" aria-label="Ranger le scénario">✕</button>'
+      : '<button type="button" class="sc-icon" data-act="close-panel" title="Fermer (Échap)" aria-label="Fermer">✕</button>';
+    if (!s) return `<header class="sc-head"><span class="sc-head-title">Scénarios</span>${close}</header>`;
+    const { walk, item } = s;
+    return `<header class="sc-head">
+        <span class="pl-thread">${item.crochet ? '↪ Crochet' : THREAD_LABELS[threadOf(walk)]}${walk.hero ? ` · ${esc(walk.hero.name)}` : ''}</span>
+        <span class="sc-head-title" title="${esc(walk.premise)}">${esc(walk.title)}</span>
+        ${close}
+      </header>`;
   }
 
   /**
-   * The player: the frieze of the file over time, the step told short (its
-   * picture, what it follows, its place and moment, who was there), the way
-   * on and the crochets, what comes next.
+   * The step as an article: its picture, its place and moment, the récit
+   * (two or three sentences), then the whole section on demand; the crochets
+   * and "Bifurquer" under it.
    */
-  private full(): string {
-    const s = stepOf(this.q, this.q.at)!;
+  private stepView(s: Playing): string {
     const { walk, step: st, item } = s;
     const j = item.step;
     this.leads = stepLeads(walk, j);
-    const img = thumbOf(st);
-    const n = this.q.items.length;
-    const next = stepOf(this.q, this.q.at + 1);
-    const inCrochet = !!item.crochet;
+    const { head, body } = stepParts(walk, j, this.writer);
     const sources = st.sources?.length ? st.sources : st.text ? [walk.source] : [];
     const recit = st.text
-      ? `<p class="pl-recit">${esc(recitOf(st))}</p>`
+      ? `<p class="sc-recit">${esc(recitOf(st))}</p>`
       : `<div class="pl-writing"><span class="sc-note-dot" aria-hidden="true"></span>${this.writer ? esc(this.writer) : 'L’IA'} écrit cette étape d’après Wikipédia… <button type="button" class="sc-link" data-act="retry">relancer</button></div>
         <div class="skeleton-lines"><i></i><i></i></div>`;
     const who = st.text && st.cast.length
       ? `Présents : ${st.cast.slice(0, 4).map((c, k) => `<button type="button" class="pl-who" data-act="who" data-i="${k}" aria-haspopup="menu" title="${esc(c.role)}">${esc(c.name)}</button>`).join(', ')}`
       : '';
     const credit = [who, sources[0] ? `d’après ${esc(sources[0].title)}` : '', st.ai ? `rédigé par ${esc(st.ai)}` : ''].filter(Boolean).join(' · ');
+    const paragraphs = st.text ? st.text.split(/\n\s*\n/).filter((x) => x.trim()).length : 0;
+    const parts = [`${paragraphs} paragraphe${paragraphs > 1 ? 's' : ''}`, st.facts?.length ? 'repères' : '', st.cast.length ? 'présents' : '', 'sources']
+      .filter(Boolean).join(' · ');
+    const article = st.text
+      ? `<button type="button" class="sc-article-toggle" data-act="article" aria-expanded="${this.article}">
+          <span class="sc-article-text"><b>${this.article ? 'Replier l’article' : 'Lire l’article'}</b><small>${esc(parts)}</small></span><span class="sc-chev" aria-hidden="true"></span>
+        </button>
+        ${this.article ? `<div class="sc-article">${body}</div>` : ''}`
+      : '';
+    const chips = this.chips(walk, j);
+    return `<figure class="sa-img sc-img${head ? '' : ' no-img'}">${head ? `<img alt="" src="${esc(viaServer(head.src))}" referrerpolicy="no-referrer">` : ''}</figure>
+      <p class="sa-img-caption sc-img-caption"${head?.caption ? '' : ' hidden'}>${esc(head?.caption ?? '')}</p>
+      <div class="sc-title"><h2 class="sc-place">${esc(st.place)}</h2><span class="sc-when">${esc(formatWhen(st))} · ${esc(st.beat ?? st.label)}</span></div>
+      ${recit}
+      ${credit ? `<div class="pl-meta">${credit}</div>` : ''}
+      ${article}
+      <div class="sc-label">${chips ? 'Faire un crochet, ou bifurquer' : 'Une autre route'}</div>
+      <div class="pl-chips">
+        ${chips}
+        <button type="button" class="pl-chip${this.panel === 'routes' ? ' on' : ''}" data-act="panel" data-view="routes" title="Une autre route : la suite est mise de côté">⑂ Bifurquer</button>
+      </div>`;
+  }
+
+  /**
+   * The player, at the card's foot: the file's steps around the one now
+   * (☰ the whole file), back, "Suivant", fold. Folded, the step's name above
+   * it and a way to read it again.
+   */
+  private foot(s: Playing, open: boolean): string {
+    const { walk, step: st, item } = s;
+    const n = this.q.items.length;
+    const at = this.q.at;
+    const next = stepOf(this.q, at + 1);
+    const inCrochet = !!item.crochet;
+    const from = Math.max(0, Math.min(at - 3, n - PIPS));
+    const to = Math.min(n, from + PIPS);
+    const pips = Array.from({ length: to - from }, (_, k) => {
+      const i = from + k;
+      const it = this.q.items[i]!;
+      const t = stepOf(this.q, i)!.step;
+      const state = i === at ? 'now' : i < at ? 'done' : 'todo';
+      const pip = `<button type="button" class="sc-pip ${state}${it.crochet ? ' cr' : ''}${it.added ? ' added' : ''}" data-act="goto" data-i="${i}" title="${esc(`${this.label(i)}. ${t.place} · ${formatWhen(t)}`)}" aria-label="${esc(`Étape ${this.label(i)}, ${t.place}, ${formatWhen(t)}`)}"${i === at ? ' aria-current="step"' : ''}><span>${esc(this.label(i))}</span></button>`;
+      return k ? `<i class="sc-line${i <= at ? '' : ' next'}"></i>${pip}` : pip;
+    }).join('');
+    const crochetNext = !!next?.item.crochet && next.item.crochet !== item.crochet;
     const go = next
-      ? `<button type="button" class="pl-next${next.item.crochet && next.item.crochet !== item.crochet ? ' crochet' : ''}" data-act="next" title="L’étape suivante (→)">
-          <span>${next.item.crochet && next.item.crochet !== item.crochet ? 'Suivant · crochet' : inCrochet && !next.item.crochet ? 'Suivant · la file reprend' : 'Suivant'}<small>${esc(next.step.place)}, ${esc(formatWhen(next.step))}${st.next && next.walk.id === walk.id ? ` — ${esc(st.next)}` : ''}</small></span>
+      ? `<button type="button" class="pl-next${crochetNext ? ' crochet' : ''}" data-act="next" title="L’étape suivante (→)">
+          <span>${crochetNext ? 'Suivant · crochet' : inCrochet && !next.item.crochet ? 'Suivant · la file reprend' : `Suivant · ${at + 2} / ${n}`}<small>${esc(next.step.place)}, ${esc(formatWhen(next.step))}${st.next && next.walk.id === walk.id ? ` — ${esc(st.next)}` : ''}</small></span>
           <span aria-hidden="true">→</span>
         </button>`
       : `<button type="button" class="pl-next end" data-act="panel" data-view="suites" title="Ce qui peut suivre : des personnes, des suites, d’autres chemins">
           <span>Fin de la file<small>Et ensuite ? des personnes, des suites, d’autres chemins</small></span><span aria-hidden="true">▸</span>
         </button>`;
-    const read = this.readOpen();
-    return `<section class="player full panel${inCrochet ? ' in-crochet' : ''}" aria-label="Le lecteur">
-        ${this.frieze()}
-        <div class="pl-main">
-          <div class="pl-story">
-            <figure class="pl-img${img ? '' : ' no-img'}">${img ? `<img alt="" src="${esc(viaServer(img))}" referrerpolicy="no-referrer">` : ''}</figure>
-            <div class="pl-text">
-              <div class="pl-kicker">
-                <span class="pl-thread">${inCrochet ? '↪ Crochet' : THREAD_LABELS[threadOf(walk)]}${walk.hero ? ` · ${esc(walk.hero.name)}` : ''}</span>
-                <span class="pl-walk" title="${esc(walk.premise)}">${esc(walk.title)}</span>
-                <span class="pl-count">· ${this.q.at + 1} / ${n} dans la file</span>
-              </div>
-              <div class="pl-head"><h2 class="pl-place">${esc(st.place)}</h2><span class="pl-when">${esc(formatWhen(st))} · ${esc(st.beat ?? st.label)}</span></div>
-              ${recit}
-              ${credit ? `<div class="pl-meta">${credit}</div>` : ''}
-              ${this.note ? `<div class="sc-note"><span class="sc-note-dot" aria-hidden="true"></span>${esc(this.note)}</div>` : ''}
-            </div>
-          </div>
-          <div class="pl-go">
-            <div class="pl-nav">
-              <button type="button" class="pl-ctl" data-act="prev" ${this.q.at === 0 ? 'disabled' : ''} aria-label="Étape précédente" title="Étape précédente (←)">⏮</button>
-              ${go}
-            </div>
-            <div class="pl-chips">
-              <button type="button" class="pl-chip${read ? ' on' : ''}" data-act="read" aria-pressed="${read}" title="L’étape en entier, dans la fiche de son lieu à droite">${read ? '📖 Lu à droite' : '📖 Lire en entier'}</button>
-              ${this.chips(walk, j)}
-              <button type="button" class="pl-chip${this.panel === 'routes' ? ' on' : ''}" data-act="panel" data-view="routes" title="Une autre route : la suite est mise de côté">⑂ Bifurquer</button>
-            </div>
-          </div>
-          <div class="pl-upnext">
-            <div class="pl-upnext-head">
-              <span class="pl-label">À suivre</span>
-              <button type="button" class="sc-icon" data-act="pause" title="Pause : la frise revient, la caméra est à vous" aria-label="Pause">⏸</button>
-              <button type="button" class="sc-icon${this.panel === 'queue' ? ' on' : ''}" data-act="panel" data-view="queue" title="La file et l’historique" aria-label="La file et l’historique">☰</button>
-            </div>
-            ${this.q.items.slice(this.q.at + 1, this.q.at + 1 + NEXT_SHOWN).map((x, k) => {
-              const i = this.q.at + 1 + k;
-              const t = stepOf(this.q, i)!.step;
-              return `<button type="button" class="pl-q${x.crochet ? ' crochet' : ''}" data-act="goto" data-i="${i}"><span class="pl-n">${esc(this.label(i))}</span><span class="pl-q-place">${esc(t.place)}</span><span class="pl-q-when">${esc(formatWhen(t))}</span></button>`;
-            }).join('') || '<p class="pl-empty">Rien ensuite : « Bifurquer » ou une fiche pour continuer.</p>'}
-          </div>
+    const mini = open ? '' : `<div class="sc-mini">
+        <span class="sc-mini-text"><b>${esc(st.place)}</b> · ${esc(formatWhen(st))} · ${esc(walk.title)}</span>
+        <button type="button" class="sc-btn" data-act="unfold" title="La fiche du scénario, sur l’étape en cours">▴ Lire l’étape</button>
+      </div>`;
+    return `<div class="sc-player">
+        ${mini}
+        <div class="sc-pips-row">
+          ${from > 0 ? '<span class="sc-more" aria-hidden="true">…</span>' : ''}
+          <div class="sc-pips" role="group" aria-label="La file, étape ${at + 1} sur ${n}">${pips}</div>
+          ${to < n ? '<span class="sc-more" aria-hidden="true">…</span>' : ''}
+          ${this.paused ? '<button type="button" class="sc-icon" data-act="resume" title="Revenir à l’étape : la caméra y retourne" aria-label="Revenir à l’étape">◎</button>' : ''}
+          <button type="button" class="sc-icon${this.panel === 'queue' ? ' on' : ''}" data-act="panel" data-view="queue" title="La file et l’historique" aria-label="La file et l’historique">☰</button>
         </div>
-      </section>`;
+        <div class="pl-nav">
+          <button type="button" class="pl-ctl" data-act="prev" ${at === 0 ? 'disabled' : ''} aria-label="Étape précédente" title="Étape précédente (←)">⏮</button>
+          ${go}
+          ${open ? '<button type="button" class="pl-ctl" data-act="fold" aria-label="Replier la fiche du scénario" title="Replier la fiche : le lecteur reste">▾</button>' : ''}
+        </div>
+      </div>`;
   }
 
   /** The crochets offered on the step: its detours (once written), then the people present not offered yet. */
@@ -829,54 +885,16 @@ export class Player {
     return [...choices, ...people].slice(0, MAX_CHIPS).join('');
   }
 
-  /** The file on time: a bead per step around the one now, at its date; the one now gold, the crochets dashed blue. */
-  private frieze(): string {
-    const from = Math.max(0, this.q.at - FRIEZE_BEFORE);
-    const to = Math.min(this.q.items.length, this.q.at + FRIEZE_AFTER);
-    this.shownFrom = from;
-    const at = (i: number) => {
-      const t = stepOf(this.q, i)!.step;
-      return t.when ?? t.year;
-    };
-    const years = Array.from({ length: to - from }, (_, k) => at(from + k));
-    let lo = Math.min(...years);
-    let hi = Math.max(...years);
-    if (hi - lo < 4) {
-      lo -= 5;
-      hi += 5;
-    }
-    const pad = (hi - lo) * 0.04;
-    lo -= pad;
-    hi += pad;
-    const x = (y: number) => ((y - lo) / (hi - lo)) * 100;
-    const tick = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000].find((t) => (hi - lo) / t <= 6) ?? 10_000;
-    const ticks: number[] = [];
-    for (let y = Math.ceil(lo / tick) * tick; y <= hi; y += tick) ticks.push(y);
-    const firstSeen = Math.min(...years.slice(0, this.q.at - from + 1));
-    const now = at(this.q.at);
-    const beads = years.map((y, k) => {
-      const i = from + k;
-      const it = this.q.items[i]!;
-      const t = stepOf(this.q, i)!.step;
-      const state = i === this.q.at ? 'now' : i < this.q.at ? 'done' : 'todo';
-      return `<button type="button" class="pl-bead ${state}${it.crochet ? ' cr' : ''}${it.added ? ' added' : ''}" style="left:${x(y).toFixed(2)}%" data-act="goto" data-i="${i}" title="${esc(`${this.label(i)}. ${t.place} · ${formatWhen(t)}`)}" aria-label="${esc(`Étape ${this.label(i)}, ${t.place}, ${formatWhen(t)}`)}"><span>${esc(this.label(i))}</span></button>`;
-    }).join('');
-    return `<div class="pl-frieze" aria-label="La file sur le temps">
-        <div class="pl-axis"></div>
-        <div class="pl-lived" style="left:${x(Math.min(firstSeen, now)).toFixed(2)}%;width:${Math.abs(x(now) - x(firstSeen)).toFixed(2)}%"></div>
-        ${ticks.map((y) => `<span class="pl-tick" style="left:${x(y).toFixed(2)}%">${esc(formatYear(Math.round(y)))}</span>`).join('')}
-        ${beads}
-      </div>`;
-  }
-
+  /** A panel in the card's body, in place of the step (✕ goes back to it). */
   private panelView(p: Panel): string {
     const body = p === 'here' && this.here ? this.hereView(this.here)
       : p === 'routes' ? this.routesView()
       : p === 'suites' ? this.suites()
       : this.queueView();
-    return `<section class="pl-panel panel" role="dialog" aria-label="La file">
-        <button type="button" class="sc-icon pl-panel-close" data-act="close-panel" title="Fermer (Échap)" aria-label="Fermer">✕</button>
-        <div class="cn-body">${body}</div>
+    const back = !!stepOf(this.q, this.q.at);
+    return `<section class="pl-panel" aria-label="${p === 'queue' ? 'La file' : p === 'routes' ? 'Bifurquer' : p === 'suites' ? 'Et ensuite' : 'Chemins'}">
+        ${back ? '<button type="button" class="sc-icon pl-panel-close" data-act="close-panel" title="Revenir à l’étape (Échap)" aria-label="Revenir à l’étape">✕</button>' : ''}
+        ${body}
       </section>`;
   }
 

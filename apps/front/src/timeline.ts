@@ -4,6 +4,15 @@ import {
 
 export interface TimeWindow { tStart: number; tEnd: number }
 
+/** A step of the scenario's file, marked on the timeline: `i` its place in the file. */
+export interface TimeMark {
+  i: number;
+  year: number;
+  state: 'done' | 'now' | 'todo';
+  crochet: boolean;
+  title: string;
+}
+
 const ERAS: { label: string; from: number; to: number }[] = [
   { label: 'Préhistoire', from: MIN_YEAR, to: -3300 },
   { label: 'Antiquité', from: -3300, to: 476 },
@@ -112,6 +121,9 @@ export class Timeline {
   private speed = 0;
   private lastSpeed = 1;
   private speedBtns = new Map<number, HTMLButtonElement>();
+  private marksEl: HTMLElement;
+  /** A step of the file chosen on the timeline. */
+  onMark: (i: number) => void = () => undefined;
 
   /** `onChange` gets the whole years shown and the same window to the day. */
   constructor(root: HTMLElement, initial: TimeWindow, private onChange: (w: TimeWindow, moment: TimeWindow) => void) {
@@ -144,9 +156,15 @@ export class Timeline {
           return `<div class="tl-tick" style="left:${l}%"></div><div class="tl-tick-label" style="left:${l}%">${tickLabel(y)}</div>`;
         }).join('')}</div>
         <div class="tl-window"><div class="tl-handle start"></div><div class="tl-handle end"></div></div>
+        <div class="tl-marks" aria-label="Les étapes de votre file"></div>
       </div>`;
     this.track = root.querySelector('.tl-track')!;
     this.win = root.querySelector('.tl-window')!;
+    this.marksEl = root.querySelector('.tl-marks')!;
+    this.marksEl.addEventListener('click', (e) => {
+      const b = (e.target as Element).closest<HTMLElement>('.tl-mark');
+      if (b) this.onMark(Number(b.dataset.i));
+    });
     this.rangeEl = root.querySelector('.tl-range')!;
     this.bordersEl = root.querySelector('.tl-borders')!;
     this.statusEl = root.querySelector('.tl-status')!;
@@ -336,6 +354,16 @@ export class Timeline {
     this.setSpeed(0);
   }
 
+  /** The scenario's file on the timeline: a mark per step, the one now larger (none: nothing in the file). */
+  setMarks(marks: TimeMark[]): void {
+    // The one now drawn last, above the others.
+    const sorted = [...marks].sort((a, b) => Number(a.state === 'now') - Number(b.state === 'now'));
+    this.marksEl.innerHTML = sorted.map((m) => {
+      const label = m.title.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+      return `<button type="button" class="tl-mark ${m.state}${m.crochet ? ' cr' : ''}" style="left:${(yearToPos(m.year) * 100).toFixed(3)}%" data-i="${m.i}" title="${label}" aria-label="Étape ${label}"><span></span></button>`;
+    }).join('');
+  }
+
   setBordersNote(text: string): void {
     this.bordersEl.textContent = text;
   }
@@ -407,6 +435,7 @@ export class Timeline {
 
     this.track.addEventListener('pointerdown', (e) => {
       const target = e.target as HTMLElement;
+      if (target.closest('.tl-mark')) return; // a step of the file: clicked, not dragged
       const p = this.posFromEvent(e);
       const thin = this.win.classList.contains('thin');
       let mode: Mode = 'move';
