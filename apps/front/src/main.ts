@@ -16,7 +16,7 @@ import {
 import { aiActivity, currentActivity, onActivity, setActivity } from './activity.ts';
 import { BordersLayer, realmKey, type BorderShape } from './borders.ts';
 import { CameraGuide, type Zone } from './camera.ts';
-import { Card, type CardPaths, type CardStep } from './card.ts';
+import { Card, type CardPaths } from './card.ts';
 import { CastLayer, type CastMember } from './cast.ts';
 import { Connection } from './connection.ts';
 import { bounds, contains, divide, type Area, type Region } from './divisions.ts';
@@ -26,13 +26,14 @@ import { formatPop, LivingLayer, NO_LIVING, type Living, type LivingPick } from 
 import { cameraState, createGlobe, restoreCamera, setBasemap, setPaper, viewRect, type Basemap, type CameraState } from './globe.ts';
 import { PoiLayer } from './markers.ts';
 import { PeopleLayer, type Picked } from './people.ts';
-import { bindArticle, Player, ScenarioLibrary, stepArticle, stepDecisions, type Here, type LeadFrom, type ThreadAt } from './scenario.ts';
+import { Player, ScenarioLibrary, stepDecisions, type Here, type LeadFrom, type ThreadAt } from './scenario.ts';
 import { SearchBox } from './search.ts';
 import { StoryLayer } from './storymap.ts';
 import { EntityMenu } from './entity.ts';
 import { fetchCached } from './localcache.ts';
 import { loadUiSettings, playSound } from './sounds.ts';
 import { Timeline, type TimeWindow } from './timeline.ts';
+import { resizable, watchBars, type Resizable } from './layout.ts';
 
 // ---------- persisted per-viewer preferences ----------
 interface Saved {
@@ -81,13 +82,14 @@ function mapZone(): Zone {
     return r.width && r.height ? r : null;
   };
   const phone = w <= 640;
-  const player = box(document.querySelector('#scenario .player'));
+  const scenario = box(document.querySelector('#scenario .sc-card'));
   const card = box(document.getElementById('card'));
-  const left = phone ? 0 : box(document.getElementById('filters'))?.right ?? 0;
-  // The player lies along the bottom, over the timeline while it plays; a phone's card covers all of the map.
+  // The scenario's card on the left (folded, its player lies low on the left: the map stays whole above it);
+  // on a phone, it is a sheet over the bottom, and a card covers all of the map.
+  const left = !phone && scenario && document.body.classList.contains('sc-open') ? scenario.right : 0;
   const right = phone ? w : Math.min(w, card?.left ?? w);
-  const top = box(document.getElementById('search'))?.bottom ?? 0;
-  const bottom = Math.min(h, box(document.getElementById('timeline'))?.top ?? h, player?.top ?? h);
+  const top = box(document.querySelector('.topbar'))?.bottom ?? 0;
+  const bottom = Math.min(h, box(document.getElementById('timeline'))?.top ?? h, phone ? scenario?.top ?? h : h);
   return { left: left + 8, top: top + 8, right: right - 8, bottom: bottom - 8 };
 }
 const camera = new CameraGuide(viewer, mapZone);
@@ -254,10 +256,12 @@ const filters = new Filters(
     if (!on) {
       writeToken++;
       placeToken++;
-      player.setEnabled(false);
     }
+    player.setEnabled(on);
   },
 );
+// The people followed: a menu of the bar too.
+filters.addMenu(document.getElementById('people')!);
 living.onStatus = (text) => filters.setLivingNote(text);
 living.set(filters.living);
 geography.set(filters.geography);
@@ -339,7 +343,7 @@ card.onStoryPerson = (p) => {
   people.follow({ qid: p.qid, name: p.name, description: p.role, born: p.born, died: p.died, image: p.image });
 };
 
-// ---------- scenarios: the player and its file, along the bottom ----------
+// ---------- scenarios: the scenario's card on the left, its player at its foot, its file ----------
 const cast = new CastLayer(viewer);
 const library = new ScenarioLibrary();
 const player = new Player(document.getElementById('scenario')!, () => library.all);
@@ -384,7 +388,10 @@ card.pathState = (id) => player.progressOf(id);
 card.onThread = (kind, poi) => void threadWalk(kind, { poi, year: poi.date_start, lat: poi.lat, lon: poi.lon });
 card.queueAt = (poi) => player.placeIn(poi.id);
 card.onQueueAdd = (poi) => player.add(poi);
-card.onQueueGo = (i) => player.goTo(i);
+card.onQueueGo = (i) => {
+  player.goTo(i);
+  player.unfold();
+};
 /** The card on the right opened by the visitor (not only following the steps). */
 let cardAsked = false;
 // While the file plays, the AI writes its steps first: a card's own paths wait for the card to be asked.
@@ -394,49 +401,35 @@ cardClosed = () => {
   player.refresh();
 };
 
-/** The step now in full, for its place's card ("Lire en entier"). */
-function stepBlock(walk: ScenarioWalk, j: number): CardStep | null {
-  const st = walk.steps[j];
-  if (!st) return null;
-  return {
-    poi: st.poi?.id ?? null,
-    title: st.place,
-    sub: `${formatWhen(st)} · ${st.beat ?? st.label}`,
-    html: stepArticle(walk, j, player.number, player.writing),
-    bind: (el) => bindArticle(el, st, (a, e) => entities.show(a, e)),
-  };
-}
-/** The step in full on the right: in its place's card, or alone when it has none. */
-function readStep(walk: ScenarioWalk, j: number): void {
-  const block = stepBlock(walk, j);
-  const st = walk.steps[j];
-  if (!block || !st) return;
-  card.setStep(block);
-  if (!st.poi) return card.openStep(block);
-  if (card.currentPoi === st.poi.id) return;
-  pois.upsert([st.poi]);
-  pois.select(st.poi.id);
-  void card.open(st.poi.id).then(() => player.refresh());
-}
-player.onRead = (walk, j) => {
-  cardAsked = true;
-  readStep(walk, j);
+player.onChange = () => card.syncScenario(player.playing?.walk ?? null);
+player.onMarks = (marks) => timeline.setMarks(marks);
+timeline.onMark = (i) => player.goTo(i);
+player.refresh(); // the file kept from a previous visit, on the timeline
+
+// The two cards between the bars, each as wide as the visitor made it; the globe keeps its share.
+watchBars(document.querySelector<HTMLElement>('.topbar')!, timelineEl);
+const showing = (cls: string) => document.body.classList.contains(cls);
+const scenarioWidth: Resizable = resizable({
+  grip: document.querySelector<HTMLElement>('.grip-scenario')!, side: 'left', cssVar: '--sc-w', key: 'orbis:width-scenario',
+  def: 400, min: 320, max: 680, other: () => (showing('card-open') ? cardWidth.width : 0),
+});
+const cardWidth: Resizable = resizable({
+  grip: document.querySelector<HTMLElement>('.grip-card')!, side: 'right', cssVar: '--card-w', key: 'orbis:width-card',
+  def: 420, min: 340, max: 680, other: () => (showing('sc-open') ? scenarioWidth.width : 0),
+});
+const fitCards = () => {
+  scenarioWidth.fit();
+  cardWidth.fit();
 };
-player.readOpen = () => card.stepShown;
-player.onChange = () => {
-  const now = player.playing;
-  card.setStep(now ? stepBlock(now.walk, now.step) : null);
-  card.syncScenario(now?.walk ?? null);
-};
+fitCards();
+// A card opened or closed beside the other: both make room for the globe again.
+new MutationObserver(fitCards).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 player.onRoute = (steps, at, options, labels) => storyMap.showWalk(steps, at, options, labels);
 player.onStep = (walk, j, first) => {
   const step = walk.steps[j]!;
   clearTerritory();
   playSound(step.poi?.category ?? 'person');
   timeline.glideTo(step.when ?? step.year);
-  // The card opens on the right only when asked ("Lire en entier"); once open, it follows the steps
-  // gone to, not a file taken up again (the card the visitor opened meanwhile stays).
-  if (!first && (card.currentPoi || card.stepShown) && window.innerWidth > 640) readStep(walk, j);
   // Once the player is laid out: a walk started is framed whole, then the map moves only when a step leaves the view.
   requestAnimationFrame(() => {
     if (first) {
@@ -491,7 +484,7 @@ player.onLead = (lead, how, at) => {
   else void detour('card', lead.poi.id, lead.poi.title, at, () => openCard(lead.poi));
 };
 
-/** Clicked elsewhere on the globe (a point, a territory, a person…): the file waits, the player folds to a bar. */
+/** Clicked elsewhere on the globe (a point, a territory, a person…): the file waits where it is, the camera is the visitor's. */
 const elsewhere = () => player.pause();
 
 const SCENARIO_POLL_MS = 3000;

@@ -46,21 +46,25 @@ explorées juste avant ; leurs étapes suivent l'ordre des jours quand l'article
 s'arrête à sa mort. Deux autres fils, sans IA pour les tracer : **Rester ici** (le même lieu d'époque en époque, les
 moments les plus connus alentour d'après Wikidata) et **Le monde vers telle année** (une fiche par thème — pouvoir,
 guerre, foi, commerce, savoirs… —, loin les unes des autres, en tournée depuis l'endroit où vous êtes). Chaque étape est rédigée à l'arrivée deux fois, d'après
-la section de l'article Wikipédia qui raconte ce moment (et l'article qui la détaille) : en deux ou trois phrases pour **le
-lecteur**, et comme une section d'encyclopédie, à la troisième personne (plusieurs paragraphes, les images de la section
+la section de l'article Wikipédia qui raconte ce moment (et l'article qui la détaille) : en deux ou trois phrases, **le
+récit**, et comme une section d'encyclopédie, à la troisième personne (plusieurs paragraphes, les images de la section
 avec leurs légendes, les personnes que l'article y nomme, des repères datés, une phrase citée mot pour mot, ses sources),
-pour **la fiche**. Les étapes de la vie d'un personnage, et celles des deux fils faits de fiches, sont rédigées de même
-d'après leur propre article. **Le lecteur raconte, la fiche explique** : le chemin se joue dans un lecteur en bas de
-l'écran, à la place de la frise, avec une frise à lui où chaque étape est posée à sa date ; un gros bouton **Suivant**
-avance étape par étape ; **Lire en entier** ouvre à droite la fiche du lieu, qui porte l'étape en entier (puis suit les
-étapes). Les étapes sont rangées dans **la file**, comme sur un lecteur de musique : déjà vu, maintenant, à suivre (☰
-pour la voir, la réordonner, en retirer). Un **crochet** (une personne, un lieu que la section lie, ceux de vos thèmes
-d'abord, en pointillés bleus) glisse quelques étapes en tête de la file, qui reprend d'elle-même après ; **Bifurquer**
-(une bifurcation prévue, toute une vie, ce lieu à travers les siècles, le monde à ce moment) remplace la suite, mise de
-côté comme route non prise ; **+ À la file** sur une fiche y ajoute le lieu. Cliquer ailleurs sur la carte ne quitte
-rien : la fiche du lieu s'ouvre, le lecteur se met en pause et se réduit à une barre (« Reprendre »). Sur le globe, les
-étapes portent les numéros de la frise (flèche dorée pour la suite, trait plein pour une autre route, pointillés bleus
-pour un crochet, cliquables), et l'étape suivante est écrite en sachant les choix faits. L'IA au travail est nommée dans la barre d'état et sur tout ce qu'elle écrit (étapes,
+pour **l'article**. Les étapes de la vie d'un personnage, et celles des deux fils faits de fiches, sont rédigées de même
+d'après leur propre article. **Le scénario à gauche, l'exploration à droite** : le chemin se lit dans la fiche du
+scénario, à gauche, l'étape comme un article (son image, son lieu et son moment, le récit, puis **Lire l'article** pour
+la section entière), avec à son pied **le lecteur** : les étapes de la file en pastilles et un gros bouton **Suivant**
+qui avance étape par étape. ▾ la replie sur son lecteur ; elle ne se ferme jamais d'elle-même. Ce que vous cliquez sur
+la carte ouvre sa propre fiche à droite, et les deux se lisent côte à côte ; chacune s'élargit ou se rétrécit par la
+poignée de son bord intérieur. La frise générale reste en bas, les étapes de la file y sont marquées en or (un clic y
+mène). Les filtres sont réunis en haut, en menus (lentille, thèmes, carte, monde vivant, personnages, échelle) avec
+l'interrupteur des scénarios. Les étapes sont rangées dans **la file**, comme sur un lecteur de musique : déjà vu,
+maintenant, à suivre (☰ pour la voir, la réordonner, en retirer). Un **crochet** (une personne, un lieu que la section
+lie, ceux de vos thèmes d'abord, en pointillés bleus) glisse quelques étapes en tête de la file, qui reprend d'elle-même
+après ; **Bifurquer** (une bifurcation prévue, toute une vie, ce lieu à travers les siècles, le monde à ce moment)
+remplace la suite, mise de côté comme route non prise ; **+ À la file** sur une fiche y ajoute le lieu. Cliquer ailleurs
+sur la carte ne quitte rien : la caméra est à vous jusqu'à **Suivant** (ou ◎). Sur le globe, les étapes portent les
+numéros de la file (flèche dorée pour la suite, trait plein pour une autre route, pointillés bleus pour un crochet,
+cliquables), et l'étape suivante est écrite en sachant les choix faits.L'IA au travail est nommée dans la barre d'état et sur tout ce qu'elle écrit (étapes,
 parcours, rôles des lieux, flux, fiches traduites ou rédigées). La caméra ne bouge que si l'étape sort de la vue, sans
 changer de hauteur ni d'inclinaison. Boutons
 ◂◂◂ … ▸▸▸ sous la timeline (ou ← ↓ → et Espace) : reculer, pause, avancer, jusqu'au jour près. Sons (et import de vos propres fichiers audio), ouverture

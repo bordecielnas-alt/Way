@@ -368,24 +368,34 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
 
 ## Le lecteur et la file
 
-La pellicule se lisait mal, la fiche mêlée au chemin brouillait tout, le carnet enfermait dans un mode. On
-sépare donc par la nature du texte et non par l'endroit, et le chemin n'est plus un mode.
+La pellicule se lisait mal, la fiche mêlée au chemin brouillait tout, le carnet enfermait dans un mode. Un premier
+lecteur en bas, qui racontait court et renvoyait l'article dans la fiche du lieu, cachait encore la frise générale et
+mêlait l'étape à la fiche. On sépare donc par le côté de l'écran : à gauche ce que raconte le scénario, à droite ce
+qu'on explore.
 
-- **Le lecteur raconte, la fiche explique** : en bas, une étape tient en deux ou trois phrases (le « récit »,
-  écrit par l'IA dans le même appel que la section longue, au présent ; à défaut, les premières phrases de la
-  section). « Lire en entier » ouvre à droite la fiche du lieu, qui porte l'étape comme une section de son
-  article (« L'étape 4 de votre file raconte ce moment »), ou l'étape seule quand le lieu n'a pas de fiche. Une
-  fiche ouverte suit les étapes quand on avance, pas quand on reprend.
+- **La fiche du scénario, à gauche** : l'étape comme un article (son image, son lieu et son moment, le « récit » en
+  deux ou trois phrases, écrit par l'IA dans le même appel que la section longue, ou à défaut les premières phrases de
+  la section ; « Lire l'article » déplie la section entière, et reste déplié d'une étape à l'autre si on le laisse
+  ainsi), puis les crochets et « Bifurquer ». Le lecteur est à son pied : les pastilles de la file autour de l'étape,
+  ☰ pour toute la file, précédent, « Suivant », ▾ pour replier. Repliée, il ne reste que le lecteur en bas à gauche ;
+  elle ne se replie ni ne se ferme jamais d'elle-même (✕ la range, la file reste, un bouton la rappelle).
+- **La fiche du lieu, à droite** : ce qu'on clique sur la carte, comme avant, sans l'étape ; « Dans votre file, étape
+  N » y mène (« Lire l'étape » si c'est l'étape en cours). Les deux fiches restent ouvertes ensemble, sans bascule
+  automatique ; chacune se règle en largeur par une poignée sur son bord intérieur (gardée dans le navigateur, le globe
+  garde au moins 320 px). Sur téléphone, le scénario est une feuille en bas, la fiche du lieu passe par-dessus.
+- **La frise générale reste** : les étapes de la file y sont marquées en or (l'étape en cours plus grosse, un clic
+  y mène) ; il n'y a plus de frise propre au lecteur.
+- **Les filtres en haut** : une barre avec la recherche et des menus (lentille, thèmes, carte — territoires,
+  géographie, blasons —, monde vivant, personnages, échelle), chacun affichant son réglage, et l'interrupteur des
+  scénarios ; le panneau de gauche et celui des personnages disparaissent. Les étapes de la file restent sur la carte,
+  quels que soient les thèmes.
 - **La file, comme un lecteur de musique** : déjà vu, maintenant, à suivre (`queue.ts`, pur et testé). Un
   scénario remplit la suite ; un crochet glisse ses étapes en tête (pointillés bleus) et la file reprend
   d'elle-même après, sans bouton « retour » ni interdiction de crochet dans un crochet ; « Bifurquer » remplace
   la suite, mise de côté comme route non prise et reprenable ; « + À la file » sur une fiche ajoute le lieu juste
-  après l'étape en cours. On avance étape par étape (pas de minuterie). La file est gardée dans le navigateur ;
-  l'arbre des chemins et « Mes chemins » disparaissent (le dernier chemin non fini de l'ancien carnet devient la file).
-- **Pas de mode** : un clic ailleurs sur la carte ouvre la fiche du lieu et met le lecteur en pause, réduit à
-  une barre, la frise générale revenue, la caméra au visiteur ; « Reprendre » ramène la caméra à l'étape et laisse
-  la fiche ouverte. Pendant la lecture, une frise propre à la file place chaque étape à sa date (crochets compris,
-  même en arrière dans le temps) et remplace la frise générale.
+  après l'étape en cours. On avance étape par étape (pas de minuterie). La file est gardée dans le navigateur.
+- **Pas de mode** : un clic ailleurs sur la carte laisse la fiche du scénario telle quelle et donne la caméra au
+  visiteur ; « Suivant » (ou ◎) la ramène aux étapes.
 - Pas de voix pour l'instant.
 
 ## Pellicule, crochets et fils (remplacé par le lecteur et la file, sauf les fils)

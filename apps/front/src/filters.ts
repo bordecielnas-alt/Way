@@ -6,6 +6,7 @@ import { FAITH_COLORS } from './borders.ts';
 import { GEOGRAPHY, type Geography } from './geography.ts';
 import { CATEGORY_COLORS, PEOPLE_COLOR, THEME_COLORS } from './icons.ts';
 import { LIVING, type Living } from './living.ts';
+import { bindMenu } from './menus.ts';
 
 /** Impact scale (brief §4.7): how many minor points show at a given zoom. */
 export type Scale = 'major' | 'selection' | 'all';
@@ -37,9 +38,11 @@ function lensFilter(l: Lens): ThemeFilter {
 }
 
 /**
- * The left panel: lenses (ready-made views), the backdrop of the territories,
- * the impact scale, the themes (with their finer categories on demand, they
- * double as the map legend), the geography layers and the coats of arms.
+ * The filters, as menus in the bar on top: lenses (ready-made views), the
+ * themes (with their finer categories on demand, they double as the map
+ * legend), the map (the backdrop of the territories, the geography layers, the
+ * coats of arms), the Monde vivant, the impact scale; each says its choice on
+ * its button. Scenarios on or off, a switch at the end.
  */
 export class Filters {
   private themeButtons = new Map<Theme, HTMLButtonElement>();
@@ -70,45 +73,41 @@ export class Filters {
     public scenarios: boolean,
     private onScenarios: (on: boolean) => void,
   ) {
-    root.innerHTML = `
-      <button type="button" class="filters-fold" aria-expanded="true">
-        <span class="filters-title">Filtres</span><span class="fsec-sum"></span><span class="fsec-chev" aria-hidden="true"></span>
-      </button>
-      <div class="filters-body">
-      ${section('lenses', 'Lentilles', `<div class="lenses" role="group" aria-label="Lentilles">${LENSES.map(
+    root.innerHTML = `<div class="fbar" role="group" aria-label="Filtres">
+      ${menu('lenses', 'Lentille', `<div class="lenses" role="group" aria-label="Lentilles">${LENSES.map(
         (l) => `<button type="button" data-lens="${l.id}" title="${l.title}">${l.label}</button>`,
       ).join('')}</div>`)}
-      ${section('backdrop', 'Territoires',`<div class="scale" role="group" aria-label="Fond des territoires">${(Object.keys(BACKDROP_LABELS) as Backdrop[]).map(
-        (b) => `<button type="button" data-backdrop="${b}" title="${BACKDROP_LABELS[b].title}">${BACKDROP_LABELS[b].label}</button>`,
-      ).join('')}</div>
-      <div class="faith-legend" hidden>${FAITHS.map(
-        (f) => `<span class="faith"><span class="chip-dot" style="background:${FAITH_COLORS[f]}"></span>${FAITH_LABELS[f]}</span>`,
-      ).join('')}<span class="faith"><span class="chip-dot unknown"></span>Inconnue</span></div>`)}
-      ${section('scale', 'Échelle', `<div class="scale" role="group" aria-label="Échelle d’impact">${SCALES.map(
-        (s) => `<button type="button" data-scale="${s.value}" title="${s.title}">${s.label}</button>`,
-      ).join('')}</div>`)}
-      ${section('themes', 'Thèmes', `<div class="themes-tools">
+      ${menu('themes', 'Thèmes', `<div class="themes-tools">
           <button class="filters-toggle filters-detail" type="button" title="Afficher les catégories de chaque thème">Détail</button>
           <button class="filters-toggle filters-all" type="button">Tout afficher</button>
         </div>
-        <div class="themes"></div>`)}
-      ${section('living', 'Monde vivant', `<div class="geo-chips" role="group" aria-label="Monde vivant">${LIVING.map(
+        <div class="themes"></div>
+        <p class="fpop-note">Les étapes de votre file restent sur la carte, quels que soient les thèmes.</p>`)}
+      ${menu('map', 'Carte', `<div class="filters-title fpop-sub">Territoires</div>
+        <div class="scale" role="group" aria-label="Fond des territoires">${(Object.keys(BACKDROP_LABELS) as Backdrop[]).map(
+          (b) => `<button type="button" data-backdrop="${b}" title="${BACKDROP_LABELS[b].title}">${BACKDROP_LABELS[b].label}</button>`,
+        ).join('')}</div>
+        <div class="faith-legend" hidden>${FAITHS.map(
+          (f) => `<span class="faith"><span class="chip-dot" style="background:${FAITH_COLORS[f]}"></span>${FAITH_LABELS[f]}</span>`,
+        ).join('')}<span class="faith"><span class="chip-dot unknown"></span>Inconnue</span></div>
+        <div class="filters-title fpop-sub">Géographie</div>
+        <div class="geo-chips" role="group" aria-label="Géographie">${GEOGRAPHY.map(
+          (g) => `<button type="button" class="chip" data-geo="${g.key}" title="${g.title}"><span class="chip-dot" style="background:${g.color}"></span>${g.label}</button>`,
+        ).join('')}</div>
+        <div class="filters-title fpop-sub">Blasons</div>
+        <div class="scale heraldry" role="group" aria-label="Blasons et drapeaux">${HERALDRY.map(
+          (h) => `<button type="button" data-heraldry="${h.key}" title="${h.title}">${h.label}</button>`,
+        ).join('')}</div>`)}
+      ${menu('living', 'Monde vivant', `<div class="geo-chips" role="group" aria-label="Monde vivant">${LIVING.map(
         (g) => `<button type="button" class="chip" data-living="${g.key}" title="${g.title}"><span class="chip-dot" style="background:${g.color}"></span>${g.label}</button>`,
       ).join('')}</div>
       <div class="living-note" hidden></div>`)}
-      ${section('geography', 'Géographie', `<div class="geo-chips" role="group" aria-label="Géographie">${GEOGRAPHY.map(
-        (g) => `<button type="button" class="chip" data-geo="${g.key}" title="${g.title}"><span class="chip-dot" style="background:${g.color}"></span>${g.label}</button>`,
+      ${menu('scale', 'Échelle', `<div class="scale" role="group" aria-label="Échelle d’impact">${SCALES.map(
+        (x) => `<button type="button" data-scale="${x.value}" title="${x.title}">${x.label}</button>`,
       ).join('')}</div>`)}
-      ${section('scenarios', 'Scénarios', `<div class="scale" role="group" aria-label="Scénarios">
-        <button type="button" data-scenarios="on" title="L’IA écrit des scénarios sur les fiches, et pour les personnages cherchés">Activés</button>
-        <button type="button" data-scenarios="off" title="Plus aucun scénario écrit ni proposé">Désactivés</button>
-      </div>
-      <div class="living-note scenarios-note">Désactivés : l’IA n’écrit plus aucun scénario, rien ne lui est demandé.</div>`)}
-      ${section('heraldry', 'Blasons', `<div class="scale heraldry" role="group" aria-label="Blasons et drapeaux">${HERALDRY.map(
-        (h) => `<button type="button" data-heraldry="${h.key}" title="${h.title}">${h.label}</button>`,
-      ).join('')}</div>`)}
+      <button type="button" class="fb-switch" data-scenarios aria-pressed="true"><span class="fb-track" aria-hidden="true"></span>Scénarios</button>
       </div>`;
-    this.bindFolds();
+    this.bindMenus();
 
     // ---------- themes, and their categories in detail ----------
     const box = root.querySelector<HTMLElement>('.themes')!;
@@ -212,15 +211,11 @@ export class Filters {
         this.onGeography(this.geography);
       });
     });
-    root.querySelectorAll<HTMLButtonElement>('[data-scenarios]').forEach((b) =>
-      b.addEventListener('click', () => {
-        const on = b.dataset.scenarios === 'on';
-        if (on === this.scenarios) return;
-        this.scenarios = on;
-        this.syncScenarios();
-        this.onScenarios(on);
-      }),
-    );
+    root.querySelector<HTMLButtonElement>('[data-scenarios]')!.addEventListener('click', () => {
+      this.scenarios = !this.scenarios;
+      this.syncScenarios();
+      this.onScenarios(this.scenarios);
+    });
     this.syncScenarios();
     if (!this.scaleButtons.has(this.scale)) this.scale = 'selection';
     if (!this.backdropButtons.has(this.backdrop)) this.backdrop = 'political';
@@ -256,57 +251,35 @@ export class Filters {
     set(this.peopleButton, people);
   }
 
-  /** Folding: the whole panel, and each section (open ones remembered). */
-  private bindFolds(): void {
-    const open = loadFolds();
-    const fold = this.root.querySelector<HTMLButtonElement>('.filters-fold')!;
-    const setPanel = (on: boolean) => {
-      fold.setAttribute('aria-expanded', String(on));
-      this.root.classList.toggle('folded', !on);
-    };
-    setPanel(open.panel !== false);
-    fold.addEventListener('click', () => {
-      const on = this.root.classList.contains('folded');
-      setPanel(on);
-      saveFolds({ ...loadFolds(), panel: on });
-    });
-    this.root.querySelectorAll<HTMLElement>('.fsec').forEach((sec) => {
-      const id = sec.dataset.sec!;
-      const head = sec.querySelector<HTMLButtonElement>('.fsec-head')!;
-      const set = (on: boolean) => {
-        head.setAttribute('aria-expanded', String(on));
-        sec.classList.toggle('open', on);
-      };
-      set(open[id] ?? DEFAULT_OPEN.includes(id));
-      head.addEventListener('click', () => {
-        const on = !sec.classList.contains('open');
-        set(on);
-        saveFolds({ ...loadFolds(), [id]: on });
-      });
+  /** Another menu in the bar (the people followed), before the switch. */
+  addMenu(el: HTMLElement): void {
+    this.root.querySelector('.fb-switch')!.before(el);
+  }
+
+  /** Each menu opens under its button, one at a time. */
+  private bindMenus(): void {
+    this.root.querySelectorAll<HTMLElement>('.fmenu').forEach((box) => {
+      bindMenu(box, box.querySelector<HTMLButtonElement>('.fb')!, box.querySelector<HTMLElement>('.fpop')!);
     });
   }
 
-  /** The current choice of each section, written in its header: a folded section still says what it does. */
+  /** The current choice of each menu, written on its button: a closed menu still says what it does. */
   private summarize(): void {
     if (!this.legend) return; // still being built
     const sum = (id: string, text: string) => {
-      const el = this.root.querySelector<HTMLElement>(`.fsec[data-sec="${id}"] .fsec-sum`);
+      const el = this.root.querySelector<HTMLElement>(`.fmenu[data-sec="${id}"] .fsec-sum`);
       if (el) el.textContent = text;
     };
     const lens = LENSES.find((l) => this.lensButtons.get(l.id)?.getAttribute('aria-pressed') === 'true');
     sum('lenses', lens?.label ?? 'Personnalisée');
-    sum('backdrop', BACKDROP_LABELS[this.backdrop].label);
+    const geo = GEOGRAPHY.filter((g) => this.geography[g.key]).length;
+    sum('map', `${BACKDROP_LABELS[this.backdrop].label}${geo ? ` · ${geo}` : ''}`);
     sum('scale', SCALES.find((s) => s.value === this.scale)?.label ?? '');
     const on = THEMES.length - this.themes.hiddenThemes.length;
     const all = on === THEMES.length && this.themes.people && !this.themes.hiddenCats.length;
-    sum('themes', all ? 'Tous' : `${on}/${THEMES.length}${this.themes.people ? ' · personnages' : ''}`);
-    const count = (n: number) => (n ? `${n} actif${n > 1 ? 's' : ''}` : 'Aucun');
-    sum('living', count(LIVING.filter((g) => this.living[g.key]).length));
-    sum('geography', count(GEOGRAPHY.filter((g) => this.geography[g.key]).length));
-    sum('scenarios', this.scenarios ? 'Activés' : 'Désactivés');
-    sum('heraldry', HERALDRY.filter((h) => this.heraldry[h.key]).map((h) => h.label).join(' · ') || 'Aucun');
-    // Folded panel: the lens (else the backdrop) recalls the view.
-    this.root.querySelector<HTMLElement>('.filters-fold .fsec-sum')!.textContent = lens?.label ?? BACKDROP_LABELS[this.backdrop].label;
+    sum('themes', all ? 'Tous' : `${on} / ${THEMES.length}`);
+    const living = LIVING.filter((g) => this.living[g.key]).length;
+    sum('living', living ? String(living) : 'Aucun');
   }
 
   private toggleTheme(t: Theme): void {
@@ -351,11 +324,11 @@ export class Filters {
   }
 
   private syncScenarios(): void {
-    this.root.querySelectorAll<HTMLButtonElement>('[data-scenarios]').forEach((b) =>
-      b.setAttribute('aria-pressed', String((b.dataset.scenarios === 'on') === this.scenarios)),
-    );
-    this.root.querySelector<HTMLElement>('.scenarios-note')!.hidden = this.scenarios;
-    this.summarize();
+    const b = this.root.querySelector<HTMLButtonElement>('[data-scenarios]')!;
+    b.setAttribute('aria-pressed', String(this.scenarios));
+    b.title = this.scenarios
+      ? 'Scénarios activés : l’IA écrit des scénarios sur les fiches, et pour les personnages cherchés'
+      : 'Scénarios désactivés : l’IA n’écrit plus aucun scénario, rien ne lui est demandé';
   }
 
   private syncScale(): void {
@@ -405,33 +378,12 @@ export class Filters {
   }
 }
 
-/** Sections open the first time: the ready-made views and the themes. */
-const DEFAULT_OPEN = ['lenses', 'themes'];
-const FOLDS_KEY = 'orbis:filters-open';
-
-function section(id: string, title: string, body: string): string {
-  return `<section class="fsec" data-sec="${id}">
-    <button type="button" class="fsec-head" aria-expanded="false">
-      <span class="filters-title">${title}</span><span class="fsec-sum"></span><span class="fsec-chev" aria-hidden="true"></span>
-    </button>
-    <div class="fsec-body">${body}</div>
-  </section>`;
-}
-
-function loadFolds(): Record<string, boolean> {
-  try {
-    return JSON.parse(localStorage.getItem(FOLDS_KEY) ?? '{}') as Record<string, boolean>;
-  } catch {
-    return {};
-  }
-}
-
-function saveFolds(f: Record<string, boolean>): void {
-  try {
-    localStorage.setItem(FOLDS_KEY, JSON.stringify(f));
-  } catch {
-    /* not remembered */
-  }
+/** A menu of the bar: its button says its choice, its panel opens under it. */
+function menu(id: string, title: string, body: string): string {
+  return `<div class="fmenu" data-sec="${id}">
+    <button type="button" class="fb" aria-expanded="false"><span class="fb-title">${title}</span><b class="fsec-sum"></b><span class="fsec-chev" aria-hidden="true"></span></button>
+    <div class="fpop" role="group" aria-label="${title}" hidden>${body}</div>
+  </div>`;
 }
 
 function chip(color: string, label: string): HTMLButtonElement {

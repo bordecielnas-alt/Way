@@ -73,19 +73,6 @@ export interface CardPaths {
   status: 'ready' | 'pending' | 'none' | 'no-ai';
 }
 
-/**
- * A step of the file in full ("Lire en entier"), held by the card of its
- * place, under its title: a section of the place's article. `poi` null: a
- * step with no card of its own, read alone.
- */
-export interface CardStep {
-  poi: string | null;
-  title: string;
-  sub: string;
-  html: string;
-  bind: (el: HTMLElement) => void;
-}
-
 /** Where a card's place comes in the file: its number there, and whether it is the step now. */
 export interface CardInQueue {
   i: number;
@@ -140,10 +127,6 @@ export class Card {
   onQueueAdd: (poi: PoiLite) => void = () => undefined;
   /** "Y aller": that step of the file now. */
   onQueueGo: (i: number) => void = () => undefined;
-  /** The step of the file held in full, by its place's card (or read alone). */
-  private step: CardStep | null = null;
-  /** The card shows a step with no card of its own. */
-  private readAlone = false;
   /** Scenarios turned off in the filters: none asked for, none shown. */
   private scenariosOn = true;
   /** The story shown on the current card, and its scenarios as walks. */
@@ -164,67 +147,7 @@ export class Card {
   /** A new card, or none: what the previous one drew on the globe goes. */
   private set token(v: number) {
     this.tokenValue = v;
-    this.readAlone = false;
     this.onStory(null);
-  }
-
-  /** Does the card show the step held, in full? */
-  get stepShown(): boolean {
-    const s = this.step;
-    return !this.root.hidden && !!s && (s.poi ? this.shown === s.poi && !!this.root.querySelector('.card-step:not([hidden])') : this.readAlone);
-  }
-
-  /**
-   * The step of the file to hold in full (null: none): shown at once when
-   * its place's card is open (or the step read alone), else when it opens.
-   */
-  setStep(s: CardStep | null): void {
-    this.step = s;
-    if (this.readAlone && !s) return this.close();
-    // Read alone, the next step has a card: it opens in its place.
-    if (this.readAlone && s?.poi) return;
-    this.fillStep();
-  }
-
-  /** A step with no card of its own, read alone in the panel. */
-  openStep(s: CardStep): void {
-    ++this.token;
-    this.step = s;
-    this.readAlone = true;
-    this.shown = null;
-    this.root.hidden = false;
-    document.body.classList.add('card-open');
-    this.root.innerHTML = `
-      <button class="card-close" type="button" aria-label="Fermer">×</button>
-      <div class="card-scroll"><div class="card-body">
-        <div class="card-kicker"><span class="card-cat">Étape de votre file</span></div>
-        <h2 class="card-title">${esc(s.title)}</h2>
-        <div class="card-date">${esc(s.sub)}</div>
-        <div class="card-step"></div>
-      </div></div>`;
-    this.bindClose();
-    this.fillStep();
-  }
-
-  private fillStep(): void {
-    const box = this.root.querySelector<HTMLElement>('.card-step');
-    if (!box) return;
-    const s = this.step;
-    const here = !!s && (s.poi ? this.shown === s.poi : this.readAlone);
-    box.hidden = !here;
-    // Only when it changed: a picture chosen or the page read stays as it is.
-    if (!here) {
-      box.innerHTML = '';
-      delete box.dataset.html;
-      return;
-    }
-    if (box.dataset.html === s.html) return;
-    const fresh = box.cloneNode(false) as HTMLElement;
-    fresh.innerHTML = s.html;
-    fresh.dataset.html = s.html;
-    fresh.hidden = false;
-    box.replaceWith(fresh);
-    s.bind(fresh);
   }
 
   /** "Dans votre file": where the card's place comes in it, a way there, and "+ À la file". */
@@ -239,7 +162,7 @@ export class Card {
     const at = this.queueAt(poi);
     box.hidden = false;
     box.innerHTML = at?.now
-      ? `<span class="cq-mark now">${esc(at.n)}</span><span class="cq-text">L’étape de votre file en ce moment</span>`
+      ? `<span class="cq-mark now">${esc(at.n)}</span><span class="cq-text">L’étape de votre file en ce moment</span><button type="button" class="cq-go" data-go="${at.i}" title="La fiche du scénario, à gauche, sur cette étape">Lire l’étape</button>`
       : `${at ? `<span class="cq-mark">${esc(at.n)}</span><span class="cq-text">Dans votre file, étape ${esc(at.n)}</span><button type="button" class="cq-go" data-go="${at.i}">Y aller</button>` : ''}
         <button type="button" class="cq-add" title="Ce lieu juste après l’étape en cours de votre file">+ À la file</button>`;
     box.querySelector<HTMLButtonElement>('.cq-go')?.addEventListener('click', (e) => this.onQueueGo(Number((e.currentTarget as HTMLElement).dataset.go)));
@@ -714,7 +637,6 @@ export class Card {
           <div class="card-date">${formatPoiDate(p.date_start, p.date_end, p.date_precision)}</div>
           ${p.description ? `<div class="card-desc">${esc(p.description)}</div>` : ''}
           <div class="card-queue" hidden></div>
-          <div class="card-step" hidden></div>
           <div class="card-paths" hidden></div>
           ${summary}
           <div class="card-section doors" hidden>
@@ -740,7 +662,6 @@ export class Card {
     this.bindClose();
     this.bindTrail();
     this.renderQueue();
-    this.fillStep();
     const img = this.root.querySelector<HTMLImageElement>('.card-image img');
     if (img) {
       img.addEventListener('load', () => img.classList.add('loaded'));
