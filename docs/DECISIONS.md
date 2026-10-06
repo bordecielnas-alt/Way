@@ -366,17 +366,30 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
 - **Balayage** : les royaumes suivis passent avant les autres ; leur fiche et leurs régions sont revérifiées
   (3 royaumes par passage). La page Réglages indique combien de royaumes sont suivis de près.
 
-## Pellicule, crochets et fils
+## Le lecteur et la file
 
-- **À droite on lit, en bas on avance** : un chemin joué est une pellicule en bas de l'écran, à la place de la
-  frise (cachée pendant la lecture, elle revient en pause). La fiche n'est plus un onglet du carnet : elle s'ouvre
-  à droite seulement si on la demande (bouton « Fiche » du bandeau), puis suit les étapes jusqu'à ce qu'on la ferme.
-  Ses propres parcours ne sont écrits que si on l'a demandée : l'IA écrit l'étape d'abord.
-- **Trois gestes au carrefour** : « Étape suivante » (le gros bouton) ; « Faire un crochet » (quelques pas de
-  côté qui reviennent d'eux-mêmes, en bleu pointillé partout : carrefour, pellicule, globe) ; « Changer de route »
-  (aller simple, trait plein : bifurcation prévue, toute une vie, un lieu à travers les siècles, le monde à ce
-  moment). Un crochet pris depuis un crochet revient au même endroit que lui : jamais de parenthèse dans une
-  parenthèse. Le bandeau d'un crochet porte toujours « ↩ Retour à… ».
+La pellicule se lisait mal, la fiche mêlée au chemin brouillait tout, le carnet enfermait dans un mode. On
+sépare donc par la nature du texte et non par l'endroit, et le chemin n'est plus un mode.
+
+- **Le lecteur raconte, la fiche explique** : en bas, une étape tient en deux ou trois phrases (le « récit »,
+  écrit par l'IA dans le même appel que la section longue, au présent ; à défaut, les premières phrases de la
+  section). « Lire en entier » ouvre à droite la fiche du lieu, qui porte l'étape comme une section de son
+  article (« L'étape 4 de votre file raconte ce moment »), ou l'étape seule quand le lieu n'a pas de fiche. Une
+  fiche ouverte suit les étapes quand on avance, pas quand on reprend.
+- **La file, comme un lecteur de musique** : déjà vu, maintenant, à suivre (`queue.ts`, pur et testé). Un
+  scénario remplit la suite ; un crochet glisse ses étapes en tête (pointillés bleus) et la file reprend
+  d'elle-même après, sans bouton « retour » ni interdiction de crochet dans un crochet ; « Bifurquer » remplace
+  la suite, mise de côté comme route non prise et reprenable ; « + À la file » sur une fiche ajoute le lieu juste
+  après l'étape en cours. On avance étape par étape (pas de minuterie). La file est gardée dans le navigateur ;
+  l'arbre des chemins et « Mes chemins » disparaissent (le dernier chemin non fini de l'ancien carnet devient la file).
+- **Pas de mode** : un clic ailleurs sur la carte ouvre la fiche du lieu et met le lecteur en pause, réduit à
+  une barre, la frise générale revenue, la caméra au visiteur ; « Reprendre » ramène la caméra à l'étape et laisse
+  la fiche ouverte. Pendant la lecture, une frise propre à la file place chaque étape à sa date (crochets compris,
+  même en arrière dans le temps) et remplace la frise générale.
+- Pas de voix pour l'instant.
+
+## Pellicule, crochets et fils (remplacé par le lecteur et la file, sauf les fils)
+
 - **Fils** : les trois parcours d'une histoire suivent quelqu'un, une chose, une idée (plus deux personnes et un
   fil). Deux fils sont faits de fiches, sans IA pour les tracer : *Rester ici* (requête Wikidata autour du lieu
   comme la porte « ici, plus tard », 8 moments au plus, les plus connus et espacés dans le temps, ceux d'après

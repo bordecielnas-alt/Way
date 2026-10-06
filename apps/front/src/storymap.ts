@@ -9,9 +9,9 @@ import { greatCircle } from './living.ts';
 // named points (gold where it happened, blue its origins, rose what it led
 // to), the places its article only cites as small dots. A place with its
 // own card is ringed: a door into its own story. Cleared with the card.
-// While a path plays, its steps instead, numbered, the one played in gold,
-// the route lived drawn plain, the route ahead dashed; from the step played,
-// where it may go, as the film's crossroads says it: the way on (an arrow),
+// While the file plays, its steps instead, numbered as on the player's
+// frieze, the one now in gold, the route lived drawn plain, the route ahead
+// dashed; from the step now, where it may go, as the player offers it: the way on (an arrow),
 // another route (a plain line, one way) and the places of its crochets (blue
 // dashes, they come back), each clickable.
 
@@ -50,8 +50,8 @@ export class StoryLayer {
     this.lines.add({ positions: pts.map(([lat, lon]) => Cartesian3.fromDegrees(lon, lat, 600)), width, material });
   }
 
-  /** The steps of the path played, numbered; `at`: the one played; `options`: where it may go from there. */
-  showWalk(steps: WalkStep[], at: number, options: RouteOption[] = []): void {
+  /** The steps of the file, numbered (`labels`, else from 1); `at`: the one now; `options`: where it may go from there. */
+  showWalk(steps: WalkStep[], at: number, options: RouteOption[] = [], labels: string[] = []): void {
     this.clear();
     this.steps = steps;
     this.options = options;
@@ -102,7 +102,7 @@ export class StoryLayer {
       });
       this.labels.add({
         position, id: { step: j },
-        text: on ? `${j + 1}. ${s.place}` : String(j + 1),
+        text: on ? `${labels[j] ?? j + 1}. ${s.place}` : labels[j] ?? String(j + 1),
         font: `${on ? 700 : 600} 12px "Inter Variable", system-ui, sans-serif`,
         fillColor: Color.fromCssColorString(on ? '#f2c66d' : '#f4ead6'), outlineColor: Color.fromCssColorString('#07090d').withAlpha(0.9),
         outlineWidth: 3, style: LabelStyle.FILL_AND_OUTLINE,

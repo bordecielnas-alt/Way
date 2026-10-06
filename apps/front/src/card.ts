@@ -66,11 +66,31 @@ const STORY_POLL_MS = 1500;
 const LABEL_POLL_MS = 3000;
 const STORY_WAIT_MS = 150_000;
 
-/** A card's own scenarios, for the carnet: `pending` while an AI writes them. */
+/** A card's own scenarios, for the player: `pending` while an AI writes them. */
 export interface CardPaths {
   poi: PoiLite;
   walks: ScenarioWalk[];
   status: 'ready' | 'pending' | 'none' | 'no-ai';
+}
+
+/**
+ * A step of the file in full ("Lire en entier"), held by the card of its
+ * place, under its title: a section of the place's article. `poi` null: a
+ * step with no card of its own, read alone.
+ */
+export interface CardStep {
+  poi: string | null;
+  title: string;
+  sub: string;
+  html: string;
+  bind: (el: HTMLElement) => void;
+}
+
+/** Where a card's place comes in the file: its number there, and whether it is the step now. */
+export interface CardInQueue {
+  i: number;
+  n: string;
+  now: boolean;
 }
 
 /** Right-hand side panel with the selected point's card. */
@@ -98,9 +118,9 @@ export class Card {
   onStoryPerson: (p: StoryPerson) => void = () => undefined;
   /** How the visitor looks at the world now (the walk so far is added by the card). */
   scenarioContext: () => Omit<ScenarioContext, 'trail'> = () => ({ lens: null, themes: [...THEMES], people: true });
-  /** The chip "N chemins passent ici" clicked: the carnet opens on them. */
+  /** The chip "N chemins passent ici" clicked: they open above the player. */
   onPaths: (at: CardPaths) => void = () => undefined;
-  /** The card's own scenarios written or changed (the carnet may be showing them; the search bar remembers them). */
+  /** The card's own scenarios written or changed (the player may be showing them; the search bar remembers them). */
   onPathsChanged: (at: CardPaths) => void = () => undefined;
   /** The paths of a person followed (their card's chip). */
   onPersonPaths: (p: StoryPerson) => void = () => undefined;
@@ -114,6 +134,16 @@ export class Card {
   waitRoles: () => boolean = () => false;
   /** Where the visitor is in a path, if started. */
   pathState: (id: string) => { step: number; done: boolean } | undefined = () => undefined;
+  /** Where the card's place comes in the file, if it does. */
+  queueAt: (poi: PoiLite) => CardInQueue | null = () => null;
+  /** "+ À la file": the place right after the step now. */
+  onQueueAdd: (poi: PoiLite) => void = () => undefined;
+  /** "Y aller": that step of the file now. */
+  onQueueGo: (i: number) => void = () => undefined;
+  /** The step of the file held in full, by its place's card (or read alone). */
+  private step: CardStep | null = null;
+  /** The card shows a step with no card of its own. */
+  private readAlone = false;
   /** Scenarios turned off in the filters: none asked for, none shown. */
   private scenariosOn = true;
   /** The story shown on the current card, and its scenarios as walks. */
@@ -134,7 +164,86 @@ export class Card {
   /** A new card, or none: what the previous one drew on the globe goes. */
   private set token(v: number) {
     this.tokenValue = v;
+    this.readAlone = false;
     this.onStory(null);
+  }
+
+  /** Does the card show the step held, in full? */
+  get stepShown(): boolean {
+    const s = this.step;
+    return !this.root.hidden && !!s && (s.poi ? this.shown === s.poi && !!this.root.querySelector('.card-step:not([hidden])') : this.readAlone);
+  }
+
+  /**
+   * The step of the file to hold in full (null: none): shown at once when
+   * its place's card is open (or the step read alone), else when it opens.
+   */
+  setStep(s: CardStep | null): void {
+    this.step = s;
+    if (this.readAlone && !s) return this.close();
+    // Read alone, the next step has a card: it opens in its place.
+    if (this.readAlone && s?.poi) return;
+    this.fillStep();
+  }
+
+  /** A step with no card of its own, read alone in the panel. */
+  openStep(s: CardStep): void {
+    ++this.token;
+    this.step = s;
+    this.readAlone = true;
+    this.shown = null;
+    this.root.hidden = false;
+    document.body.classList.add('card-open');
+    this.root.innerHTML = `
+      <button class="card-close" type="button" aria-label="Fermer">×</button>
+      <div class="card-scroll"><div class="card-body">
+        <div class="card-kicker"><span class="card-cat">Étape de votre file</span></div>
+        <h2 class="card-title">${esc(s.title)}</h2>
+        <div class="card-date">${esc(s.sub)}</div>
+        <div class="card-step"></div>
+      </div></div>`;
+    this.bindClose();
+    this.fillStep();
+  }
+
+  private fillStep(): void {
+    const box = this.root.querySelector<HTMLElement>('.card-step');
+    if (!box) return;
+    const s = this.step;
+    const here = !!s && (s.poi ? this.shown === s.poi : this.readAlone);
+    box.hidden = !here;
+    // Only when it changed: a picture chosen or the page read stays as it is.
+    if (!here) {
+      box.innerHTML = '';
+      delete box.dataset.html;
+      return;
+    }
+    if (box.dataset.html === s.html) return;
+    const fresh = box.cloneNode(false) as HTMLElement;
+    fresh.innerHTML = s.html;
+    fresh.dataset.html = s.html;
+    fresh.hidden = false;
+    box.replaceWith(fresh);
+    s.bind(fresh);
+  }
+
+  /** "Dans votre file": where the card's place comes in it, a way there, and "+ À la file". */
+  private renderQueue(): void {
+    const box = this.root.querySelector<HTMLElement>('.card-queue');
+    const poi = this.shownLite;
+    if (!box || !poi || this.shown !== poi.id) return;
+    if (!this.scenariosOn) {
+      box.hidden = true;
+      return;
+    }
+    const at = this.queueAt(poi);
+    box.hidden = false;
+    box.innerHTML = at?.now
+      ? `<span class="cq-mark now">${esc(at.n)}</span><span class="cq-text">L’étape de votre file en ce moment</span>`
+      : `${at ? `<span class="cq-mark">${esc(at.n)}</span><span class="cq-text">Dans votre file, étape ${esc(at.n)}</span><button type="button" class="cq-go" data-go="${at.i}">Y aller</button>` : ''}
+        <button type="button" class="cq-add" title="Ce lieu juste après l’étape en cours de votre file">+ À la file</button>`;
+    box.querySelector<HTMLButtonElement>('.cq-go')?.addEventListener('click', (e) => this.onQueueGo(Number((e.currentTarget as HTMLElement).dataset.go)));
+    box.querySelector('.cq-add')?.addEventListener('click', () => this.onQueueAdd(poi));
   }
 
   get currentPoi(): string | null {
@@ -299,7 +408,7 @@ export class Card {
           ${life ? `<div class="card-date">${esc(life)}</div>` : ''}
           ${j.description ? `<div class="card-desc">${esc(j.description)}</div>` : ''}
           <div class="polity-hint">${esc(now)}</div>
-          ${this.scenariosOn ? `<div class="card-paths"><button type="button" class="paths-chip person-paths" title="Ouvrir le carnet de route : les chemins de ce personnage">
+          ${this.scenariosOn ? `<div class="card-paths"><button type="button" class="paths-chip person-paths" title="Les chemins de ce personnage">
             <span class="paths-mask" aria-hidden="true">🎭</span><span class="paths-label"><b>Ses chemins</b> : vivre son histoire</span><span class="paths-go" aria-hidden="true">›</span>
           </button></div>` : ''}
           <div class="card-section">
@@ -604,6 +713,8 @@ export class Card {
           <h2 class="card-title">${esc(p.title)}</h2>
           <div class="card-date">${formatPoiDate(p.date_start, p.date_end, p.date_precision)}</div>
           ${p.description ? `<div class="card-desc">${esc(p.description)}</div>` : ''}
+          <div class="card-queue" hidden></div>
+          <div class="card-step" hidden></div>
           <div class="card-paths" hidden></div>
           ${summary}
           <div class="card-section doors" hidden>
@@ -628,6 +739,8 @@ export class Card {
       </div>`;
     this.bindClose();
     this.bindTrail();
+    this.renderQueue();
+    this.fillStep();
     const img = this.root.querySelector<HTMLImageElement>('.card-image img');
     if (img) {
       img.addEventListener('load', () => img.classList.add('loaded'));
@@ -741,7 +854,7 @@ export class Card {
     body.querySelectorAll<HTMLImageElement>('.story-person img').forEach((img) => img.addEventListener('error', () => img.remove()));
   }
 
-  /** The filters changed: scenarios are written again for the new view (the one played goes on, it is the carnet's). */
+  /** The filters changed: scenarios are written again for the new view (the one played goes on, it is the player's). */
   refreshScenarios(): void {
     if (this.story && this.story.token === this.token) void this.loadScenarios();
   }
@@ -765,6 +878,7 @@ export class Card {
   syncScenario(playing: ScenarioWalk | null): void {
     this.playing = playing;
     this.renderPaths();
+    this.renderQueue();
   }
 
   /** Scenarios for the visitor's view (lens, themes, the cards read before), written once per view by an AI. */
@@ -829,7 +943,7 @@ export class Card {
    * what it follows: someone, a thing, an idea; where the visitor is in it,
    * the AI that traced it), then two that need no AI: this place across the
    * centuries, the world at its moment; the paths met elsewhere that pass
-   * here open in the carnet.
+   * here open above the player.
    */
   private renderPaths(): void {
     const box = this.root.querySelector<HTMLElement>('.card-paths');

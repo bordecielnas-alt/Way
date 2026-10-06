@@ -3,7 +3,7 @@ import { distanceKm, formatDistance, formatYears } from './doors.ts';
 import {
   bucketEnd, bucketOf, bucketsInRange, cellsForRect, formatPoiDate, formatYear, makeKey, parseKey,
   dateToDecimal, decimalToDate, formatDay, posToDecimalYear, DAY,
-  posToYear, rectAreaKm2, resolutionForArea, yearToPos, CURRENT_YEAR, MIN_YEAR, poiInWindow,
+  posToYear, rectAreaKm2, recitOf, resolutionForArea, yearToPos, CURRENT_YEAR, MIN_YEAR, poiInWindow,
 } from './index.ts';
 
 describe('time buckets', () => {
@@ -113,5 +113,26 @@ describe('days', () => {
   it('places days on the timeline', () => {
     const t = dateToDecimal(1805, 12, 2);
     expect(posToDecimalYear(yearToPos(t))).toBeCloseTo(t, 6);
+  });
+});
+
+describe('a step told short', () => {
+  const text = 'Capitale des Ilkhans, Tabriz voit arriver la soie de la Caspienne. Les marchands génois et vénitiens y achètent ce que les caravanes apportent d’Asie centrale. Abaqa y tient sa cour. Le commerce enrichit la ville.\n\nUn second paragraphe.';
+
+  it('keeps the writer’s own', () => {
+    expect(recitOf({ recit: 'Deux phrases.', text })).toBe('Deux phrases.');
+  });
+
+  it('else takes whole sentences of the first paragraph, enough to read and no more', () => {
+    const r = recitOf({ text });
+    expect(r.startsWith('Capitale des Ilkhans')).toBe(true);
+    expect(r.endsWith('Asie centrale.')).toBe(true);
+    expect(r).not.toContain('second');
+  });
+
+  it('cuts a sentence too long at a word', () => {
+    const r = recitOf({ text: `${'mot '.repeat(120)}fin.` });
+    expect(r.length).toBeLessThanOrEqual(320);
+    expect(r.endsWith('…')).toBe(true);
   });
 });

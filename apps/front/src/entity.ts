@@ -22,12 +22,12 @@ export class EntityMenu {
 
   /** Follow someone on the map (Personnages panel). */
   onFollow: (p: StoryPerson) => void = () => undefined;
-  /** The paths through someone, in the carnet. */
+  /** The paths through someone, above the player. */
   onPersonPaths: (p: StoryPerson) => void = () => undefined;
   /** Someone's life as a path. */
   onLife: (p: StoryPerson) => void = () => undefined;
   onOpenCard: (poi: PoiLite) => void = () => undefined;
-  /** The paths through a card, in the carnet. */
+  /** The paths through a card, above the player. */
   onPlacePaths: (poi: PoiLite) => void = () => undefined;
   onFlyTo: (lat: number, lon: number) => void = () => undefined;
 
