@@ -4,7 +4,7 @@ import { z } from 'zod';
 import {
   ACTIVITY_LABELS, CATEGORY_THEME, dateToDecimal, distanceKm, formatDay, histToAstro, LENSES, MAX_YEAR, MIN_YEAR, STORY_PHASES, THEME_LABELS, THEMES, toLite,
   type ActivityKind, type Category, type DetourKind, type PersonJourney, type PersonScenarioResponse, type Poi, type PoiLite, type ScenarioContext, type ScenarioWalk,
-  type CardLink, type ScenarioFork, type ScenariosResponse, type Source, type StepChoice, type StepPicture, type StepQuote, type StepResponse, walkOf, type WalkStep, type Story, type StoryPerson, type StoryResponse, type StoryScenario, type StoryStop,
+  type CardLink, recitOf, type ScenarioFork, type ScenariosResponse, type Source, type StepChoice, type StepPicture, type StepQuote, type StepResponse, walkOf, type WalkStep, type Story, type StoryPerson, type StoryResponse, type StoryScenario, type StoryStop,
 } from '@way/shared';
 import { people, wikidata, wikipedia, type DatedRow, type EntityInfo } from '@way/providers';
 import { grounded, normalize } from './links.ts';
@@ -62,7 +62,7 @@ const STEP_CANDIDATES = 5;
 const MAX_LINKS_LEAD = 40;
 const LINKS_KEEP = 300;
 /** Bump when steps are written differently: they are written again. */
-const STEP_VERSION = 11;
+const STEP_VERSION = 12;
 /** A step's text: a few paragraphs, each a few sentences (a long one is cut in two). */
 const MIN_PARAGRAPHS = 3;
 const MAX_PARAGRAPHS = 5;
@@ -189,6 +189,7 @@ const StepAnswer = z.preprocess(
   (v) => (v && typeof v === 'object' && !('paragraphs' in v) && 'text' in v ? { ...v, paragraphs: (v as { text: unknown }).text } : v),
   z.object({
     paragraphs: Paragraphs,
+    recit: z.string().trim().min(40).max(480).nullable().catch(null).default(null),
     next: z.string().trim().min(3).max(90).nullable().catch(null).default(null),
     cast: z.array(Index.catch(-1)).max(8).catch([]),
     facts: z.array(z.string().trim().min(6).max(180).nullable().catch(null)).max(8).catch([]).transform((a) => a.filter((x): x is string => !!x)),
@@ -219,13 +220,14 @@ const STEP_SYSTEM = `You write ONE step of a reading path through a historical s
 You get how the visitor looks at the world (the angle to take, the themes shown), the path (title, premise, whom or what it follows, the steps already read, the turns the visitor took), this step's place, date and heading, the passage of the article about it (its section), the start of the article detailing that part when there is one, the place's own article summary, the people (P0, P1...: ★ marks those the passage names), where the planned route goes next and the turning points offered here, places of the story off the route (C0, C1...), and other subjects (K0, K1...: those the passage links to, then those close by at the same moment).
 Write:
 - paragraphs: in French, ${MIN_PARAGRAPHS} to ${MAX_PARAGRAPHS} paragraphs of 3 to 5 sentences each, in the third person and the past tense, neutral and precise like a Wikipedia article: never "vous", never "je", never inside anyone's head. First the place and the moment (where, when, what the place was then, from its own article); then what happened there, in order, with the names, dates, times and numbers the texts give; then the part of whom or what the path follows, from the angle; last, what came of it and where the story goes from here (the planned way on and the turning points offered, by name, in a sentence, as history: never speak of steps, paths, the visitor or the reader). Tell ONLY this place at this moment: the passage may go on to later moments (other ports, the next days), leave them to their own steps. Follow the texts closely and keep all their facts; pick up from the steps already read, and when the visitor took a turn, say what it brings. Forbidden: invented scenes, dialogue, feelings, hopes and fears, the atmosphere in general, a summary of the whole story;
+- recit: in French, the same moment told in 2 or 3 sentences (under 300 characters), for a player that shows only this: in the third person and the present tense ("Capitale des Ilkhans, Tabriz voit arriver la soie…"), the place, the moment, what happens there and the part of whom or what the path follows; only facts of the paragraphs, no "vous", no question, no announcement of the next step;
 - next: in French, 3 to 8 words, a heading for the next step on the planned route, written like a section title (e.g. "L'escale de Cherbourg"), never a copy of the route's line; null when the route ends here;
 - facts: 3 to ${MAX_FACTS} short facts in French (each under 120 characters, with a date, a time or a number), taken from the passage, the detailed article or the summary, e.g. "10 avril 1912, 12 h : départ de Southampton";
 - quote: ONE sentence copied word for word from the passage (not the summary), the most telling one; null if none fits;
 - cast: the numbers of the listed people present there at that moment (P0, P1...) as the texts place them, at most ${MAX_CAST}; never someone only because they are listed;
 - choices: 0 to ${MAX_DETOURS} short detours from here, before going on: label (French, 3 to 9 words, naming whom or where, e.g. "Suivre Jack Phillips à la cabine radio", "Le sauvetage par le Carpathia"), to = "P" and the number of a person present here (a few moments of their life, then back), "C" and the number of a place of the story off the route (one step there, then the route goes on), or "K" and the number of another subject (a short detour there, then back). Prefer those the passage names or links to, and those about the themes shown; when someone the passage names is present, one detour goes toward them.
 Rules, all mandatory: never invent events, dates or deeds the texts do not support; when the texts do not say what a real person did here, say only that they were there; the step happens at its date; a real person only within their lifetime and roles they held then.
-Answer with a single JSON object: {"paragraphs": ["...", "..."], "next": "..." or null, "facts": [...], "quote": "..." or null, "cast": [...], "choices": [{"label": "...", "to": "P0"}]}.`;
+Answer with a single JSON object: {"paragraphs": ["...", "..."], "recit": "...", "next": "..." or null, "facts": [...], "quote": "..." or null, "cast": [...], "choices": [{"label": "...", "to": "P0"}]}.`;
 
 const PERSON_SYSTEM = `You write ONE reading path for a visitor of a historical globe: a walk through the life of a REAL person, step by step, told in the third person like a Wikipedia article (never in their shoes).
 You get how the visitor looks at the world (with the angle to take), the checked places of that person's life (S0, S1...: from Wikidata, and from the stories of subjects they took part in), and their Wikipedia article.
@@ -831,7 +833,7 @@ export interface CardStepAsk {
 
 /** A step not written (yet): `ai`, the one at work. */
 function noStep(status: StepResponse['status'], ai: string | null = null): StepResponse {
-  return { status, text: null, cast: [], choices: [], next: null, facts: [], quote: null, gallery: [], near: [], sources: [], ai };
+  return { status, text: null, recit: null, cast: [], choices: [], next: null, facts: [], quote: null, gallery: [], near: [], sources: [], ai };
 }
 
 /**
@@ -885,6 +887,8 @@ interface PersonEntry { at: number; v: number; walk: ScenarioWalk | null }
 interface StepEntry {
   at: number;
   text: string;
+  /** Told in two or three sentences, for the player. */
+  recit?: string | null;
   /** Who is there: the story's people, or someone the step's passage names. */
   cast: StoryPerson[];
   choices: { label: string; stop?: number; card?: PoiLite; person?: StoryPerson }[];
@@ -1272,6 +1276,7 @@ export class StoryService {
     return {
       status: 'ready',
       text: e.text,
+      recit: e.recit ?? recitOf({ text: e.text }),
       cast: e.cast,
       next: e.next ?? null,
       choices: e.choices.flatMap((c): StepChoice[] => {
@@ -1544,6 +1549,8 @@ export class StoryService {
     return {
       at: Date.now(),
       text: paragraphs.join('\n\n'),
+      // Short, or the first sentences: a story told at length is no story for the player.
+      recit: v.recit && v.recit.length <= 360 && !/\bvous\b/i.test(v.recit) ? v.recit : recitOf({ text: paragraphs.join('\n\n') }),
       next: f.next ? headingOf(v.next) : null,
       cast,
       choices,

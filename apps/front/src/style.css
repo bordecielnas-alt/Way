@@ -488,213 +488,189 @@ body.card-open .search { right: 452px; }
 }
 .sr-act:hover, .sr-act:focus-visible { background: var(--gold-soft); outline: none; }
 
-/* ---------- carnet de route: a film along the bottom while a path plays ---------- */
-.carnet {
+/* ---------- the player: a step told short along the bottom, its file over time ---------- */
+.player-root {
   position: fixed; left: 264px; right: 16px; bottom: 150px; z-index: 6; pointer-events: none;
   display: flex; flex-direction: column; align-items: stretch; gap: 8px;
-  --film-h: min(48vh, 470px);
 }
-body.card-open .carnet { right: 452px; }
-.carnet > * { pointer-events: auto; }
-/* A path plays: the film takes the timeline's place; to the right one reads (the card, when asked, down to the bottom). */
-.carnet.playing { left: 16px; right: 16px; bottom: 16px; height: var(--film-h); }
-body.card-open .carnet.playing { right: 452px; }
-body.carnet-open .timeline, body.carnet-open .filters, body.carnet-open .people, body.carnet-open .basemap { visibility: hidden; }
-body.carnet-open .card { bottom: 16px; }
-body.carnet-open .cesium-viewer-bottom { bottom: calc(var(--film-h, 0px) + 24px); }
-.film {
-  position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0; overflow: hidden;
-  border-color: rgba(217, 164, 65, 0.45); color: var(--ink); animation: film-in 220ms ease-out;
+body.card-open .player-root { right: 452px; }
+.player-root > * { pointer-events: auto; }
+/* Playing: the player takes the timeline's place; to the right one reads (the card, when asked, down to the bottom). */
+.player-root.playing { left: 16px; bottom: 16px; }
+body.player-open .timeline, body.player-open .filters, body.player-open .people, body.player-open .basemap { visibility: hidden; }
+body.player-open .card { bottom: 16px; }
+body.player-open .cesium-viewer-bottom { bottom: 236px; }
+.player { position: relative; color: var(--ink); animation: rise-in 220ms ease-out; }
+@keyframes rise-in { from { opacity: 0; transform: translateY(8px); } }
+.player.full { padding: 0; border-color: rgba(217, 164, 65, 0.45); overflow: hidden; }
+.player.full.in-crochet { border-color: rgba(127, 179, 224, 0.6); }
+/* The frieze: the file on time, a bead per step at its date. */
+.pl-frieze { position: relative; height: 46px; margin: 0 26px; }
+.pl-axis { position: absolute; left: -10px; right: -10px; top: 17px; height: 1px; background: rgba(236, 228, 210, 0.18); }
+.pl-lived { position: absolute; top: 16px; height: 3px; border-radius: 2px; background: var(--gold); }
+.pl-tick { position: absolute; top: 28px; transform: translateX(-50%); font-size: 10.5px; color: var(--muted); white-space: nowrap; pointer-events: none; }
+.pl-bead {
+  position: absolute; top: 0; transform: translateX(-50%); width: 34px; height: 34px; padding: 0; border: 0; background: none;
+  display: grid; place-items: center; cursor: pointer;
 }
-@keyframes film-in { from { opacity: 0; transform: translateY(8px); } }
-/* The band: a path plays, what it follows, its step, the card, the plan, quit (or the way back from a crochet). */
-.film-band {
-  flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 6px 10px 6px 14px;
-  background: rgba(217, 164, 65, 0.08); border-bottom: 1px solid rgba(217, 164, 65, 0.3);
+.pl-bead span {
+  display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font-size: 10px; font-weight: 600;
+  background: var(--panel-bg-solid); border: 2px solid rgba(217, 164, 65, 0.65); color: var(--gold);
 }
-.film-mode { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); white-space: nowrap; }
-.film-thread { padding: 2px 9px; border-radius: 999px; border: 1px solid rgba(217, 164, 65, 0.4); font-size: 11.5px; color: #e3c27f; white-space: nowrap; }
-.film-title { flex: 0 1 auto; min-width: 0; max-width: 42%; margin: 0; font-family: var(--serif); font-weight: 500; font-size: 19px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.film-count, .film-from { font-size: 12px; color: var(--muted); white-space: nowrap; }
-.film-from .sc-link { font-size: 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
-.film-acts { flex: none; margin-left: auto; display: flex; align-items: center; gap: 6px; }
-.film-acts .sc-btn { padding: 5px 11px; }
-.film-acts .sc-btn.on { border-color: var(--gold); color: var(--ink); }
-.film-card-btn { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
-.film-back {
-  padding: 6px 14px; border: 0; border-radius: 999px; background: var(--info); color: #0b1520;
-  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
-}
-.film-back:hover, .film-back:focus-visible { background: #9cc6ea; outline: none; }
-/* A crochet: everything turns blue, a parenthesis that comes back. */
-.film.crochet { border-color: rgba(127, 179, 224, 0.6); }
-.film.crochet .film-band { background: rgba(127, 179, 224, 0.1); border-bottom-color: rgba(127, 179, 224, 0.4); }
-.film.crochet .film-mode { color: var(--info); }
-.film.crochet .film-thread { border-color: rgba(127, 179, 224, 0.45); color: #a9cff0; }
-.film.crochet .sc-live { background: var(--info); }
-/* The step and its crossroads side by side. */
-.film-main { flex: 1; min-height: 0; display: flex; }
-.film-pane { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 12px 18px 12px 14px; }
-.film-side { flex: 0 0 360px; min-height: 0; overflow-y: auto; padding: 10px 14px 12px; border-left: 1px solid var(--panel-border); background: rgba(255, 255, 255, 0.015); }
-.film-pane .film-img { float: left; width: 250px; margin: 3px 18px 8px 0; }
-.film-pane .film-img.no-img { float: none; width: auto; margin: 0 0 4px; }
-.film-pane .film-img-caption { float: left; clear: left; width: 250px; margin: -2px 18px 10px 0; }
-.film-pane .film-heading, .film-pane .film-place, .film-pane .film-premise { display: flow-root; }
-.film-img {
-  position: relative; height: 150px; margin: 0; border-radius: 8px; overflow: hidden;
+.pl-bead.done span { background: var(--gold); border-color: var(--gold); color: #16120a; }
+.pl-bead.now { z-index: 2; }
+.pl-bead.now span { width: 24px; height: 24px; font-size: 12px; background: var(--gold); border-color: var(--gold); color: #16120a; box-shadow: 0 0 0 4px rgba(217, 164, 65, 0.25); }
+.pl-bead.cr span { border-style: dashed; border-color: var(--info); color: #a9cff0; background: var(--panel-bg-solid); }
+.pl-bead.cr.now span { border-style: solid; background: var(--info); color: #0b1520; box-shadow: 0 0 0 4px rgba(127, 179, 224, 0.25); }
+.pl-bead.added span { border-color: rgba(236, 228, 210, 0.6); color: var(--ink); }
+.pl-bead:hover span, .pl-bead:focus-visible span { box-shadow: 0 0 0 3px rgba(236, 228, 210, 0.25); }
+.pl-bead:focus-visible { outline: none; }
+/* The step told short, the way on, what comes next. */
+.pl-main { display: flex; flex-wrap: wrap; gap: 12px 22px; padding: 10px 16px 14px; border-top: 1px solid var(--panel-border); background: rgba(0, 0, 0, 0.12); }
+.pl-story { flex: 3 1 380px; min-width: 0; display: flex; gap: 14px; }
+.pl-img {
+  flex: none; width: 128px; height: 92px; margin: 0; border-radius: 8px; overflow: hidden;
   background: linear-gradient(135deg, rgba(217, 164, 65, 0.18), rgba(91, 143, 209, 0.12));
 }
-.film-img img { display: block; width: 100%; height: 100%; object-fit: cover; animation: film-in 0.4s ease-out; }
-.film-img::after { content: ''; position: absolute; inset: auto 0 0 0; height: 60%; background: linear-gradient(transparent, rgba(8, 10, 14, 0.85)); pointer-events: none; }
-.film-img figcaption {
-  position: absolute; left: 10px; right: 10px; bottom: 8px; z-index: 1; display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 10px;
-  color: #f4ead6; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
+.pl-img img { display: block; width: 100%; height: 100%; object-fit: cover; animation: rise-in 0.4s ease-out; }
+.pl-text { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 3px; }
+.pl-kicker { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; color: var(--ink-soft); }
+.pl-thread { padding: 1px 8px; border-radius: 999px; border: 1px solid rgba(217, 164, 65, 0.4); font-size: 11.5px; color: #e3c27f; white-space: nowrap; }
+.in-crochet .pl-thread { border-color: rgba(127, 179, 224, 0.5); color: #a9cff0; }
+.pl-walk { min-width: 0; max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-count { color: var(--muted); white-space: nowrap; }
+.pl-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 12px; }
+.pl-place { margin: 0; font-family: var(--serif); font-weight: 500; font-size: 26px; line-height: 1.1; }
+.pl-when { font-family: var(--serif); font-style: italic; font-size: 16px; color: var(--gold); }
+.pl-recit { margin: 1px 0 0; max-width: 70ch; font-family: var(--serif); font-size: 17px; line-height: 1.42; color: var(--ink); }
+.pl-meta { font-size: 12px; color: var(--muted); }
+.pl-who { padding: 0; border: 0; background: none; color: var(--gold); font: inherit; cursor: pointer; }
+.pl-who:hover, .pl-who:focus-visible { text-decoration: underline; outline: none; }
+.pl-writing { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-style: italic; color: var(--ink-soft); }
+.pl-go { flex: 2 1 300px; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 8px; }
+.pl-nav { display: flex; align-items: center; gap: 8px; }
+.pl-ctl {
+  flex: none; width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--panel-border); background: none;
+  color: var(--ink-soft); font-size: 14px; cursor: pointer;
 }
-.film-img figcaption b { font-family: var(--serif); font-weight: 500; font-size: 23px; line-height: 1.1; }
-.film-img figcaption span { font-size: 13px; color: #f2c66d; }
-.film-img.no-img { height: auto; background: none; }
-.film-img.no-img::after { display: none; }
-.film-img.no-img figcaption { position: static; color: var(--ink); text-shadow: none; }
-.film-place { margin-top: 8px; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
-.film-img-caption { margin: 5px 2px 0; font-size: 11.5px; line-height: 1.35; font-style: italic; color: var(--muted); }
-/* A step reads like a section of an encyclopedia: its heading, its paragraphs, its pictures between them. */
-.film-heading {
-  margin: 2px 0 8px; padding-bottom: 5px; border-bottom: 1px solid rgba(217, 164, 65, 0.3);
-  font-family: var(--serif); font-weight: 500; font-size: 21px; line-height: 1.2; color: var(--ink);
+.pl-ctl:hover:not(:disabled), .pl-ctl:focus-visible { border-color: var(--gold); color: var(--ink); outline: none; }
+.pl-ctl:disabled { opacity: 0.35; cursor: default; }
+.pl-next {
+  flex: 1; min-width: 0; min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 16px;
+  border: 0; border-radius: 10px; background: var(--gold); color: #16120a; font: inherit; font-size: 15px; font-weight: 600; text-align: left; cursor: pointer;
 }
-.film-premise { margin: 0 0 10px; font-size: 13px; color: var(--ink-soft); font-style: italic; }
-.film-text { margin: 0; font-family: var(--serif); font-size: 16.5px; line-height: 1.55; }
-.film-article { display: grid; gap: 10px; }
-.film-par { margin: 0; font-family: var(--serif); font-size: 16px; line-height: 1.6; color: var(--ink); text-align: justify; hyphens: auto; }
-.film-lead { font-size: 16.5px; }
-.film-fig { margin: 2px 0; }
-.film-fig img { display: block; width: 100%; max-height: 230px; object-fit: cover; border-radius: 8px; background: rgba(255, 255, 255, 0.04); }
-.film-fig figcaption { margin-top: 5px; padding-left: 8px; border-left: 2px solid rgba(217, 164, 65, 0.45); font-size: 12px; line-height: 1.4; color: var(--ink-soft); }
-.film-box-title { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); }
-.film-sources { margin-top: 14px; padding-top: 8px; border-top: 1px solid var(--panel-border); }
-.film-sources ul { margin: 4px 0 0; padding-left: 16px; display: grid; gap: 2px; font-size: 12.5px; }
-.film-sources a { color: var(--info); text-decoration: none; }
-.film-sources a:hover { text-decoration: underline; }
-.film-ai { margin: 6px 0 0; font-size: 11.5px; line-height: 1.4; color: var(--muted); }
-.film-ai b { font-weight: 600; color: var(--ink-soft); }
-.film-writing { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-style: italic; color: var(--ink-soft); }
+.pl-next > span:first-child { min-width: 0; display: grid; }
+.pl-next small { font-size: 12px; font-weight: 400; color: #3d3017; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-next > span:last-child { font-size: 20px; }
+.pl-next:hover, .pl-next:focus-visible { background: #e6b55a; outline: none; }
+.pl-next.crochet { background: var(--info); color: #0b1520; }
+.pl-next.crochet small { color: #20384d; }
+.pl-next.crochet:hover, .pl-next.crochet:focus-visible { background: #9cc6ea; }
+.pl-next.end { background: var(--gold-soft); color: var(--ink); border: 1px solid rgba(217, 164, 65, 0.6); }
+.pl-next.end small { color: var(--ink-soft); }
+.pl-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.pl-chip {
+  min-height: 36px; max-width: 100%; padding: 0 12px; border-radius: 999px; border: 1px solid var(--panel-border); background: none;
+  color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pl-chip:hover, .pl-chip:focus-visible { border-color: rgba(236, 228, 210, 0.45); outline: none; }
+.pl-chip.on { background: rgba(236, 228, 210, 0.1); border-color: rgba(236, 228, 210, 0.4); }
+/* A crochet, as on the globe: dashed blue, it comes back. */
+.pl-chip.cr { border-style: dashed; border-color: rgba(127, 179, 224, 0.55); color: #a9cff0; }
+.pl-chip.cr:hover, .pl-chip.cr:focus-visible, .pl-chip.cr.on { border-color: var(--info); background: rgba(127, 179, 224, 0.1); }
+.pl-upnext { flex: 1 1 190px; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 2px; padding-left: 16px; border-left: 1px solid var(--panel-border); }
+.pl-upnext-head { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.pl-upnext-head .pl-label { flex: 1; }
+.pl-label { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.pl-q, .pl-row-main {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 3px 8px; border: 0; border-radius: 7px;
+  background: none; color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.pl-q:hover, .pl-q:focus-visible, .pl-row-main:hover, .pl-row-main:focus-visible { background: rgba(255, 255, 255, 0.05); outline: none; }
+.pl-n {
+  flex: none; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; font-size: 10.5px; font-weight: 600;
+  border: 1.5px solid rgba(217, 164, 65, 0.6); color: var(--gold);
+}
+.pl-q.crochet .pl-n, .pl-row.cr .pl-n { border-style: dashed; border-color: var(--info); color: #a9cff0; }
+.pl-q-place, .pl-row-place { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-q-when, .pl-row-when { flex: none; font-size: 11.5px; color: var(--muted); }
+.pl-empty { margin: 4px 0; font-size: 12px; font-style: italic; color: var(--muted); }
+.sc-icon.on { border-color: var(--gold); color: var(--ink); }
+/* Paused: a bar to take the file up again, the timeline back above it. */
+.player.compact { align-self: center; width: min(760px, 100%); display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 8px 10px; }
+.pl-thumb { flex: none; width: 64px; height: 44px; border-radius: 6px; overflow: hidden; background: rgba(255, 255, 255, 0.05); opacity: 0.7; }
+.pl-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.pl-compact-text { flex: 1 1 260px; min-width: 0; display: grid; gap: 1px; }
+.pl-paused { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-compact-step { font-size: 13px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-compact-step b { font-family: var(--serif); font-weight: 500; font-size: 17px; color: var(--ink); }
+.pl-resume {
+  flex: none; display: grid; min-height: 44px; padding: 4px 16px; border: 0; border-radius: 10px; background: var(--gold); color: #16120a;
+  font: inherit; font-size: 14px; font-weight: 600; text-align: left; cursor: pointer;
+}
+.pl-resume small { font-size: 11.5px; font-weight: 400; color: #3d3017; }
+.pl-resume:hover, .pl-resume:focus-visible { background: #e6b55a; outline: none; }
+.player.compact .sc-note { flex-basis: 100%; }
+.player-note { align-self: center; width: min(520px, 100%); padding: 4px 10px; }
+.player-launch {
+  position: fixed; top: 16px; right: 16px; height: 42px; padding: 0 14px; pointer-events: auto; border-color: rgba(217, 164, 65, 0.4);
+  color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 8px;
+}
+.player-launch:hover, .player-launch:focus-visible { border-color: var(--gold); outline: none; }
+body.card-open .player-launch { display: none; }
+/* Above the player (or alone): the file, the routes, a place's paths, the ways on. */
+.pl-panel {
+  position: relative; display: flex; flex-direction: column; min-height: 160px; max-height: calc(100vh - 150px - 90px);
+  padding: 12px 14px; color: var(--ink); animation: rise-in 200ms ease-out;
+}
+.player-root:not(.playing) .pl-panel { align-self: flex-end; width: min(460px, 100%); }
+.player-root.playing .pl-panel { position: absolute; bottom: calc(100% + 8px); right: 0; width: min(460px, 100%); max-height: calc(100vh - 300px); }
+.pl-panel-close { position: absolute; top: 10px; right: 10px; z-index: 1; }
+.pl-sec { margin: 12px 0 2px; }
+.pl-sec.now { color: var(--gold); }
+.pl-row { display: flex; align-items: center; gap: 2px; border-radius: 8px; }
+.pl-row .pl-row-main { flex: 1; width: auto; min-width: 0; }
+.pl-row.seen .pl-row-main { color: var(--ink-soft); }
+.pl-row.seen .pl-n { background: rgba(217, 164, 65, 0.5); border-color: transparent; color: #16120a; }
+.pl-row.now { background: var(--gold-soft); }
+.pl-row.now .pl-n { background: var(--gold); border-color: var(--gold); color: #16120a; }
+.pl-row.added .pl-n { border-color: rgba(236, 228, 210, 0.6); color: var(--ink); }
+.pl-tool { flex: none; width: 30px; height: 30px; border: 0; border-radius: 7px; background: none; color: var(--muted); font-size: 14px; cursor: pointer; }
+.pl-tool:hover, .pl-tool:focus-visible { background: rgba(255, 255, 255, 0.06); color: var(--ink); outline: none; }
+.pl-group { margin: 4px 0; padding: 4px 4px 6px; border: 1.5px dashed rgba(127, 179, 224, 0.55); border-radius: 10px; background: rgba(127, 179, 224, 0.05); }
+.pl-group-head { display: flex; align-items: center; gap: 6px; padding-left: 6px; font-size: 12px; color: #a9cff0; }
+.pl-group-head span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-group-foot { padding: 2px 8px 0; font-size: 11.5px; color: var(--muted); }
+.pl-shelf { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--panel-border); border-radius: 8px; margin-top: 4px; }
+.pl-shelf-text { flex: 1; min-width: 0; display: grid; }
+.pl-shelf-text b { font-family: var(--serif); font-weight: 500; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-shelf-text small { font-size: 11.5px; color: var(--muted); }
+.pl-hint { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); }
+.pl-routes { display: grid; gap: 6px; margin-top: 10px; }
 .skeleton-lines { display: grid; gap: 7px; margin-top: 8px; }
 .skeleton-lines i {
   height: 12px; border-radius: 4px; background: linear-gradient(90deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.04));
   background-size: 200% 100%; animation: shimmer 1.2s linear infinite;
 }
 .skeleton-lines i:last-child { width: 60%; }
-/* "Où aller ensuite ?": one big way on, then a crochet (blue, it comes back) or another route (one way). */
-.film-cross { display: grid; gap: 4px; }
-.cross-title { margin-bottom: 4px; font-family: var(--serif); font-style: italic; font-size: 16px; color: var(--gold); }
-.cross-verb { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); }
-.cross-next {
-  display: grid; gap: 1px; width: 100%; min-height: 56px; padding: 9px 14px; border: 0; border-radius: 10px;
-  background: var(--gold); color: #1a1408; font: inherit; text-align: left; cursor: pointer;
-}
-.cross-next:hover, .cross-next:focus-visible { background: #e6b55a; outline: none; }
-.cross-next .cross-verb { color: #4a3814; }
-.cross-next b { font-family: var(--serif); font-weight: 600; font-size: 17px; line-height: 1.2; }
-.cross-next small { font-size: 11.5px; color: #4a3814; }
-.cross-text small { font-size: 11.5px; color: var(--muted); }
-.film.crochet .cross-next, .cross-next.cross-back { background: var(--info); color: #0b1520; }
-.film.crochet .cross-next:hover, .cross-next.cross-back:hover { background: #9cc6ea; }
-.film.crochet .cross-next .cross-verb, .film.crochet .cross-next small, .cross-back .cross-verb, .cross-back small { color: #20384d; }
-.cross-end { display: grid; gap: 6px; margin-top: 4px; }
-.cross-end-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.cross-group { display: grid; gap: 4px; margin-top: 10px; }
-.cross-label { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); }
-.cross-group.crochet .cross-label { color: var(--info); }
-.cross-label span { letter-spacing: 0; text-transform: none; color: var(--muted); }
-.cross-fork, .cross-detour {
+/* Another route: a plain line, one way. */
+.cross-fork {
   display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 6px 10px; border: 1px solid var(--panel-border);
   border-radius: 9px; background: rgba(255, 255, 255, 0.03); color: var(--ink); font: inherit; text-align: left; cursor: pointer;
 }
-/* A crochet is drawn as on the globe: dashed blue, a loop that comes back. */
-.cross-detour { border-style: dashed; border-color: rgba(127, 179, 224, 0.6); background: rgba(127, 179, 224, 0.06); }
 .cross-fork:hover, .cross-fork:focus-visible { border-color: rgba(236, 228, 210, 0.45); background: rgba(255, 255, 255, 0.06); outline: none; }
-.cross-detour:hover, .cross-detour:focus-visible, .cross-detour.on { border-color: var(--info); background: rgba(127, 179, 224, 0.14); outline: none; }
 .cross-icon { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: rgba(236, 228, 210, 0.08); color: var(--ink-soft); }
-.cross-detour .cross-icon { background: rgba(127, 179, 224, 0.15); color: var(--info); }
-.cn-go.cn-crochet { border-color: rgba(127, 179, 224, 0.55); color: var(--info); }
-.cn-go.cn-crochet:hover, .cn-go.cn-crochet:focus-visible { background: rgba(127, 179, 224, 0.15); color: var(--ink); }
-.cross-fork .cn-fork-mark, .cross-detour .cn-fork-mark, .cross-person .cn-fork-mark { width: 28px; height: 28px; font-size: 13px; }
+.cross-fork .cn-fork-mark { width: 28px; height: 28px; font-size: 13px; }
 .cross-text { flex: 1; min-width: 0; display: grid; gap: 1px; }
 .cross-text b { font-family: var(--serif); font-weight: 500; font-size: 15px; line-height: 1.2; }
-.cross-person { display: flex; align-items: center; gap: 8px; padding: 3px 4px 3px 10px; }
-.cross-person .cn-go { padding: 3px 8px; font-size: 11.5px; }
-/* Around the step, folded. */
-.film-around { margin-top: 12px; padding-top: 8px; border-top: 1px dashed var(--panel-border); }
-.film-around summary { cursor: pointer; font-size: 12.5px; color: var(--ink-soft); }
-.film-around summary span { color: var(--muted); }
-.film-around summary:hover { color: var(--gold); }
-.film-around-body { display: grid; gap: 4px; margin-top: 8px; }
-.film-forks-title { margin: 6px 0 2px; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
-.film-door {
-  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 1px solid var(--panel-border); border-radius: 8px;
-  background: rgba(255, 255, 255, 0.03); color: var(--ink); font: inherit; text-align: left; cursor: pointer;
-}
-.film-door:hover, .film-door:focus-visible { border-color: rgba(217, 164, 65, 0.55); outline: none; }
-.film-door > span:first-child { flex: none; width: 20px; text-align: center; color: var(--gold); }
-.film-door > span:last-child { min-width: 0; display: grid; }
-.film-door b { font-family: var(--serif); font-weight: 500; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.film-door small { font-size: 11px; color: var(--muted); }
-/* The reel along the bottom, where the timeline was: a frame per step, its place and date. */
-.film-reel { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 10px 8px; border-top: 1px solid var(--panel-border); }
-.film-thumbs { flex: 1; min-width: 0; display: flex; gap: 6px; padding: 2px; overflow-x: auto; scrollbar-width: thin; }
-.film-thumb {
-  position: relative; flex: none; width: 112px; height: 58px; padding: 0; border: 1px solid var(--panel-border); border-radius: 6px; overflow: hidden;
-  background: linear-gradient(135deg, rgba(217, 164, 65, 0.16), rgba(91, 143, 209, 0.12)); cursor: pointer; opacity: 0.6;
-}
-.film-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.film-thumb::after { content: ''; position: absolute; inset: 0; background: linear-gradient(rgba(0, 0, 0, 0.35), transparent 35%, transparent 45%, rgba(0, 0, 0, 0.7)); pointer-events: none; }
-.film-thumb-n, .film-thumb-place, .film-thumb-date {
-  position: absolute; left: 5px; right: 5px; z-index: 1; line-height: 1.25; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  text-shadow: 0 1px 3px #000, 0 0 2px #000;
-}
-.film-thumb-n { top: 2px; font-size: 9.5px; color: rgba(244, 234, 214, 0.85); }
-.film-thumb-place { bottom: 13px; font-size: 11px; font-weight: 500; color: #f4ead6; }
-.film-thumb-date { bottom: 2px; font-size: 10px; color: #f2c66d; }
-.film-thumb-fork { position: absolute; z-index: 1; top: 1px; right: 4px; font-size: 12px; font-weight: 700; color: #a9cff0; text-shadow: 0 1px 3px #000; }
-.film-thumb.done { opacity: 0.85; }
-.film-thumb.on { opacity: 1; border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold), 0 0 10px rgba(217, 164, 65, 0.5); }
-.film-thumb:hover, .film-thumb:focus-visible { opacity: 1; border-color: rgba(217, 164, 65, 0.7); outline: none; }
-.film-next:not(:disabled) { border-color: rgba(217, 164, 65, 0.6); color: var(--gold); }
-/* A crochet's reel rises above the path it leaves, which waits under it, dimmed, its way back marked. */
-.film-reel-crochet { background: rgba(127, 179, 224, 0.06); }
-.film-reel-crochet .film-thumb { border-style: dashed; border-color: rgba(127, 179, 224, 0.5); }
-.film-reel-crochet .film-thumb.on { border-style: solid; border-color: var(--info); box-shadow: 0 0 0 1px var(--info), 0 0 10px rgba(127, 179, 224, 0.5); }
-.film-thumb.film-return { display: grid; cursor: default; background: none; border: 1.5px dashed var(--info); opacity: 0.9; }
-.film-return::after { display: none; }
-.film-return .film-thumb-place { color: var(--info); text-shadow: none; }
-.film-return .film-thumb-date { color: var(--muted); text-shadow: none; }
-.film-reel-under { padding: 0 10px 6px 42px; border-top: 0; opacity: 0.6; }
-.film-reel-under .film-thumb { width: 84px; height: 34px; }
-.film-reel-under .film-thumb-n, .film-reel-under .film-thumb-date { display: none; }
-.film-reel-under .film-thumb-place { bottom: 2px; font-size: 10px; }
-.film-reel-under .film-thumb.mark { opacity: 1; border: 1.5px dashed var(--info); }
-.film-under-label { flex: none; max-width: 140px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sc-icon:disabled { opacity: 0.35; cursor: default; }
-/* Above the film (or alone): the paths, a place's paths, the plans, the ways on. */
-.film-drawer {
-  position: relative; display: flex; flex-direction: column; min-height: 160px; max-height: calc(100vh - 150px - 90px);
-  padding: 12px 14px; color: var(--ink); animation: film-in 200ms ease-out;
-}
-.carnet:not(.playing) .film-drawer { align-self: flex-start; width: min(620px, 100%); }
-.carnet.playing .film-drawer { position: absolute; bottom: calc(100% + 8px); right: 0; width: min(440px, 100%); max-height: calc(100vh - var(--film-h) - 48px); }
-.film-drawer-close { position: absolute; top: 10px; right: 10px; z-index: 1; }
+.cross-text small { font-size: 11.5px; color: var(--muted); }
+.cn-go.cn-crochet { border-color: rgba(127, 179, 224, 0.55); color: var(--info); }
+.cn-go.cn-crochet:hover, .cn-go.cn-crochet:focus-visible { background: rgba(127, 179, 224, 0.15); color: var(--ink); }
 .cn-count { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; background: rgba(236, 228, 210, 0.12); font-size: 11px; text-align: center; }
-.cn-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; padding: 8px 0 4px; font-size: 12px; color: var(--muted); }
-.cn-crumb { padding: 2px 6px; border: 0; border-radius: 5px; background: none; color: var(--ink-soft); font: inherit; cursor: pointer; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-button.cn-crumb:hover, button.cn-crumb:focus-visible { background: rgba(255, 255, 255, 0.06); color: var(--gold); outline: none; }
-.cn-crumb.here { color: var(--gold); cursor: default; }
-.cn-crumb small { color: var(--muted); }
-.cn-sep { color: var(--muted); }
 .cn-body { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 8px 12px 0; }
 .cn-kicker { display: flex; align-items: center; gap: 7px; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); }
-.cn-kind { padding: 1px 7px; border-radius: 999px; background: rgba(127, 179, 224, 0.15); color: var(--info); }
 .cn-aside { text-transform: none; letter-spacing: 0; color: var(--muted); font-size: 11.5px; }
-.cn-title { margin: 6px 0 2px; font-family: var(--serif); font-weight: 500; font-size: 30px; line-height: 1.1; }
+.cn-title { margin: 6px 0 2px; font-family: var(--serif); font-weight: 500; font-size: 28px; line-height: 1.1; }
 .cn-forks { margin-top: 16px; }
 .cn-forks-title { margin-bottom: 6px; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .cn-fork { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; }
@@ -714,8 +690,8 @@ button.cn-crumb:hover, button.cn-crumb:focus-visible { background: rgba(255, 255
 }
 .cn-go:hover, .cn-go:focus-visible { background: var(--gold-soft); color: var(--ink); outline: none; }
 .cn-go-main { background: var(--gold-soft); color: var(--ink); }
-.cn-life { margin: 10px 0 4px; border: 1px solid rgba(217, 164, 65, 0.3); }
-.cn-back { margin: 2px 0 4px; }
+.cn-life { margin: 10px 0 4px; border: 1px solid rgba(217, 164, 65, 0.3); flex-wrap: wrap; }
+.cn-back { margin: 8px 0 4px; }
 .cn-finish { display: block; margin-top: 14px; }
 .cn-walks { display: grid; gap: 8px; margin-top: 12px; }
 .cn-walk { padding: 10px 12px; border: 1px solid var(--panel-border); border-radius: 8px; background: rgba(255, 255, 255, 0.03); }
@@ -726,83 +702,12 @@ button.cn-crumb:hover, button.cn-crumb:focus-visible { background: rgba(255, 255
 .cn-walk-premise { font-size: 13px; color: var(--ink-soft); font-style: italic; }
 .cn-walk-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .cn-empty { margin: 10px 0; font-size: 13px; color: var(--muted); font-style: italic; }
-.cn-paths { display: grid; gap: 6px; margin-top: 10px; }
-.cn-path { display: flex; align-items: stretch; gap: 4px; }
-.cn-path-main {
-  flex: 1; min-width: 0; display: grid; gap: 3px; padding: 9px 12px; border: 1px solid var(--panel-border); border-radius: 8px;
-  background: rgba(255, 255, 255, 0.03); color: var(--ink); text-align: left; font: inherit; cursor: pointer;
-}
-.cn-path-main:hover, .cn-path-main:focus-visible { border-color: rgba(217, 164, 65, 0.55); outline: none; }
-.cn-path.playing .cn-path-main { border-color: var(--gold); background: var(--gold-soft); }
-.cn-path-main b { font-family: var(--serif); font-weight: 500; font-size: 17px; }
-.cn-path-main small { font-size: 11.5px; color: var(--muted); }
-.cn-path-main .cn-path-state { color: var(--gold); }
-.cn-bar { height: 4px; border-radius: 2px; background: rgba(236, 228, 210, 0.12); overflow: hidden; }
-.cn-bar i { display: block; height: 100%; background: var(--gold); }
-.cn-forget { flex: none; width: 30px; border: 0; border-radius: 8px; background: none; color: var(--muted); font-size: 16px; cursor: pointer; }
-.cn-forget:hover { color: var(--ink); background: rgba(255, 255, 255, 0.05); }
-/* The tree of a story's paths: its steps down a line, the branches under the step they leave. */
-.tr { list-style: none; margin: 6px 0 0; padding: 0; }
-.tr-step { position: relative; padding-left: 20px; }
-.tr-step::before { content: ''; position: absolute; left: 5px; top: 0; bottom: 0; border-left: 2px solid rgba(236, 228, 210, 0.16); }
-.tr-step.seen::before, .tr-step.here::before { border-left-color: rgba(217, 164, 65, 0.55); }
-.tr-step:first-child::before { top: 12px; }
-.tr-step:last-child::before { bottom: auto; height: 12px; }
-.tr-row {
-  display: flex; align-items: flex-start; gap: 8px; width: calc(100% + 20px); margin-left: -20px; padding: 4px 6px 4px 0;
-  border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
-}
-.tr-row:hover, .tr-row:focus-visible { background: rgba(255, 255, 255, 0.04); outline: none; }
-.tr-dot { position: relative; z-index: 1; flex: none; width: 12px; height: 12px; margin-top: 4px; border: 2px solid rgba(236, 228, 210, 0.4); border-radius: 50%; background: var(--panel-bg-solid); }
-.tr-step.seen > .tr-row .tr-dot { border-color: var(--gold); background: rgba(217, 164, 65, 0.45); }
-.tr-step.here > .tr-row .tr-dot { border-color: var(--gold); background: var(--gold); box-shadow: 0 0 0 3px rgba(217, 164, 65, 0.3); }
-.tr-text { min-width: 0; display: grid; gap: 1px; }
-.tr-text b { font-family: var(--serif); font-weight: 500; font-size: 15px; line-height: 1.2; }
-.tr-text small { font-size: 11.5px; color: var(--muted); }
-.tr-step.here > .tr-row .tr-text b { color: var(--gold); }
-.tr-branches { list-style: none; margin: 2px 0 6px; padding: 0 0 0 12px; border-left: 2px solid rgba(127, 179, 224, 0.45); border-bottom-left-radius: 10px; }
-.tr-branch { margin: 4px 0; }
-.tr-head {
-  display: flex; align-items: center; gap: 8px; max-width: 100%; padding: 5px 9px; border: 1px solid rgba(127, 179, 224, 0.5); border-radius: 8px;
-  background: rgba(127, 179, 224, 0.08); color: var(--ink); font: inherit; text-align: left; cursor: pointer;
-}
-.tr-head:hover, .tr-head:focus-visible { border-color: var(--info); outline: none; }
-.tr-branch.detour > .tr-head { border-color: var(--panel-border); background: rgba(255, 255, 255, 0.03); }
-.tr-branch.open > .tr-head { border-color: var(--gold); }
-.tr-branch.ghost > .tr-head { border-style: dashed; background: none; color: var(--ink-soft); }
-.tr-branch.ghost .tr-text b { color: var(--ink-soft); font-style: italic; }
-.tr-icon { flex: none; width: 16px; text-align: center; color: var(--info); }
-.tr-branch .tr { margin-left: 4px; }
-.tr-root { margin-top: 10px; padding: 6px 8px; border: 1px solid var(--panel-border); border-radius: 8px; background: rgba(255, 255, 255, 0.02); }
-.tr-root summary { display: flex; align-items: baseline; gap: 8px; cursor: pointer; }
-.tr-root summary b { font-family: var(--serif); font-weight: 500; font-size: 16px; }
-.tr-root summary small { font-size: 11.5px; color: var(--muted); }
-/* Paused: a bar to resume. */
-.film-bar { align-self: center; width: min(520px, 100%); padding: 6px 8px; border-color: rgba(217, 164, 65, 0.45); }
-.carnet-launch {
-  position: fixed; top: 16px; right: 16px; height: 42px; padding: 0 14px; pointer-events: auto; border-color: rgba(217, 164, 65, 0.4);
-  color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 8px;
-}
-.carnet-launch:hover, .carnet-launch:focus-visible { border-color: var(--gold); outline: none; }
-/* A card open has its own way in (its chip). */
-body.card-open .carnet-launch { display: none; }
-/* Shared bits of the carnet. */
-.sc-live { width: 7px; height: 7px; border-radius: 50%; background: var(--gold); flex: none; display: inline-block; animation: pulse 1.6s ease-in-out infinite; }
+/* Shared bits of the player. */
 .sc-icon {
   flex: none; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--panel-border); background: rgba(255, 255, 255, 0.03);
   color: var(--ink-soft); font-size: 12px; line-height: 1; cursor: pointer; display: grid; place-items: center;
 }
 .sc-icon:hover, .sc-icon:focus-visible { border-color: var(--gold); color: var(--ink); outline: none; }
-.sc-quit:hover { border-color: #c8554f; }
-.sc-progress { display: flex; flex-wrap: wrap; gap: 4px; margin: 12px 0 10px; }
-.sc-dot { flex: 1 1 14px; max-width: 40px; height: 6px; padding: 0; border: 0; border-radius: 3px; background: rgba(236, 228, 210, 0.16); cursor: pointer; }
-.sc-dot.done { background: rgba(217, 164, 65, 0.5); }
-.sc-dot.on { background: var(--gold); box-shadow: 0 0 8px rgba(217, 164, 65, 0.6); }
-.sc-dot:hover, .sc-dot:focus-visible { background: rgba(217, 164, 65, 0.8); outline: none; }
-.sc-step-head { font-size: 12.5px; color: var(--gold); }
-.sc-step-label { color: var(--muted); }
-.sc-step-cast { margin-top: 6px; font-size: 12px; color: var(--muted); font-style: italic; }
-.sc-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 12px; }
 .sc-btn {
   padding: 6px 13px; border-radius: 999px; border: 1px solid var(--panel-border); background: none; color: var(--ink-soft);
   font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap;
@@ -813,20 +718,29 @@ body.card-open .carnet-launch { display: none; }
 .sc-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 16px; }
 .sc-link { padding: 0; border: 0; background: none; font: inherit; font-size: 12px; color: var(--ink-soft); cursor: pointer; text-decoration: none; }
 .sc-link:hover, .sc-link:focus-visible { color: var(--gold); text-decoration: underline; outline: none; }
-.sc-source { margin-left: auto; color: var(--info); opacity: 0.85; }
-.sc-pill { display: flex; align-items: center; gap: 8px; }
-.sc-pill-icon { flex: none; color: var(--gold); font-size: 13px; padding-left: 4px; }
-.sc-pill-text { flex: 1; min-width: 0; font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sc-pill-text b { font-family: var(--serif); font-weight: 500; font-size: 15px; color: var(--ink); }
 .sc-note { display: flex; align-items: center; gap: 8px; padding: 6px 4px 2px; font-size: 12.5px; color: var(--ink-soft); font-style: italic; }
 .sc-note-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gold); flex: none; animation: pulse 1.1s ease-in-out infinite; }
-/* While a path plays, a gold edge around the map says so. */
+/* While the file plays, a gold edge around the map says so. */
 body.scenario-on::after {
   content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 1;
   box-shadow: inset 0 0 0 2px rgba(217, 164, 65, 0.45), inset 0 0 90px rgba(217, 164, 65, 0.1);
 }
 .story-sc-len { font-size: 11px; color: var(--muted); }
-/* The chip of a card: its paths are in the carnet. */
+/* A card's place in the file: its number there, a way there, "+ À la file". */
+.card-queue { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 10px 0 2px; font-size: 12.5px; color: var(--ink-soft); }
+.cq-mark {
+  flex: none; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; font-size: 11px; font-weight: 600;
+  border: 1.5px solid rgba(217, 164, 65, 0.65); color: var(--gold);
+}
+.cq-mark.now { background: var(--gold); color: #16120a; }
+.cq-text { min-width: 0; }
+.cq-go, .cq-add {
+  min-height: 32px; padding: 0 11px; border-radius: 999px; border: 1px solid rgba(217, 164, 65, 0.45); background: none;
+  color: var(--gold); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.cq-add { margin-left: auto; }
+.cq-go:hover, .cq-go:focus-visible, .cq-add:hover, .cq-add:focus-visible { background: var(--gold-soft); color: var(--ink); outline: none; }
+/* The chip of a card: its paths are above the player. */
 .card-paths { margin: 10px 0 2px; }
 .paths-chip {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 12px; border: 1px solid rgba(217, 164, 65, 0.45);
@@ -839,7 +753,7 @@ body.scenario-on::after {
 .paths-label b { font-family: var(--serif); font-weight: 500; font-size: 15.5px; }
 .paths-state { font-size: 11.5px; color: var(--gold); white-space: nowrap; }
 .paths-go { color: var(--gold); font-size: 18px; line-height: 1; }
-/* A card's roles: its story to live, each in someone's shoes. */
+/* A card's roles: the paths of its story, each following someone or something. */
 .roles-title { margin-bottom: 4px; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); }
 .roles-title span { letter-spacing: 0; text-transform: none; color: var(--muted); }
 .role {
@@ -871,26 +785,22 @@ body.scenario-on::after {
 .fil-text small { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 640px) {
   .search, body.card-open .search { top: 64px; left: 8px; right: 8px; max-width: none; }
-  .carnet, .carnet:not(.playing), body.card-open .carnet { left: 8px; right: 8px; bottom: 8px; }
-  /* A phone: the film is a sheet over the bottom of the map, the crossroads under the step. */
-  .carnet.playing, body.card-open .carnet.playing { left: 8px; right: 8px; bottom: 8px; height: 64vh; }
-  .film-main { flex-direction: column; }
-  .film-side { flex: none; max-height: 42%; border-left: 0; border-top: 1px solid var(--panel-border); }
-  .film-pane .film-img, .film-pane .film-img-caption { float: none; width: auto; margin: 0 0 6px; }
-  .film-img { height: 80px; }
-  .film-img figcaption b { font-size: 19px; }
-  .film-title { font-size: 16px; max-width: 100%; }
-  .film-text, .film-par { font-size: 15px; text-align: left; }
-  .film-heading { font-size: 18px; }
-  .film-acts .sc-btn:not(.film-quit) { display: none; }
-  .film-thumb { width: 84px; height: 46px; }
-  .film-drawer, .carnet:not(.playing) .film-drawer, .carnet.playing .film-drawer { position: relative; right: auto; bottom: auto; max-height: 60vh; width: auto; align-self: stretch; }
+  .player-root, .player-root.playing, body.card-open .player-root { left: 8px; right: 8px; bottom: 8px; }
+  /* A phone: the player is a sheet over the bottom of the map, the step told short, the way on under it. */
+  .player.full { max-height: 62vh; overflow-y: auto; }
+  .pl-frieze { margin: 0 18px; }
+  .pl-img { width: 84px; height: 64px; }
+  .pl-place { font-size: 21px; }
+  .pl-recit { font-size: 15.5px; }
+  .pl-upnext { padding-left: 0; border-left: 0; }
+  .pl-upnext .pl-q, .pl-upnext .pl-empty { display: none; }
+  .pl-panel, .player-root:not(.playing) .pl-panel, .player-root.playing .pl-panel { position: relative; right: auto; bottom: auto; max-height: 60vh; width: auto; align-self: stretch; }
   .cn-fork { flex-wrap: wrap; }
 }
 
 
 /* ---------- a name to act on: its menu, and the names of a card's text ---------- */
-.entity-menu { position: fixed; z-index: 30; min-width: 220px; max-width: 300px; padding: 6px; display: grid; gap: 2px; animation: film-in 140ms ease-out; }
+.entity-menu { position: fixed; z-index: 30; min-width: 220px; max-width: 300px; padding: 6px; display: grid; gap: 2px; animation: rise-in 140ms ease-out; }
 .entity-head { display: grid; gap: 1px; padding: 6px 8px 8px; border-bottom: 1px solid var(--panel-border); margin-bottom: 2px; }
 .entity-head b { font-family: var(--serif); font-weight: 500; font-size: 16px; color: var(--ink); }
 .entity-head small { font-size: 11.5px; color: var(--muted); }
@@ -907,28 +817,45 @@ body.scenario-on::after {
 }
 .card-summary .card-link.person { text-decoration-style: dotted; }
 .card-summary .card-link:hover, .card-summary .card-link:focus-visible { color: var(--gold); text-decoration-color: var(--gold); outline: none; }
-/* ---------- a step's words, facts, people and pictures ---------- */
-.film-quote { margin: 2px 0; padding: 6px 0 6px 12px; border-left: 2px solid var(--gold); font-family: var(--serif); font-style: italic; font-size: 15px; color: var(--ink-soft); }
-.film-quote cite { display: block; margin-top: 3px; font-style: normal; font-family: inherit; font-size: 11px; }
-.film-quote cite a { color: var(--info); text-decoration: none; }
-.film-quote cite a:hover { text-decoration: underline; }
-.film-facts { margin-top: 12px; padding: 8px 12px; border-radius: 8px; background: rgba(217, 164, 65, 0.08); border: 1px solid rgba(217, 164, 65, 0.25); }
-.film-facts ul { margin: 4px 0 0; padding-left: 16px; display: grid; gap: 2px; font-size: 13px; color: var(--ink); }
-.film-who { margin-top: 12px; }
-.film-who-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; margin-top: 6px; }
-.film-person {
+/* ---------- a step of the file in full, in its place's card: a section of its article ---------- */
+.card-step { margin: 14px 0 6px; padding: 12px 0 4px; border-top: 1px solid rgba(217, 164, 65, 0.35); border-bottom: 1px solid var(--panel-border); }
+.sa-kicker { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--gold); }
+.sa-n { flex: none; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: var(--gold); color: #16120a; font-size: 11px; font-weight: 600; }
+.sa-heading { margin: 8px 0 8px; font-family: var(--serif); font-weight: 500; font-size: 22px; line-height: 1.2; color: var(--ink); }
+.sa-heading small { display: block; margin-top: 2px; font-family: var(--sans); font-size: 12px; color: var(--muted); }
+.sa-img { margin: 0; height: 170px; border-radius: 8px; overflow: hidden; background: linear-gradient(135deg, rgba(217, 164, 65, 0.18), rgba(91, 143, 209, 0.12)); }
+.sa-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.sa-img-caption { margin: 5px 2px 8px; font-size: 11.5px; line-height: 1.35; font-style: italic; color: var(--muted); }
+.sa-article { display: grid; gap: 10px; margin-top: 8px; }
+.sa-par { margin: 0; font-family: var(--serif); font-size: 16px; line-height: 1.6; color: var(--ink); hyphens: auto; }
+.sa-lead { font-size: 16.5px; }
+.sa-fig { margin: 2px 0; }
+.sa-fig img { display: block; width: 100%; max-height: 230px; object-fit: cover; border-radius: 8px; background: rgba(255, 255, 255, 0.04); }
+.sa-fig figcaption { margin-top: 5px; padding-left: 8px; border-left: 2px solid rgba(217, 164, 65, 0.45); font-size: 12px; line-height: 1.4; color: var(--ink-soft); }
+.sa-box-title { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); }
+.sa-quote { margin: 2px 0; padding: 6px 0 6px 12px; border-left: 2px solid var(--gold); font-family: var(--serif); font-style: italic; font-size: 15px; color: var(--ink-soft); }
+.sa-quote cite { display: block; margin-top: 3px; font-style: normal; font-family: inherit; font-size: 11px; }
+.sa-quote cite a, .sa-sources a { color: var(--info); text-decoration: none; }
+.sa-quote cite a:hover, .sa-sources a:hover { text-decoration: underline; }
+.sa-facts { margin-top: 12px; padding: 8px 12px; border-radius: 8px; background: rgba(217, 164, 65, 0.08); border: 1px solid rgba(217, 164, 65, 0.25); }
+.sa-facts ul { margin: 4px 0 0; padding-left: 16px; display: grid; gap: 2px; font-size: 13px; color: var(--ink); }
+.sa-who { margin-top: 12px; }
+.sa-who-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; margin-top: 6px; }
+.sa-person {
   display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 8px 4px 4px; border: 1px solid var(--panel-border); border-radius: 10px;
   background: rgba(255, 255, 255, 0.03); color: var(--ink); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
 }
-.film-person-text { min-width: 0; display: grid; }
-.film-person-text b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.film-person-text small { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.film-person .cn-fork-mark { width: 26px; height: 26px; font-size: 12px; }
-.film-person:hover, .film-person:focus-visible { border-color: rgba(217, 164, 65, 0.6); outline: none; }
-.film-gallery { display: flex; gap: 6px; margin-top: 12px; overflow-x: auto; padding-bottom: 2px; }
-.film-pic { flex: none; width: 92px; height: 62px; padding: 0; border: 1px solid var(--panel-border); border-radius: 6px; overflow: hidden; background: rgba(255, 255, 255, 0.04); cursor: zoom-in; opacity: 0.75; }
-.film-pic img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.film-pic.on, .film-pic:hover, .film-pic:focus-visible { opacity: 1; border-color: var(--gold); outline: none; }
-.film-near { display: flex; align-items: center; gap: 4px; }
-.film-near .film-door { flex: 1; min-width: 0; }
-
+.sa-person-text { min-width: 0; display: grid; }
+.sa-person-text b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sa-person-text small { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sa-person .cn-fork-mark { width: 26px; height: 26px; font-size: 12px; }
+.sa-person:hover, .sa-person:focus-visible { border-color: rgba(217, 164, 65, 0.6); outline: none; }
+.sa-gallery { display: flex; gap: 6px; margin-top: 12px; overflow-x: auto; padding-bottom: 2px; }
+.sa-pic { flex: none; width: 92px; height: 62px; padding: 0; border: 1px solid var(--panel-border); border-radius: 6px; overflow: hidden; background: rgba(255, 255, 255, 0.04); cursor: zoom-in; opacity: 0.75; }
+.sa-pic img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.sa-pic.on, .sa-pic:hover, .sa-pic:focus-visible { opacity: 1; border-color: var(--gold); outline: none; }
+.sa-sources { margin-top: 14px; padding-top: 8px; border-top: 1px solid var(--panel-border); }
+.sa-sources ul { margin: 4px 0 0; padding-left: 16px; display: grid; gap: 2px; font-size: 12.5px; }
+.sa-ai { margin: 6px 0 0; font-size: 11.5px; line-height: 1.4; color: var(--muted); }
+.sa-ai b { font-weight: 600; color: var(--ink-soft); }
+.sa-writing { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-style: italic; color: var(--ink-soft); }

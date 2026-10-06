@@ -1,62 +1,40 @@
 import {
-  forkWalk, formatWhen, formatYear, threadOf, THREAD_LABELS, type Door, type PoiLite, type ScenarioWalk, type Source, type StepChoice, type StepPicture,
-  type StepQuote, type StoryPerson, type WalkLead,
+  forkWalk, formatWhen, formatYear, recitOf, threadOf, THREAD_LABELS, type PoiLite, type ScenarioWalk, type Source, type StepChoice, type StepPicture,
+  type StepQuote, type StoryPerson, type WalkLead, type WalkStep,
 } from '@way/shared';
 import type { Entity } from './entity.ts';
 import { viaServer } from './media.ts';
+import {
+  add, clearNext, crochet, emptyQueue, goTo, move, parseQueue, progressOf, remove, start, stepOf, takeShelf, updateStep, type Queue,
+} from './queue.ts';
 import type { RouteOption } from './storymap.ts';
 
-// The carnet de route, a film along the bottom of the map where the timeline
-// was: to the right one reads (the card, only when asked), along the bottom
-// one goes on. A band says a path plays (what it follows, its step, quit);
-// under it the step played, told like a short illustrated article from
-// Wikipedia (its place's picture, its heading, its paragraphs and the
-// section's pictures, who was there, its sources and the AI that wrote it),
-// beside it the crossroads: one big way on along the planned route, then a
-// crochet (a few steps that come back here by themselves) or another route
-// (a one-way turn: a turning point, someone's whole life, the place across
-// the centuries, the world at that moment). The same crossroads is drawn on
-// the globe from the step. Under them, the reel of steps, each with its date.
-// A crochet is a parenthesis: its reel rises above the path it leaves, the
-// way back is always in the band, and no crochet opens inside a crochet.
+// The player: the reader tells, the card explains. Along the bottom, while a
+// path plays, a step is told in two or three sentences (its place, its
+// moment, who was there), above it a frieze puts the file on time; "Suivant"
+// goes on, step by step. "Lire en entier" opens the step's place on the right,
+// its card holding the step as a section of an article. The file works like a
+// music player's queue (queue.ts): a scenario fills it, a crochet slips a few
+// steps in at its head and the file goes on by itself after them, "Bifurquer"
+// sets what comes next aside (a route not taken) for another route. Clicking
+// elsewhere on the map opens that place's card and the player waits, folded
+// to a bar: nothing to quit, the camera is the visitor's until "Reprendre".
 // A step's text is written when the visitor gets there, knowing the turns
-// taken. Paused, the film folds to a bar and the timeline comes back.
-// Every scenario started is a path, kept in "Mes chemins" with its progress;
-// "Plan des chemins" draws the tree of the paths taken and not taken. At the
-// end of a path, ways on: a person, what it led to, another path through
-// the same place, or back to the path left. Quitting does not fly the map
-// back: a bar offers to.
+// taken; the file is kept in this browser.
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-/** A path's place in the tree: started on its own, a crochet that comes back, or another route taken from one. */
-export type PathKind = 'trunk' | 'detour' | 'branch';
-
-export interface Path {
-  walk: ScenarioWalk;
-  /** Where the visitor is in it. */
-  step: number;
-  /** The furthest step reached. */
-  seen: number;
-  done: boolean;
-  kind: PathKind;
-  /** The path it branched off, at which step. */
-  parent: { id: string; step: number } | null;
-  /** Last played. */
-  at: number;
-}
-
 /** A crossroads: someone present at the step, or its place. */
 export type Lead = { kind: 'person'; person: StoryPerson; hero?: boolean } | { kind: 'place'; poi: PoiLite };
 
-/** Where a crossroads is taken: the step's year and the path branched off. */
+/** Where a crossroads is taken: the step's year and the walk it leaves. */
 export interface LeadFrom {
   year: number;
   walk: ScenarioWalk | null;
 }
 
-/** Paths through a place or a person, shown in the carnet ("Chemins qui passent par…"). */
+/** Paths through a place or a person, shown above the player ("Chemins qui passent par…"). */
 export interface Here {
   /** The card's id or the person's item. */
   key: string;
@@ -68,9 +46,6 @@ export interface Here {
   poi?: PoiLite;
 }
 
-const KIND_LABELS: Record<PathKind, string> = { trunk: 'Chemin', detour: 'Crochet', branch: 'Autre route' };
-const KIND_ICONS: Record<PathKind, string> = { trunk: '●', detour: '↩', branch: '⑂' };
-
 /** Where another route may start from a step: the place across the centuries, or the world at that moment. */
 export interface ThreadAt {
   poi: PoiLite | null;
@@ -78,13 +53,21 @@ export interface ThreadAt {
   lat: number;
   lon: number;
 }
-/** Paths remembered in this browser. */
-const PATHS_KEY = 'orbis:paths';
-const PATHS_MAX = 60;
+
+/** The file, kept in this browser; the paths of the film before it, read once. */
+const QUEUE_KEY = 'orbis:queue';
+const OLD_PATHS_KEY = 'orbis:paths';
 /** Two steps closer than this pass through the same place. */
 const SAME_PLACE_KM = 40;
 const MAX_FORKS = 3;
 const MAX_DECISIONS = 6;
+/** Crochets offered on a step, the next steps shown, the steps on the frieze around the one now. */
+const MAX_CHIPS = 4;
+const NEXT_SHOWN = 3;
+const FRIEZE_BEFORE = 12;
+const FRIEZE_AFTER = 16;
+/** Steps seen listed in the file's panel. */
+const SEEN_SHOWN = 8;
 
 function km(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
   const r = Math.PI / 180;
@@ -112,12 +95,11 @@ export function throughPlace(walks: ScenarioWalk[], walk: ScenarioWalk, j: numbe
     .slice(0, limit);
 }
 
-/** Where a step may lead, as drawn on the globe: the way on, the turning points, the detours to a place. Pure, for tests. */
-export function routeOptions(walk: ScenarioWalk, j: number): RouteOption[] {
+/** Where a step may lead, as drawn on the globe: the way on, the turning points, the crochets to a place. Pure, for tests. */
+export function routeOptions(walk: ScenarioWalk, j: number, next: WalkStep | null = walk.steps[j + 1] ?? null): RouteOption[] {
   const st = walk.steps[j];
   if (!st) return [];
   const out: RouteOption[] = [];
-  const next = walk.steps[j + 1];
   if (next) out.push({ key: 'next', kind: 'next', label: next.place, lat: next.lat, lon: next.lon });
   (st.forks ?? []).forEach((f, k) => {
     const to = f.steps[0];
@@ -136,59 +118,44 @@ export function stepDecisions(walk: ScenarioWalk, j: number): string[] {
   return [...(walk.decisions ?? []), ...along].slice(-MAX_DECISIONS);
 }
 
-/** The paths remembered: progress and branches, kept in this browser. */
-class Journal {
-  private paths = new Map<string, Path>();
+/**
+ * A place of the story off the route, taken as a crochet: one step there,
+ * written as the walk's own, knowing the steps lived before it. Pure, for tests.
+ */
+export function choiceWalk(walk: ScenarioWalk, j: number, k: number): ScenarioWalk | null {
+  const st = walk.steps[j];
+  const c = st?.choices?.[k];
+  if (!st || !c?.step) return null;
+  const before = walk.steps.slice(0, j + 1);
+  return {
+    ...walk,
+    id: `${walk.id}|crochet|${j}|${k}`,
+    title: c.label,
+    prelude: [...(walk.prelude ?? []), ...before.flatMap((s) => (s.stop === undefined ? [] : [s.stop]))],
+    decisions: [...stepDecisions(walk, j), c.label].slice(-MAX_DECISIONS),
+    steps: [{ ...c.step }],
+  };
+}
 
-  constructor() {
-    try {
-      const raw = JSON.parse(localStorage.getItem(PATHS_KEY) ?? '[]') as Path[];
-      if (Array.isArray(raw)) for (const p of raw) if (p?.walk?.id && Array.isArray(p.walk.steps)) this.paths.set(p.walk.id, p);
-    } catch {
-      /* storage unavailable: no path remembered */
-    }
-  }
-
-  get(id: string): Path | undefined {
-    return this.paths.get(id);
-  }
-
-  put(p: Path): void {
-    this.paths.set(p.walk.id, p);
-    this.save();
-  }
-
-  remove(id: string): void {
-    this.paths.delete(id);
-    // Its branches hang from where it hung.
-    for (const p of this.paths.values()) if (p.parent?.id === id) p.parent = null;
-    this.save();
-  }
-
-  /** The latest played first. */
-  list(): Path[] {
-    return [...this.paths.values()].sort((a, b) => b.at - a.at);
-  }
-
-  /** The paths hanging from one, by the step they leave. */
-  children(id: string): Path[] {
-    return this.list().filter((p) => p.parent?.id === id).sort((a, b) => a.parent!.step - b.parent!.step || a.at - b.at);
-  }
-
-  save(): void {
-    const kept = this.list().slice(0, PATHS_MAX);
-    this.paths = new Map(kept.map((p) => [p.walk.id, p]));
-    try {
-      localStorage.setItem(PATHS_KEY, JSON.stringify(kept));
-    } catch {
-      /* not remembered */
-    }
-  }
+/** A place's card as a walk of one step, to be added to the file. */
+export function cardWalk(poi: PoiLite): ScenarioWalk {
+  return {
+    id: `card|${poi.id}`,
+    title: poi.title,
+    premise: `${poi.title}, ajouté à la file depuis sa fiche.`,
+    invented: true,
+    thread: 'place',
+    hero: null,
+    from: null,
+    source: { url: '', title: poi.title, kind: 'wikipedia' },
+    steps: [{ place: poi.title, label: poi.title, year: poi.date_start, lat: poi.lat, lon: poi.lon, poi, text: '', cast: [] }],
+  };
 }
 
 /** A step's text written, with the people present and the turns the story may take. */
 export interface StepText {
   text: string;
+  recit: string | null;
   cast: StoryPerson[];
   choices: StepChoice[];
   next: string | null;
@@ -207,66 +174,138 @@ const pictureOf = (g: StepPicture | string): StepPicture => (typeof g === 'strin
 const thumbOf = (s: { image?: string | null; gallery?: (StepPicture | string)[] }): string | null =>
   s.image ?? (s.gallery?.[0] ? pictureOf(s.gallery[0]).src : null);
 
-/** A picture between a step's paragraphs, with its caption, as an article shows it. */
-const figure = (g: StepPicture) => `<figure class="film-fig">
-    <img alt="${esc(g.caption ?? '')}" src="${esc(viaServer(g.src))}" referrerpolicy="no-referrer" loading="lazy">
-    ${g.caption ? `<figcaption>${esc(g.caption)}</figcaption>` : ''}
-  </figure>`;
-
-/** Elsewhere from a step: what happened meanwhile, what led there (the card's doors). */
-export interface StepDoors {
-  meanwhile: Door | null;
-  cause: Door | null;
-  effect: Door | null;
-}
-
-/** Opened above the film (or alone): my paths, a place's or person's paths, the trees, the plan of the path played, the ways on. */
-type Drawer = 'paths' | 'here' | 'tree' | 'plan' | 'suites';
+const face = (p: { name: string; image: string | null }) =>
+  `<span class="cn-fork-mark">${p.image ? `<img alt="" src="${esc(viaServer(p.image))}" referrerpolicy="no-referrer">` : esc(p.name.charAt(0))}</span>`;
 
 /** "de Napoléon", "d’Edward". */
 const of = (name: string) => (/^[aeiouyàâéèêëîïôöùûü]/i.test(name) ? `d’${name}` : `de ${name}`);
 
-const face = (p: { name: string; image: string | null }) =>
-  `<span class="cn-fork-mark">${p.image ? `<img alt="" src="${esc(viaServer(p.image))}" referrerpolicy="no-referrer">` : esc(p.name.charAt(0))}</span>`;
+/** A picture between a step's paragraphs, with its caption, as an article shows it. */
+const figure = (g: StepPicture) => `<figure class="sa-fig">
+    <img alt="${esc(g.caption ?? '')}" src="${esc(viaServer(g.src))}" referrerpolicy="no-referrer" loading="lazy">
+    ${g.caption ? `<figcaption>${esc(g.caption)}</figcaption>` : ''}
+  </figure>`;
 
-export class Carnet {
-  private journal = new Journal();
-  private current: string | null = null;
-  /** Clicked elsewhere: the path waits, its people leave the map; the film folds to a bar. */
-  private paused = false;
-  /** What is opened above the film (or alone). */
-  private drawer: Drawer | null = null;
+/**
+ * A step in full, as a section of the article of its place, for the card:
+ * which step of the file it is, its heading, its paragraphs with the
+ * section's pictures between them, a sentence of the article, the facts to
+ * keep, who was there, its sources and the AI that wrote it. `n`: its
+ * number in the file; `writer`: the AI writing it, while it does.
+ */
+export function stepArticle(walk: ScenarioWalk, j: number, n: string, writer: string | null): string {
+  const st = walk.steps[j];
+  if (!st) return '';
+  const pics = (st.gallery ?? []).map(pictureOf);
+  const head = st.image ? { src: st.image, caption: null } : pics.shift() ?? null;
+  const paragraphs = st.text ? st.text.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean) : [];
+  // Pictures between the paragraphs, as an article shows them (never after the last); the others in a strip.
+  const slots = [0, 2].filter((k) => k < paragraphs.length - 1).slice(0, pics.length);
+  const inline = pics.slice(0, slots.length);
+  const strip = pics.slice(slots.length);
+  const quote = st.quote
+    ? `<blockquote class="sa-quote">« ${esc(st.quote.text)} »<cite><a href="${esc(st.quote.source.url)}" target="_blank" rel="noopener">${esc(st.quote.source.title)}</a></cite></blockquote>`
+    : '';
+  const quoteAt = paragraphs.length > 2 ? 1 : paragraphs.length - 1;
+  const article = paragraphs.length
+    ? `<div class="sa-article">${paragraphs.map((t, k) => {
+      const at = slots.indexOf(k);
+      return `<p class="sa-par${k === 0 ? ' sa-lead' : ''}">${esc(t)}</p>${at >= 0 ? figure(inline[at]!) : ''}${k === quoteAt ? quote : ''}`;
+    }).join('')}</div>`
+    : `<div class="sa-writing"><span class="sc-note-dot" aria-hidden="true"></span>${writer ? esc(writer) : 'L’IA'} écrit cette étape d’après l’article de Wikipédia sur ${esc(st.place)}…</div>
+      <div class="skeleton-lines"><i></i><i></i><i></i><i></i><i></i></div>`;
+  const facts = st.facts?.length
+    ? `<aside class="sa-facts"><div class="sa-box-title">Repères</div><ul>${st.facts.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></aside>`
+    : '';
+  const who = st.text && st.cast.length
+    ? `<section class="sa-who"><div class="sa-box-title">Présents</div><div class="sa-who-list">${st.cast.map((c, k) => `<button type="button" class="sa-person" data-act="who" data-i="${k}" title="${esc(`${c.name} · ${c.role}`)}" aria-haspopup="menu">
+        ${face(c)}<span class="sa-person-text"><b>${esc(c.name)}</b><small>${esc(c.role)}</small></span></button>`).join('')}</div></section>`
+    : '';
+  const pictures = strip.length
+    ? `<div class="sa-gallery">${strip.map((g, k) => `<button type="button" class="sa-pic" data-act="pic" data-url="${esc(viaServer(g.src))}" data-caption="${esc(g.caption ?? '')}" aria-label="${esc(g.caption ?? `Image ${k + 1}`)}" title="${esc(g.caption ?? '')}"><img alt="" src="${esc(viaServer(g.src))}" referrerpolicy="no-referrer" loading="lazy"></button>`).join('')}</div>`
+    : '';
+  const sources = st.sources?.length ? st.sources : st.text ? [walk.source] : [];
+  const credit = st.ai
+    ? `Texte rédigé par <b>${esc(st.ai)}</b> d’après ${sources.length > 1 ? 'ces articles' : 'cet article'} de Wikipédia (CC BY-SA) : vérifiez-les.`
+    : st.text ? 'Texte écrit avec le chemin, d’après l’article ci-dessus.' : '';
+  const footer = sources.length
+    ? `<footer class="sa-sources"><div class="sa-box-title">Sources</div>
+        <ul>${sources.filter((s) => s.url).map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title.replace(/^Wikipédia : /, ''))}</a></li>`).join('')}</ul>
+        <p class="sa-ai">${credit}${walk.ai ? ` Chemin tracé par ${esc(walk.ai)}.` : ''}</p></footer>`
+    : '';
+  return `<div class="sa-kicker"><span class="sa-n">${esc(n)}</span>L’étape ${esc(n)} de votre file raconte ce moment · ${esc(walk.title)}</div>
+      <h3 class="sa-heading">${esc(st.beat ?? st.label)}<small>${esc(st.place)} · ${esc(formatWhen(st))}</small></h3>
+      ${head ? `<figure class="sa-img"><img alt="" src="${esc(viaServer(head.src))}" referrerpolicy="no-referrer"></figure>` : ''}
+      <p class="sa-img-caption"${head?.caption ? '' : ' hidden'}>${esc(head?.caption ?? '')}</p>
+      ${article}
+      ${facts}
+      ${who}
+      ${pictures}
+      ${footer}`;
+}
+
+/** A step in full, shown somewhere: its people open their menu, its pictures take the head's place. */
+export function bindArticle(el: HTMLElement, step: WalkStep, onEntity: (anchor: HTMLElement, e: Entity) => void): void {
+  el.addEventListener('click', (e) => {
+    const b = (e.target as Element).closest<HTMLElement>('[data-act]');
+    if (!b || !el.contains(b)) return;
+    if (b.dataset.act === 'who') {
+      const person = step.cast[Number(b.dataset.i)];
+      if (person) onEntity(b, { kind: 'person', person });
+    } else if (b.dataset.act === 'pic' && b.dataset.url) {
+      const img = el.querySelector<HTMLImageElement>('.sa-img img');
+      if (img) img.src = b.dataset.url;
+      else el.querySelector('.sa-heading')?.insertAdjacentHTML('afterend', `<figure class="sa-img"><img alt="" src="${esc(b.dataset.url)}" referrerpolicy="no-referrer"></figure>`);
+      const caption = el.querySelector<HTMLElement>('.sa-img-caption');
+      if (caption) {
+        caption.textContent = b.dataset.caption ?? '';
+        caption.hidden = !b.dataset.caption;
+      }
+      el.querySelectorAll('.sa-pic').forEach((x) => x.classList.toggle('on', x === b));
+    }
+  });
+  el.querySelectorAll<HTMLImageElement>('img').forEach((img) => img.addEventListener('error', () => img.closest('figure')?.remove() ?? img.remove()));
+}
+
+/** Above the player (or alone): the file, the routes to take instead, a place's or person's paths, the ways on at the end. */
+type Panel = 'queue' | 'routes' | 'here' | 'suites';
+
+export class Player {
+  private q: Queue = emptyQueue();
+  /** Clicked elsewhere: the file waits, the player folds to a bar, the camera is the visitor's. */
+  private paused = true;
+  /** Closed: only a button to open the file again shows. */
+  private folded = false;
+  /** Scenarios turned off in the filters. */
+  private enabled = true;
+  private panel: Panel | null = null;
   private here: Here | null = null;
-  /** Something being prepared (a detour, a life written by an AI). */
+  /** Something being prepared (a crochet, a life written by an AI). */
   private note: string | null = null;
-  /** The AI writing the step played, while it does. */
+  /** The AI writing the step now, while it does. */
   private writer: string | null = null;
-  /** A path just left: the bar offering to go back to where the visitor was before it. */
-  private back: string | null = null;
-  /** "Explorer autour" unfolded. */
-  private around = false;
   /** What the buttons shown point to. */
   private leads: Lead[] = [];
   private walksShown: ScenarioWalk[] = [];
   private afterShown: WalkLead[] = [];
-  /** Doors of the cards met, by card. */
-  private doors = new Map<string, StepDoors | 'pending'>();
+  /** The items on the frieze (and drawn on the globe), from this one. */
+  private shownFrom = 0;
 
-  /** A step to show: map, timeline, its card and its people go there; `first`: a path started or taken up again. */
+  /** A step to show: map, timeline, its card and its people go there; `first`: the file started or taken up again. */
   onStep: (walk: ScenarioWalk, step: number, first: boolean) => void = () => undefined;
-  /** Where the step played may go, to draw on the globe. */
-  onRoute: (walk: ScenarioWalk, step: number, options: RouteOption[]) => void = () => undefined;
-  /** A step without its text: to be written (and the next one ahead). */
+  /** The steps around the one now, and where it may go, to draw on the globe. */
+  onRoute: (steps: WalkStep[], at: number, options: RouteOption[], labels: string[]) => void = () => undefined;
+  /** A step without its text: to be written. */
   onNeedText: (walk: ScenarioWalk, step: number) => void = () => undefined;
-  /** Paused: the people of the step leave the map. */
+  /** Paused (or nothing plays any more): the people of the step leave the map. */
   onPause: () => void = () => undefined;
-  /** No path played any more: `restore`, the bar may offer to go back to where the visitor was. */
-  onEnd: (restore: boolean) => void = () => undefined;
-  /** Back to where the visitor was before the path, asked from the bar. */
-  onReturn: () => void = () => undefined;
-  /** The path played, its step or its state changed (cards mark it). */
+  /** The step now, its text or the state changed (cards mark it, the card's step follows). */
   onChange: () => void = () => undefined;
-  /** A card to open, on the right of the film. */
+  /** "Lire en entier": the step in full, in its place's card on the right. */
+  onRead: (walk: ScenarioWalk, step: number) => void = () => undefined;
+  /** Does the card on the right show the step now in full? */
+  readOpen: () => boolean = () => false;
+  /** A card to open (from the paths of a place). */
   onOpenCard: (poi: PoiLite) => void = () => undefined;
   /** A crossroads taken: a crochet around the step's year, or the whole path as another route. */
   onLead: (lead: Lead, how: 'detour' | 'full', at: LeadFrom) => void = () => undefined;
@@ -274,26 +313,17 @@ export class Carnet {
   onThread: (kind: 'place' | 'era', at: ThreadAt) => void = () => undefined;
   /** A walk met: remembered for the search bar. */
   onMet: (walk: ScenarioWalk) => void = () => undefined;
-  /** A card's doors (meanwhile, what led there), for a step's crossroads. */
-  doorsFor: (poi: PoiLite) => Promise<StepDoors> = async () => ({ meanwhile: null, cause: null, effect: null });
   /** A name to act on (someone present at the step): its menu opens under it. */
   onEntity: (anchor: HTMLElement, e: Entity) => void = () => undefined;
-  /** The card open on the right, if any (the band's button then closes it). */
-  cardOpen: () => string | null = () => null;
-  /** The card on the right closed from the band. */
-  onCloseCard: () => void = () => undefined;
 
   constructor(private root: HTMLElement, private known: () => ScenarioWalk[]) {
+    this.q = this.load();
     root.addEventListener('click', (e) => this.click(e));
-    root.addEventListener('toggle', (e) => {
-      if ((e.target as Element).classList?.contains('film-around')) this.around = (e.target as HTMLDetailsElement).open;
-    }, true);
-    // Before the card and the timeline: while a path plays, the arrows are the film's.
     window.addEventListener('keydown', (e) => {
       if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable]')) return;
-      const playing = this.playingPath && !this.paused;
-      if (e.key === 'Escape' && this.drawer) this.closeDrawer();
-      else if (playing && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) this.go(e.key === 'ArrowRight' ? 1 : -1);
+      if (e.key === 'Escape' && this.panel) this.closePanel();
+      // Before the card and the timeline: while the file plays, the arrows are the player's.
+      else if (this.playingNow && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) this.go(e.key === 'ArrowRight' ? 1 : -1);
       else return;
       e.preventDefault();
       e.stopPropagation();
@@ -301,852 +331,630 @@ export class Carnet {
     this.render();
   }
 
-  private get playingPath(): Path | null {
-    return (this.current && this.journal.get(this.current)) || null;
+  private get playingNow(): boolean {
+    return this.enabled && !this.paused && !!stepOf(this.q, this.q.at);
   }
 
-  /** The path played (or paused) and its step. */
+  /** The step now (played or paused). */
   get playing(): { walk: ScenarioWalk; step: number } | null {
-    const p = this.playingPath;
-    return p && { walk: p.walk, step: p.step };
+    const s = this.enabled ? stepOf(this.q, this.q.at) : null;
+    return s && { walk: s.walk, step: s.item.step };
   }
 
   get isPaused(): boolean {
     return this.paused;
   }
 
-  /** What is known of a path (its progress), for the cards. */
-  pathOf(id: string): Path | undefined {
-    return this.journal.get(id);
+  /** The step now's place in the file, as numbered on the frieze ("4", "b"). */
+  get number(): string {
+    return this.q.items[this.q.at] ? this.label(this.q.at) : '';
   }
 
-  /**
-   * Plays a walk from a step. `branch`: hung on the path played (or on
-   * `on`, at its step), as a detour or a branch; otherwise a path keeps its
-   * place in the tree (a new one is a trunk).
-   */
-  play(walk: ScenarioWalk, step = 0, branch?: PathKind, on?: { id: string; step: number }): void {
-    if (!walk.steps[step]) return;
-    let from = on ? this.journal.get(on.id) ?? null : this.playingPath;
-    let fromStep = on ? on.step : from?.step ?? 0;
-    // No crochet inside a crochet: one taken from a crochet comes back where that one would.
-    if (branch === 'detour' && from?.kind === 'detour' && from.parent) {
-      const back = this.journal.get(from.parent.id);
-      if (back) {
-        fromStep = from.parent.step;
-        from = back;
-      }
-    }
-    const first = this.current !== walk.id || this.paused;
-    const now = Date.now();
-    const known = this.journal.get(walk.id);
-    const p: Path = known ?? { walk, step, seen: step, done: false, kind: 'trunk', parent: null, at: now };
-    // A walk played before keeps its texts and the turns taken.
-    p.walk = known && known.walk.steps.length >= walk.steps.length ? known.walk : walk;
-    p.step = step;
-    p.seen = Math.max(p.seen, step);
-    p.at = now;
-    if (branch && from && from.walk.id !== walk.id && !this.ancestors(from).some((a) => a.walk.id === walk.id)) {
-      p.kind = branch;
-      p.parent = { id: from.walk.id, step: fromStep };
-    }
-    this.journal.put(p);
-    this.onMet(p.walk);
-    this.current = walk.id;
-    this.paused = false;
-    this.drawer = null;
-    this.note = null;
-    this.back = null;
-    this.show(first);
+  /** The item now, to know whether the visitor moved on while a crochet was written. */
+  get cursor(): string | null {
+    return this.q.items[this.q.at]?.key ?? null;
   }
 
-  /** Clicked elsewhere on the globe: the path waits, the column folds to a bar; with none played, the drawer closes. */
+  /** The step after the one now, for its text to be written ahead. */
+  get upcoming(): { walk: ScenarioWalk; step: number } | null {
+    const s = stepOf(this.q, this.q.at + 1);
+    return s && { walk: s.walk, step: s.item.step };
+  }
+
+  /** How far the visitor read a walk, for the cards. */
+  progressOf(id: string): { step: number; done: boolean } | undefined {
+    return progressOf(this.q, id);
+  }
+
+  /** Where a card's place comes in the file, if it does: the next time first, else the latest. */
+  placeIn(poiId: string): { i: number; n: string; now: boolean } | null {
+    const at = (i: number) => stepOf(this.q, i)?.step.poi?.id === poiId;
+    let i = this.q.items.findIndex((_, k) => k >= this.q.at && at(k));
+    if (i < 0) i = this.q.items.map((_, k) => k).reverse().find(at) ?? -1;
+    return i >= 0 ? { i, n: this.label(i), now: i === this.q.at } : null;
+  }
+
+  /** A walk taken (a scenario, a life, another route): what came next is set aside, its steps come next, from `from`. */
+  start(walk: ScenarioWalk, from = 0): void {
+    this.q = start(this.q, walk, from);
+    this.onMet(walk);
+    this.play(true);
+  }
+
+  /** A crochet written: slipped in after the step now; gone to if the visitor is still where they asked it (`asked`). */
+  crochet(walk: ScenarioWalk, asked: string | null): void {
+    const go = !this.paused && asked === this.cursor;
+    this.q = crochet(this.q, walk, go);
+    this.onMet(walk);
+    if (go) this.play(false);
+    else this.commit();
+  }
+
+  /** A place added from its card: right after the step now (the file itself when empty, waiting). */
+  add(poi: PoiLite): void {
+    const empty = !stepOf(this.q, this.q.at);
+    this.q = add(this.q, cardWalk(poi));
+    this.folded = false;
+    if (empty) this.paused = true;
+    this.commit();
+  }
+
+  /** A step of the file chosen (on the frieze, the panel, a card). */
+  goTo(i: number): void {
+    if (!this.q.items[i]) return;
+    const first = this.paused;
+    this.q = goTo(this.q, i);
+    this.play(first);
+  }
+
+  /** Clicked elsewhere on the globe: the file waits, the player folds to a bar; with none played, the panel closes. */
   pause(): void {
-    if (!this.playingPath) {
-      if (this.drawer) this.closeDrawer();
+    if (!this.playingNow) {
+      if (this.panel) this.closePanel();
       return;
     }
-    if (this.paused) return;
     this.paused = true;
-    this.drawer = null;
+    this.panel = null;
     this.onPause();
-    this.render();
-    this.onChange();
+    this.commit();
   }
 
   resume(): void {
-    const p = this.playingPath;
-    if (!p) return;
-    this.play(p.walk, p.step);
+    if (stepOf(this.q, this.q.at)) this.play(true);
   }
 
-  /** Leaves the path played: back up to the one it branched off, else nothing plays (a bar offers the view of before). */
-  quit(): void {
-    const p = this.playingPath;
-    if (!p) return this.closeDrawer();
-    const parent = p.parent && this.journal.get(p.parent.id);
-    if (parent) {
-      this.play(parent.walk, Math.min(p.parent!.step, parent.walk.steps.length - 1));
-      return;
-    }
-    this.current = null;
-    this.paused = false;
-    this.drawer = null;
-    this.back = p.walk.title;
-    this.onEnd(true);
-    this.render();
-    this.onChange();
-  }
-
-  /** Scenarios turned off: everything stops where it is. */
-  stop(): void {
+  /** Scenarios turned off or on: off, the player goes, the file stays. */
+  setEnabled(on: boolean): void {
+    if (on === this.enabled) return;
+    if (!on && this.playingNow) this.onPause();
+    this.enabled = on;
+    this.paused = true;
+    this.panel = null;
     this.note = null;
     this.here = null;
-    this.drawer = null;
-    this.back = null;
-    const had = !!this.current;
-    this.current = null;
-    this.paused = false;
-    if (had) this.onEnd(false);
-    this.render();
-    this.onChange();
+    this.commit();
   }
 
-  /** The paths through a place or a person, in the drawer. */
+  /** The paths through a place or a person, above the player. */
   showHere(here: Here): void {
     this.here = here;
-    this.openDrawer('here');
+    this.openPanel('here');
   }
 
   /** New paths for the place or person shown (written meanwhile). */
   updateHere(here: Here): void {
     if (this.here?.key !== here.key) return;
     this.here = here;
-    if (this.drawer === 'here') this.render();
+    if (this.panel === 'here') this.render();
   }
 
   get hereKey(): string | null {
     return this.here?.key ?? null;
   }
 
-  /** A step of the path played, chosen on the map. */
+  /** A step drawn on the globe, chosen there (`j` among those drawn). */
   showStep(j: number): void {
-    this.goto(j);
+    this.goTo(this.shownFrom + j);
   }
 
-  /** Where the path may go, chosen on the map (`RouteOption.key`). */
+  /** Where the step may go, chosen on the globe (`RouteOption.key`). */
   takeOption(key: string): void {
-    const p = this.playingPath;
-    if (!p || this.paused) return;
+    const s = stepOf(this.q, this.q.at);
+    if (!s || !this.playingNow) return;
     const [kind, n] = key.split(':');
     if (kind === 'next') this.go(1);
-    else if (kind === 'fork') this.takeFork(p, p.step, Number(n));
+    else if (kind === 'fork') this.takeFork(s.walk, s.item.step, Number(n));
     else if (kind === 'choice') this.choose(Number(n));
   }
 
-  showPaths(): void {
-    this.openDrawer('paths');
+  /** The card on the right opened or closed ("Lire en entier" says so). */
+  refresh(): void {
+    if (this.playingNow) this.render();
   }
 
-  /** The card on the right opened or closed (the band's button says so). */
-  refreshCard(): void {
-    if (this.playingPath && !this.paused) this.render();
-  }
-
-  /** What is being prepared ("L'IA écrit un détour…"), or null. */
+  /** What is being prepared ("L'IA écrit un crochet…"), or null. */
   setNote(text: string | null): void {
     this.note = text;
     this.render();
   }
 
-  /** The AI writing the step played (null once done). */
+  /** The AI writing the step now (null once done). */
   setWriter(ai: string | null): void {
     if (ai === this.writer) return;
     this.writer = ai;
     this.render();
+    this.onChange();
   }
 
-  /** A step's text has come: kept with the path (it is not written twice). */
+  get writing(): string | null {
+    return this.writer;
+  }
+
+  /** A step's text has come: kept with the file (it is not written twice). */
   setStepText(walkId: string, j: number, t: StepText): void {
-    const p = this.journal.get(walkId);
-    const st = p?.walk.steps[j];
-    if (!p || !st) return;
+    const st = this.q.walks[walkId]?.steps[j];
+    if (!st) return;
     this.writer = null;
-    p.walk.steps[j] = {
-      ...st, text: t.text, cast: t.cast.length ? t.cast : st.cast, choices: t.choices, next: t.next, facts: t.facts, quote: t.quote, gallery: t.gallery, near: t.near,
-      sources: t.sources, ai: t.ai,
-    };
-    this.journal.save();
-    this.onMet(p.walk);
-    if (this.current === walkId && p.step === j) this.render();
+    this.q = updateStep(this.q, walkId, j, {
+      ...st, text: t.text, recit: t.recit, cast: t.cast.length ? t.cast : st.cast, choices: t.choices, next: t.next, facts: t.facts, quote: t.quote,
+      gallery: t.gallery, near: t.near, sources: t.sources, ai: t.ai,
+    });
+    this.onMet(this.q.walks[walkId]!);
+    this.commit();
   }
 
-  private openDrawer(d: Drawer): void {
-    this.drawer = d;
-    this.render();
-  }
-
-  private closeDrawer(): void {
-    this.drawer = null;
-    this.render();
-  }
-
-  private ancestors(p: Path): Path[] {
-    const out: Path[] = [];
-    const seen = new Set([p.walk.id]);
-    let at = p.parent && this.journal.get(p.parent.id);
-    while (at && !seen.has(at.walk.id)) {
-      out.unshift(at);
-      seen.add(at.walk.id);
-      at = at.parent && this.journal.get(at.parent.id);
+  private load(): Queue {
+    try {
+      const saved = localStorage.getItem(QUEUE_KEY);
+      if (saved) return parseQueue(JSON.parse(saved));
+      // The film's paths: the latest one not finished becomes the file, where it was.
+      const old = JSON.parse(localStorage.getItem(OLD_PATHS_KEY) ?? '[]') as { walk: ScenarioWalk; step: number; done: boolean; at: number }[];
+      const last = Array.isArray(old) ? old.filter((p) => p?.walk?.steps?.length && !p.done).sort((a, b) => b.at - a.at)[0] : undefined;
+      return last ? start(emptyQueue(), last.walk, Math.min(last.step, last.walk.steps.length - 1)) : emptyQueue();
+    } catch {
+      return emptyQueue();
     }
-    return out;
+  }
+
+  private save(): void {
+    try {
+      localStorage.setItem(QUEUE_KEY, JSON.stringify(this.q));
+    } catch {
+      /* not remembered */
+    }
+  }
+
+  /** Changed: kept, drawn, said. */
+  private commit(): void {
+    this.save();
+    this.render();
+    this.onChange();
+  }
+
+  private openPanel(p: Panel): void {
+    this.panel = p;
+    this.render();
+  }
+
+  private closePanel(): void {
+    this.panel = null;
+    this.render();
+  }
+
+  /** The step now shown: laid out first (the map flies to the part the player leaves visible), then written if it is not. */
+  private play(first: boolean): void {
+    const s = stepOf(this.q, this.q.at);
+    if (!s) return this.commit();
+    this.paused = false;
+    this.folded = false;
+    if (this.panel !== 'queue') this.panel = null;
+    this.note = null;
+    this.writer = null;
+    this.save();
+    this.render();
+    this.onStep(s.walk, s.item.step, first);
+    if (!s.step.ai) this.onNeedText(s.walk, s.item.step);
+    this.onChange();
   }
 
   private go(delta: number): void {
-    const p = this.playingPath;
-    if (!p) return;
-    this.goto(p.step + delta);
+    if (this.q.items[this.q.at + delta]) this.goTo(this.q.at + delta);
   }
 
-  private goto(j: number): void {
-    const p = this.playingPath;
-    if (!p || !p.walk.steps[j]) return;
-    p.step = j;
-    p.seen = Math.max(p.seen, j);
-    p.at = Date.now();
-    this.journal.save();
-    const first = this.paused;
-    this.paused = false;
-    if (this.drawer === 'suites') this.drawer = null;
-    this.show(first);
-  }
-
-  /** A turning point taken (at a step of a path): its own walk, a branch hung there; taken again, where it was left. */
-  private takeFork(on: Path, at: number, k: number): void {
-    const w = forkWalk(on.walk, at, k);
-    if (!w) return;
-    const known = this.journal.get(w.id);
-    this.play(known?.walk ?? w, known && !known.done ? known.step : 0, 'branch', { id: on.walk.id, step: at });
+  /** A turning point taken: another route, what came next set aside. */
+  private takeFork(walk: ScenarioWalk, j: number, k: number): void {
+    const w = forkWalk(walk, j, k);
+    if (w) this.start(w);
   }
 
   /**
-   * A detour taken: a place of the story becomes the next step of the path
-   * (once per step), then the route goes on; someone met, or another card,
-   * opens a few steps there, hung on this step, that come back.
+   * A crochet taken from the step now: a place of the story is one step
+   * slipped in; someone met, or another card, a few steps written there.
    */
   private choose(k: number): void {
-    const p = this.playingPath;
-    const st = p?.walk.steps[p.step];
-    const c = st?.choices?.[k];
-    if (!p || !st || !c) return;
+    const s = stepOf(this.q, this.q.at);
+    const c = s?.step.choices?.[k];
+    if (!s || !c) return;
+    this.q = updateStep(this.q, s.walk.id, s.item.step, { ...s.step, chosen: k });
+    const walk = this.q.walks[s.walk.id]!;
     if (c.poi || c.person) {
-      p.walk.steps[p.step] = { ...st, chosen: k };
-      this.journal.save();
-      this.onLead(c.person ? { kind: 'person', person: c.person } : { kind: 'place', poi: c.poi! }, 'detour', { year: st.year, walk: p.walk });
+      this.save();
+      this.onLead(c.person ? { kind: 'person', person: c.person } : { kind: 'place', poi: c.poi! }, 'detour', { year: s.step.year, walk });
       return;
     }
-    if (!c.step) return;
-    const steps = [...p.walk.steps];
-    const before = st.chosen !== undefined ? st.choices?.[st.chosen]?.step : undefined;
-    if (before && steps[p.step + 1]?.stop === before.stop) steps.splice(p.step + 1, 1);
-    steps[p.step] = { ...st, chosen: k };
-    steps.splice(p.step + 1, 0, { ...c.step });
-    p.walk = { ...p.walk, steps };
-    this.journal.put(p);
-    this.goto(p.step + 1);
+    const w = choiceWalk(walk, s.item.step, k);
+    if (w) this.crochet(w, this.cursor);
   }
 
+  /** Nothing in the file any more after "Terminer": the player goes. */
   private finish(): void {
-    const p = this.playingPath;
-    if (p) {
-      p.done = true;
-      this.journal.save();
-    }
-    this.quit();
-  }
-
-  private show(first: boolean): void {
-    const p = this.playingPath!;
-    // Laid out first: the map flies to the part the film leaves visible.
-    this.render();
-    this.onStep(p.walk, p.step, first);
-    // Written by the step's writer, or still to be: those of a life come with a few lines, made a full step on arrival.
-    this.writer = null;
-    if (!p.walk.steps[p.step]!.ai) this.onNeedText(p.walk, p.step);
-    this.onChange();
+    this.paused = true;
+    this.folded = true;
+    this.panel = null;
+    this.onPause();
+    this.commit();
   }
 
   private click(e: MouseEvent): void {
     const b = (e.target as Element).closest<HTMLElement>('[data-act]');
     if (!b || !this.root.contains(b)) return;
-    const p = this.playingPath;
+    const s = stepOf(this.q, this.q.at);
     const n = Number(b.dataset.i);
-    const walkAt = () => this.walksShown[n];
+    const from = (): LeadFrom => ({ year: s?.step.year ?? 0, walk: s?.walk ?? null });
     switch (b.dataset.act) {
-      case 'drawer': {
-        const d = b.dataset.view as Drawer;
-        return this.drawer === d ? this.closeDrawer() : this.openDrawer(d);
+      case 'panel': {
+        const p = b.dataset.view as Panel;
+        return this.panel === p ? this.closePanel() : this.openPanel(p);
       }
-      case 'close-drawer': return this.closeDrawer();
-      case 'step-card': {
-        if (this.cardOpen()) return this.onCloseCard();
-        const st = p?.walk.steps[p.step];
-        const poi = st?.poi ?? p?.walk.from;
-        if (poi) this.onOpenCard(poi);
+      case 'close-panel': return this.closePanel();
+      case 'read':
+        if (s) this.onRead(s.walk, s.item.step);
         return;
-      }
-      case 'thread': {
-        const st = p?.walk.steps[p.step];
-        if (st) this.onThread(b.dataset.kind as 'place' | 'era', { poi: st.poi, year: st.year, lat: st.lat, lon: st.lon });
-        return;
-      }
       case 'pause': return this.pause();
       case 'resume': return this.resume();
-      case 'quit': return this.quit();
+      case 'fold':
+        this.folded = true;
+        this.panel = null;
+        return this.render();
+      case 'unfold':
+        this.folded = false;
+        return this.render();
       case 'prev': return this.go(-1);
       case 'next': return this.go(1);
-      case 'dot': return this.goto(n);
+      case 'goto': return this.goTo(n);
       case 'fork':
-        if (p) this.takeFork(p, p.step, n);
+        if (s) this.takeFork(s.walk, s.item.step, n);
         return;
       case 'choice': return this.choose(n);
       case 'retry':
-        if (p) this.onNeedText(p.walk, p.step);
+        if (s) this.onNeedText(s.walk, s.item.step);
         return;
-      case 'finish': return this.finish();
-      case 'back': return this.quit();
-      case 'return':
-        this.back = null;
-        this.render();
-        return this.onReturn();
-      case 'dismiss-return':
-        this.back = null;
-        return this.render();
-      case 'crumb': {
-        const a = this.journal.get(b.dataset.id!);
-        if (a) this.play(a.walk, Number(b.dataset.step));
-        return;
-      }
-      case 'path': {
-        const a = this.journal.get(b.dataset.id!);
-        if (a) this.play(a.walk, a.done ? 0 : a.step);
-        return;
-      }
-      case 'tree-step': {
-        const a = this.journal.get(b.dataset.id!);
-        if (!a) return;
-        if (a.walk.id === this.current && !this.paused) return this.goto(Number(b.dataset.step));
-        this.play(a.walk, Number(b.dataset.step));
-        return;
-      }
-      case 'tree-fork': {
-        const a = this.journal.get(b.dataset.id!);
-        if (a) this.takeFork(a, Number(b.dataset.step), n);
-        return;
-      }
-      case 'forget':
-        if (b.dataset.id === this.current) return;
-        this.journal.remove(b.dataset.id!);
-        return this.render();
       case 'lead': {
         const lead = this.leads[n];
-        if (lead && p) this.onLead(lead, b.dataset.how as 'detour' | 'full', { year: p.walk.steps[p.step]!.year, walk: p.walk });
+        if (lead) this.onLead(lead, b.dataset.how as 'detour' | 'full', from());
         return;
       }
+      case 'thread':
+        if (s) this.onThread(b.dataset.kind as 'place' | 'era', { poi: s.step.poi, year: s.step.year, lat: s.step.lat, lon: s.step.lon });
+        return;
       case 'who': {
-        const person = p?.walk.steps[p.step]?.cast[n];
+        const person = s?.step.cast[n];
         if (person) this.onEntity(b, { kind: 'person', person });
         return;
       }
-      case 'near': {
-        const st = p?.walk.steps[p.step];
-        const poi = st?.near?.[n];
-        if (p && st && poi) this.onLead({ kind: 'place', poi }, 'detour', { year: st.year, walk: p.walk });
-        return;
-      }
-      case 'near-card': {
-        const poi = p?.walk.steps[p.step]?.near?.[n];
-        if (poi) this.onOpenCard(poi);
-        return;
-      }
-      case 'pic': {
-        const img = this.root.querySelector<HTMLImageElement>('.film-img img');
-        const url = b.dataset.url;
-        if (!url) return;
-        if (img) img.src = url;
-        else {
-          const fig = this.root.querySelector('.film-img');
-          fig?.classList.remove('no-img');
-          fig?.insertAdjacentHTML('afterbegin', `<img alt="" src="${esc(url)}" referrerpolicy="no-referrer">`);
-        }
-        const caption = this.root.querySelector<HTMLElement>('.film-img-caption');
-        if (caption) {
-          caption.textContent = b.dataset.caption ?? '';
-          caption.hidden = !b.dataset.caption;
-        }
-        this.root.querySelectorAll('.film-pic').forEach((x) => x.classList.toggle('on', x === b));
-        this.root.querySelector('.film-pane')?.scrollTo({ top: 0, behavior: 'smooth' });
-        return;
-      }
-      case 'door': {
-        const d = this.stepDoors(p)?.[b.dataset.kind as keyof StepDoors];
-        if (d) this.onOpenCard(d.poi);
-        return;
-      }
+      case 'up':
+      case 'down':
+        this.q = move(this.q, b.dataset.key!, b.dataset.act === 'up' ? -1 : 1);
+        return this.commit();
+      case 'remove':
+        this.q = remove(this.q, b.dataset.key!);
+        return this.commit();
+      case 'clear':
+        this.q = clearNext(this.q);
+        return this.commit();
+      case 'shelf':
+        this.q = takeShelf(this.q, n);
+        return this.play(this.paused);
+      case 'finish': return this.finish();
       case 'walk': {
-        const w = walkAt();
+        const w = this.walksShown[n];
         if (!w) return;
-        const known = this.journal.get(w.id);
-        this.play(w, known && !known.done ? known.step : 0);
-        return;
-      }
-      case 'branch': {
-        const w = walkAt();
-        if (w) this.play(w, 0, 'branch');
+        const p = this.progressOf(w.id);
+        this.start(w, p && !p.done ? p.step : 0);
         return;
       }
       case 'after-paths': {
         const l = this.afterShown[n];
-        if (l) this.onLead({ kind: 'place', poi: l.poi }, 'full', { year: l.year, walk: p?.walk ?? null });
+        if (l) this.onLead({ kind: 'place', poi: l.poi }, 'full', { year: l.year, walk: s?.walk ?? null });
         return;
       }
       case 'card': {
-        const poi = b.dataset.after !== undefined ? this.afterShown[Number(b.dataset.after)]?.poi : this.here?.poi ?? p?.walk.from;
+        const poi = b.dataset.after !== undefined ? this.afterShown[Number(b.dataset.after)]?.poi : this.here?.poi;
         if (poi) this.onOpenCard(poi);
         return;
       }
       case 'life':
-        if (this.here?.person) {
-          this.onLead({ kind: 'person', person: this.here.person }, b.dataset.how as 'detour' | 'full', { year: p?.walk.steps[p.step]!.year ?? 0, walk: p?.walk ?? null });
-        }
+        if (this.here?.person) this.onLead({ kind: 'person', person: this.here.person }, b.dataset.how as 'detour' | 'full', from());
         return;
     }
   }
 
-  /** The doors of the step's card (or the walk's), asked once per card. */
-  private stepDoors(p: Path | null): StepDoors | null {
-    const st = p?.walk.steps[p.step];
-    const poi = st?.poi ?? p?.walk.from;
-    if (!poi) return null;
-    const known = this.doors.get(poi.id);
-    if (known === 'pending') return null;
-    if (known) return known;
-    this.doors.set(poi.id, 'pending');
-    void this.doorsFor(poi)
-      .catch(() => ({ meanwhile: null, cause: null, effect: null }))
-      .then((d) => {
-        this.doors.set(poi.id, d);
-        const now = this.playingPath;
-        if (now && !this.paused && (now.walk.steps[now.step]?.poi ?? now.walk.from)?.id === poi.id) this.render();
-      });
-    return null;
+  /** An item as numbered on the frieze: its step in its walk, a letter in a crochet, "+" when added. */
+  private label(i: number): string {
+    const it = this.q.items[i];
+    if (!it) return '';
+    if (it.added) return '+';
+    if (!it.crochet) return String(it.step + 1);
+    let k = 0;
+    while (i - k - 1 >= 0 && this.q.items[i - k - 1]?.crochet === it.crochet) k++;
+    return String.fromCharCode(97 + (k % 26));
   }
 
   private render(): void {
-    const p = this.playingPath;
-    const playing = !!p && !this.paused;
+    const s = this.enabled ? stepOf(this.q, this.q.at) : null;
+    const playing = !!s && !this.paused;
     document.body.classList.toggle('scenario-on', playing);
-    document.body.classList.toggle('carnet-open', playing);
-    document.body.classList.toggle('carnet-detour', playing && p!.kind === 'detour');
+    document.body.classList.toggle('player-open', playing);
     const note = this.note ? `<div class="sc-note"><span class="sc-note-dot" aria-hidden="true"></span>${esc(this.note)}</div>` : '';
-    const count = this.journal.list().length;
-    const drawer = this.drawer ? this.drawerView(this.drawer, p) : '';
-    let bottom: string;
-    if (playing) bottom = this.film(p!, note);
-    else if (p) bottom = this.bar(p, note);
-    else if (this.back) bottom = this.backBar(note);
-    else if (note) bottom = `<div class="film-bar panel">${note}</div>`;
-    // Nothing played: a way back to the paths already explored.
-    else bottom = count && !this.drawer ? `<button type="button" class="carnet-launch panel" data-act="drawer" data-view="paths" title="Les chemins commencés">🎭 Mes chemins <span class="cn-count">${count}</span></button>` : '';
-    this.root.hidden = !drawer && !bottom;
-    this.root.className = `carnet${playing ? ' playing' : ''}${this.drawer ? ' with-drawer' : ''}`;
-    this.root.innerHTML = `${drawer}${bottom}`;
+    const panel = this.panel && this.enabled ? this.panelView(this.panel) : '';
+    let bottom = '';
+    if (playing) bottom = this.full();
+    else if (s && !this.folded) bottom = this.compact(note);
+    else if (note) bottom = `<div class="player-note panel">${note}</div>`;
+    else if (s && !this.panel) {
+      bottom = `<button type="button" class="player-launch panel" data-act="unfold" title="Le lecteur et sa file">☰ Ma file <span class="cn-count">${this.q.items.length - this.q.at}</span></button>`;
+    }
+    this.root.hidden = !panel && !bottom;
+    this.root.className = `player-root${playing ? ' playing' : ''}${this.panel ? ' with-panel' : ''}`;
+    this.root.innerHTML = `${panel}${bottom}`;
     this.root.querySelectorAll<HTMLImageElement>('img').forEach((img) => img.addEventListener('error', () => {
-      img.closest('.film-img')?.classList.add('no-img');
+      img.closest('.pl-img')?.classList.add('no-img');
       img.remove();
     }));
-    this.root.querySelectorAll('.film-thumb.on').forEach((t) => t.scrollIntoView({ block: 'nearest', inline: 'center' }));
-    this.root.querySelector('.tr-step.here')?.scrollIntoView({ block: 'nearest' });
-    if (playing) this.onRoute(p!.walk, p!.step, routeOptions(p!.walk, p!.step));
+    if (playing) this.route();
   }
 
-  /** Paused: a bar to resume. */
-  private bar(p: Path, note: string): string {
-    const n = p.walk.steps.length;
-    return `<div class="film-bar panel">
-        <div class="sc-pill">
-          <span class="sc-pill-icon" aria-hidden="true">⏸</span>
-          <span class="sc-pill-text"><b>${esc(p.walk.title)}</b> · étape ${p.step + 1}/${n}</span>
-          <button type="button" class="sc-btn sc-primary" data-act="resume">Reprendre ▸</button>
-          <button type="button" class="sc-icon sc-quit" data-act="quit" title="Quitter ce chemin" aria-label="Quitter ce chemin">✕</button>
-        </div>${note}
-      </div>`;
+  /** The steps on the frieze and the globe, where the step now may go. */
+  private route(): void {
+    const s = stepOf(this.q, this.q.at)!;
+    const from = this.shownFrom;
+    const steps = this.q.items.slice(from, this.q.at + FRIEZE_AFTER).map((_, k) => stepOf(this.q, from + k)!.step);
+    const next = stepOf(this.q, this.q.at + 1)?.step ?? null;
+    this.onRoute(steps, this.q.at - from, routeOptions(s.walk, s.item.step, next), steps.map((_, k) => this.label(from + k)));
   }
 
-  /** A path just left: the map stays where it is; going back to the view of before is offered. */
-  private backBar(note: string): string {
-    return `<div class="film-bar panel">
-        <div class="sc-pill">
-          <span class="sc-pill-icon" aria-hidden="true">↩</span>
-          <span class="sc-pill-text">Chemin quitté : <b>${esc(this.back!)}</b></span>
-          <button type="button" class="sc-btn sc-primary" data-act="return" title="La carte et la frise reviennent où vous étiez avant ce chemin">Revenir où j’étais</button>
-          <button type="button" class="sc-icon" data-act="dismiss-return" title="Rester ici" aria-label="Rester ici">✕</button>
-        </div>${note}
-      </div>`;
-  }
-
-  /**
-   * The film: the band (that a path plays, what it follows, the step, the
-   * card on demand, the plan, and quit, or the way back from a crochet), the
-   * step and its crossroads side by side, the reel along the bottom.
-   */
-  private film(p: Path, note: string): string {
-    const w = p.walk;
-    const st = w.steps[p.step]!;
-    const parent = (p.parent && this.journal.get(p.parent.id)) || null;
-    const crochet = p.kind === 'detour' && !!parent;
-    const family = this.familyOf(p);
-    const cardPoi = st.poi ?? w.from;
-    const open = this.cardOpen();
-    const backTo = crochet ? parent!.walk.steps[p.parent!.step] : null;
-    const exit = crochet
-      ? `<button type="button" class="film-back" data-act="back" title="Fermer la parenthèse : « ${esc(parent!.walk.title)} » reprend à l’étape ${p.parent!.step + 1}">↩ Retour à ${esc(backTo?.place ?? parent!.walk.title)}</button>`
-      : `<button type="button" class="sc-btn film-quit" data-act="quit" title="${parent ? `Quitter cette route et revenir à « ${esc(parent.walk.title)} »` : 'Quitter ce chemin'}">✕ Quitter</button>`;
-    return `<section class="film panel${crochet ? ' crochet' : ''}" aria-label="Chemin en cours">
-        <header class="film-band">
-          <span class="sc-live" aria-hidden="true"></span>
-          <span class="film-mode">${crochet ? '↪ Crochet' : p.kind === 'branch' ? '⑂ Autre route' : 'En route'}</span>
-          <span class="film-thread">${THREAD_LABELS[threadOf(w)]}${w.hero ? ` · ${esc(w.hero.name)}` : ''}</span>
-          <h2 class="film-title" title="${esc(w.premise)}">${esc(w.title)}</h2>
-          <span class="film-count">étape ${p.step + 1} / ${w.steps.length}</span>
-          ${parent ? `<span class="film-from">depuis <button type="button" class="sc-link" data-act="crumb" data-id="${esc(parent.walk.id)}" data-step="${p.parent!.step}" title="Revenir à ce chemin, à l’étape d’où part celui-ci">${esc(parent.walk.title)}</button>, étape ${p.parent!.step + 1}</span>` : ''}
-          <span class="film-acts">
-            ${cardPoi ? `<button type="button" class="sc-btn film-card-btn${open ? ' on' : ''}" data-act="step-card" aria-pressed="${!!open}" title="${open ? 'Fermer la fiche de droite' : 'Ouvrir à droite la fiche de ce lieu'}">${open ? 'Fermer la fiche' : `Fiche · ${esc(cardPoi.title)}`}</button>` : ''}
-            <button type="button" class="sc-btn${this.drawer === 'plan' ? ' on' : ''}" data-act="drawer" data-view="plan" title="Le plan des chemins de cette histoire : pris et non pris">⑂ Plan${family > 1 ? ` <span class="cn-count">${family}</span>` : ''}</button>
-            <button type="button" class="sc-btn${this.drawer === 'paths' ? ' on' : ''}" data-act="drawer" data-view="paths" title="Tous les chemins commencés">Mes chemins <span class="cn-count">${this.journal.list().length}</span></button>
-            <button type="button" class="sc-icon" data-act="pause" title="Mettre en pause : la frise revient" aria-label="Mettre en pause">⏸</button>
-            ${exit}
-          </span>
-        </header>
-        <div class="film-main">
-          <div class="film-pane">${this.stepView(p)}</div>
-          <div class="film-side">${note}${this.cross(p)}</div>
-        </div>
-        ${this.reel(p)}
+  /** Paused: a bar to take the file up again; the timeline is back. */
+  private compact(note: string): string {
+    const s = stepOf(this.q, this.q.at)!;
+    const n = this.q.items.length;
+    const img = thumbOf(s.step);
+    return `<section class="player compact panel" aria-label="Le lecteur, en pause">
+        <span class="pl-thumb">${img ? `<img alt="" src="${esc(viaServer(img))}" referrerpolicy="no-referrer">` : ''}</span>
+        <span class="pl-compact-text">
+          <span class="pl-paused"><span aria-hidden="true">⏸</span> En pause · ${esc(s.walk.title)} · ${this.q.at + 1}/${n}</span>
+          <span class="pl-compact-step"><b>${esc(s.step.place)}</b> ${esc(formatWhen(s.step))}${s.step.text ? ` — « ${esc(recitOf(s.step))} »` : ''}</span>
+        </span>
+        <button type="button" class="pl-resume" data-act="resume" title="La caméra revient à l’étape ; la fiche ouverte reste ouverte">▶ Reprendre<small>${esc(s.step.place)}</small></button>
+        <button type="button" class="sc-icon" data-act="panel" data-view="queue" title="La file et l’historique" aria-label="La file et l’historique">☰</button>
+        <button type="button" class="sc-icon" data-act="fold" title="Ranger le lecteur (la file reste)" aria-label="Ranger le lecteur">✕</button>
+        ${note}
       </section>`;
   }
 
   /**
-   * The step played, as a short illustrated article: its place and moment,
-   * its heading, its paragraphs with the section's pictures and their
-   * captions between them, a sentence of the article, the facts to keep,
-   * who was there, its sources and the AI that wrote it; around it, folded.
+   * The player: the frieze of the file over time, the step told short (its
+   * picture, what it follows, its place and moment, who was there), the way
+   * on and the crochets, what comes next.
    */
-  private stepView(p: Path): string {
-    const w = p.walk;
-    const st = w.steps[p.step]!;
-    this.leads = stepLeads(w, p.step);
-    this.walksShown = [];
-    this.afterShown = [];
-    const pics = (st.gallery ?? []).map(pictureOf);
-    const head = st.image ? { src: st.image, caption: null } : pics.shift() ?? null;
-    const paragraphs = st.text ? st.text.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean) : [];
-    // Pictures between the paragraphs, as an article shows them (never after the last); the others in a strip.
-    const slots = [0, 2].filter((k) => k < paragraphs.length - 1).slice(0, pics.length);
-    const inline = pics.slice(0, slots.length);
-    const strip = pics.slice(slots.length);
-    const quote = st.quote
-      ? `<blockquote class="film-quote">« ${esc(st.quote.text)} »<cite><a href="${esc(st.quote.source.url)}" target="_blank" rel="noopener">${esc(st.quote.source.title)}</a></cite></blockquote>`
-      : '';
-    const quoteAt = paragraphs.length > 2 ? 1 : paragraphs.length - 1;
-    const writing = (what: string) => `<div class="film-writing"><span class="sc-note-dot" aria-hidden="true"></span>${what}
-          <button type="button" class="sc-link" data-act="retry">relancer</button></div>`;
-    const article = paragraphs.length
-      ? `<div class="film-article">${paragraphs.map((t, k) => {
-        const at = slots.indexOf(k);
-        return `<p class="film-par${k === 0 ? ' film-lead' : ''}">${esc(t)}</p>${at >= 0 ? figure(inline[at]!) : ''}${k === quoteAt ? quote : ''}`;
-      }).join('')}</div>
-        ${!st.ai && this.writer ? writing(`${esc(this.writer)} développe cette étape d’après Wikipédia…`) : ''}`
-      : `${writing(`${this.writer ? esc(this.writer) : 'L’IA'} écrit cette étape d’après l’article de Wikipédia sur ${esc(st.place)}…`)}
-          <div class="film-text skeleton-lines"><i></i><i></i><i></i><i></i><i></i></div>`;
-    const facts = st.facts?.length
-      ? `<aside class="film-facts"><div class="film-box-title">Repères</div><ul>${st.facts.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></aside>`
-      : '';
+  private full(): string {
+    const s = stepOf(this.q, this.q.at)!;
+    const { walk, step: st, item } = s;
+    const j = item.step;
+    this.leads = stepLeads(walk, j);
+    const img = thumbOf(st);
+    const n = this.q.items.length;
+    const next = stepOf(this.q, this.q.at + 1);
+    const inCrochet = !!item.crochet;
+    const sources = st.sources?.length ? st.sources : st.text ? [walk.source] : [];
+    const recit = st.text
+      ? `<p class="pl-recit">${esc(recitOf(st))}</p>`
+      : `<div class="pl-writing"><span class="sc-note-dot" aria-hidden="true"></span>${this.writer ? esc(this.writer) : 'L’IA'} écrit cette étape d’après Wikipédia… <button type="button" class="sc-link" data-act="retry">relancer</button></div>
+        <div class="skeleton-lines"><i></i><i></i></div>`;
     const who = st.text && st.cast.length
-      ? `<section class="film-who"><div class="film-box-title">Présents</div><div class="film-who-list">${st.cast.map((c, k) => `<button type="button" class="film-person" data-act="who" data-i="${k}" title="${esc(`${c.name} · ${c.role}`)}" aria-haspopup="menu">
-          ${face(c)}<span class="film-person-text"><b>${esc(c.name)}</b><small>${esc(c.role)}</small></span></button>`).join('')}</div></section>`
+      ? `Présents : ${st.cast.slice(0, 4).map((c, k) => `<button type="button" class="pl-who" data-act="who" data-i="${k}" aria-haspopup="menu" title="${esc(c.role)}">${esc(c.name)}</button>`).join(', ')}`
       : '';
-    const pictures = strip.length
-      ? `<div class="film-gallery">${strip.map((g, k) => `<button type="button" class="film-pic" data-act="pic" data-url="${esc(viaServer(g.src))}" data-caption="${esc(g.caption ?? '')}" aria-label="${esc(g.caption ?? `Image ${k + 1}`)}" title="${esc(g.caption ?? '')}"><img alt="" src="${esc(viaServer(g.src))}" referrerpolicy="no-referrer" loading="lazy"></button>`).join('')}</div>`
-      : '';
-    const sources = st.sources?.length ? st.sources : st.text ? [w.source] : [];
-    const credit = st.ai
-      ? `Texte rédigé par <b>${esc(st.ai)}</b> d’après ${sources.length > 1 ? 'ces articles' : 'cet article'} de Wikipédia (CC BY-SA) : vérifiez-les.`
-      : st.text ? 'Texte écrit avec le chemin, d’après l’article ci-dessus.' : '';
-    const footer = sources.length
-      ? `<footer class="film-sources"><div class="film-box-title">Sources</div>
-          <ul>${sources.map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title.replace(/^Wikipédia : /, ''))}</a></li>`).join('')}</ul>
-          <p class="film-ai">${credit}${w.ai ? ` Chemin tracé par ${esc(w.ai)}.` : ''}</p></footer>`
-      : '';
-    return `<figure class="film-img${head ? '' : ' no-img'}">
-          ${head ? `<img alt="" src="${esc(viaServer(head.src))}" referrerpolicy="no-referrer">` : ''}
-          <figcaption><b>${esc(st.place)}</b><span>${esc(formatWhen(st))}</span></figcaption>
-        </figure>
-        <p class="film-img-caption"${head?.caption ? '' : ' hidden'}>${esc(head?.caption ?? '')}</p>
-        ${st.beat ? `<div class="film-place">${esc(st.label)}</div>` : ''}
-        <h3 class="film-heading">${esc(st.beat ?? st.label)}</h3>
-        ${p.step === 0 ? `<p class="film-premise">${esc(w.premise)}</p>` : ''}
-        ${article}
-        ${facts}
-        ${who}
-        ${pictures}
-        ${footer}
-        ${this.aroundView(p)}`;
-  }
-
-  /**
-   * "Où aller ensuite ?": one big way on along the planned route; then a
-   * crochet (a few steps that come back here by themselves: a place of the
-   * story, someone met), or another route, one way (a turning point, someone's
-   * whole life, this place across the centuries, the world at this moment).
-   * Inside a crochet, no crochet: back now, or another route. At the end of a
-   * crochet the way back is the big one.
-   */
-  private cross(p: Path): string {
-    const w = p.walk;
-    const st = w.steps[p.step]!;
-    const next = w.steps[p.step + 1];
-    const parent = (p.parent && this.journal.get(p.parent.id)) || null;
-    const crochet = p.kind === 'detour' && !!parent;
-    const backTo = parent ? parent.walk.steps[p.parent!.step] : null;
-    const resumes = parent ? `« ${esc(parent.walk.title)} » reprend à l’étape ${p.parent!.step + 1}` : '';
-    const on = next
-      ? `<button type="button" class="cross-next" data-act="next" title="L’étape suivante (→)">
-          <span class="cross-verb">${crochet ? 'Suite du crochet' : 'Étape suivante'} ▸</span>
-          <b>${esc(st.next ?? next.beat ?? next.place)}</b>
-          <small>${esc(next.place)} · ${esc(formatWhen(next))}</small>
+    const credit = [who, sources[0] ? `d’après ${esc(sources[0].title)}` : '', st.ai ? `rédigé par ${esc(st.ai)}` : ''].filter(Boolean).join(' · ');
+    const go = next
+      ? `<button type="button" class="pl-next${next.item.crochet && next.item.crochet !== item.crochet ? ' crochet' : ''}" data-act="next" title="L’étape suivante (→)">
+          <span>${next.item.crochet && next.item.crochet !== item.crochet ? 'Suivant · crochet' : inCrochet && !next.item.crochet ? 'Suivant · la file reprend' : 'Suivant'}<small>${esc(next.step.place)}, ${esc(formatWhen(next.step))}${st.next && next.walk.id === walk.id ? ` — ${esc(st.next)}` : ''}</small></span>
+          <span aria-hidden="true">→</span>
         </button>`
-      : `${parent ? `<button type="button" class="cross-next cross-back" data-act="back" title="${resumes}">
-          <span class="cross-verb">${crochet ? 'Fin du crochet' : 'Fin de cette route'}</span>
-          <b>↩ Retour à ${esc(backTo?.place ?? parent.walk.title)}</b>
-          <small>${resumes}</small>
-        </button>` : ''}
-        <div class="cross-end">
-          ${parent ? '' : '<span class="cross-verb">Fin de ce chemin</span>'}
-          <div class="cross-end-acts">
-            <button type="button" class="sc-btn${parent ? '' : ' sc-primary'}" data-act="drawer" data-view="suites">Et ensuite ? ▸</button>
-            <button type="button" class="sc-link" data-act="finish">Terminer ✓</button>
+      : `<button type="button" class="pl-next end" data-act="panel" data-view="suites" title="Ce qui peut suivre : des personnes, des suites, d’autres chemins">
+          <span>Fin de la file<small>Et ensuite ? des personnes, des suites, d’autres chemins</small></span><span aria-hidden="true">▸</span>
+        </button>`;
+    const read = this.readOpen();
+    return `<section class="player full panel${inCrochet ? ' in-crochet' : ''}" aria-label="Le lecteur">
+        ${this.frieze()}
+        <div class="pl-main">
+          <div class="pl-story">
+            <figure class="pl-img${img ? '' : ' no-img'}">${img ? `<img alt="" src="${esc(viaServer(img))}" referrerpolicy="no-referrer">` : ''}</figure>
+            <div class="pl-text">
+              <div class="pl-kicker">
+                <span class="pl-thread">${inCrochet ? '↪ Crochet' : THREAD_LABELS[threadOf(walk)]}${walk.hero ? ` · ${esc(walk.hero.name)}` : ''}</span>
+                <span class="pl-walk" title="${esc(walk.premise)}">${esc(walk.title)}</span>
+                <span class="pl-count">· ${this.q.at + 1} / ${n} dans la file</span>
+              </div>
+              <div class="pl-head"><h2 class="pl-place">${esc(st.place)}</h2><span class="pl-when">${esc(formatWhen(st))} · ${esc(st.beat ?? st.label)}</span></div>
+              ${recit}
+              ${credit ? `<div class="pl-meta">${credit}</div>` : ''}
+              ${this.note ? `<div class="sc-note"><span class="sc-note-dot" aria-hidden="true"></span>${esc(this.note)}</div>` : ''}
+            </div>
           </div>
-        </div>`;
+          <div class="pl-go">
+            <div class="pl-nav">
+              <button type="button" class="pl-ctl" data-act="prev" ${this.q.at === 0 ? 'disabled' : ''} aria-label="Étape précédente" title="Étape précédente (←)">⏮</button>
+              ${go}
+            </div>
+            <div class="pl-chips">
+              <button type="button" class="pl-chip${read ? ' on' : ''}" data-act="read" aria-pressed="${read}" title="L’étape en entier, dans la fiche de son lieu à droite">${read ? '📖 Lu à droite' : '📖 Lire en entier'}</button>
+              ${this.chips(walk, j)}
+              <button type="button" class="pl-chip${this.panel === 'routes' ? ' on' : ''}" data-act="panel" data-view="routes" title="Une autre route : la suite est mise de côté">⑂ Bifurquer</button>
+            </div>
+          </div>
+          <div class="pl-upnext">
+            <div class="pl-upnext-head">
+              <span class="pl-label">À suivre</span>
+              <button type="button" class="sc-icon" data-act="pause" title="Pause : la frise revient, la caméra est à vous" aria-label="Pause">⏸</button>
+              <button type="button" class="sc-icon${this.panel === 'queue' ? ' on' : ''}" data-act="panel" data-view="queue" title="La file et l’historique" aria-label="La file et l’historique">☰</button>
+            </div>
+            ${this.q.items.slice(this.q.at + 1, this.q.at + 1 + NEXT_SHOWN).map((x, k) => {
+              const i = this.q.at + 1 + k;
+              const t = stepOf(this.q, i)!.step;
+              return `<button type="button" class="pl-q${x.crochet ? ' crochet' : ''}" data-act="goto" data-i="${i}"><span class="pl-n">${esc(this.label(i))}</span><span class="pl-q-place">${esc(t.place)}</span><span class="pl-q-when">${esc(formatWhen(t))}</span></button>`;
+            }).join('') || '<p class="pl-empty">Rien ensuite : « Bifurquer » ou une fiche pour continuer.</p>'}
+          </div>
+        </div>
+      </section>`;
+  }
 
-    // ⑂ Another route, one way: the turning points planned, the protagonist's whole life, the place across the centuries, the world then.
-    const forks = (st.forks ?? []).map((f, k) => {
-      const to = f.steps[0];
-      const taken = this.journal.get(`${w.id}|bifurcation|${p.step}|${k}`);
-      return `<button type="button" class="cross-fork" data-act="fork" data-i="${k}" title="Une autre suite de l’histoire : vous la suivez désormais">
-          ${f.hero ? face(f.hero) : '<span class="cross-icon" aria-hidden="true">⑂</span>'}
-          <span class="cross-text"><b>${esc(f.label)}</b><small>${f.hero ? `avec ${esc(f.hero.name)} · ` : ''}${to ? `${esc(to.place)} · ${esc(formatWhen(to))}` : ''}${taken ? ` · ${taken.done ? 'parcourue' : `reprendre ${taken.step + 1}/${taken.walk.steps.length}`}` : ''}</small></span>
-        </button>`;
-    }).join('');
-    const life = this.leads.map((l, i) => (l.kind === 'person' && l.hero
-      ? `<button type="button" class="cross-fork" data-act="lead" data-i="${i}" data-how="full" title="Toute son histoire : vous la suivez désormais">
-          ${face(l.person)}<span class="cross-text"><b>Toute la vie ${esc(of(l.person.name))}</b><small>à travers les fiches de sa vie</small></span>
-        </button>`
-      : '')).join('');
-    const thread = threadOf(w);
-    const place = st.poi && thread !== 'place'
-      ? `<button type="button" class="cross-fork" data-act="thread" data-kind="place" title="Ce lieu d’époque en époque, chaque étape d’après son propre article">
-          <span class="cross-icon" aria-hidden="true">⌛</span><span class="cross-text"><b>Rester ici à travers les siècles</b><small>${esc(st.poi.title)}, d’époque en époque</small></span>
-        </button>`
-      : '';
-    const era = thread !== 'era'
-      ? `<button type="button" class="cross-fork" data-act="thread" data-kind="era" title="Le même moment ailleurs : un thème par étape (pouvoir, guerre, foi, commerce, savoirs…)">
-          <span class="cross-icon" aria-hidden="true">◍</span><span class="cross-text"><b>Le monde vers ${esc(formatYear(st.year))}</b><small>une époque, plusieurs thèmes</small></span>
-        </button>`
-      : '';
-    const route = forks + life + place + era;
-
-    // ↪ A crochet, then back here: a place of the story, someone met (a few moments of their life).
+  /** The crochets offered on the step: its detours (once written), then the people present not offered yet. */
+  private chips(walk: ScenarioWalk, j: number): string {
+    const st = walk.steps[j]!;
     const followed = new Set((st.forks ?? []).flatMap((f) => (f.hero ? [f.hero.qid] : [])));
-    const choices = st.text ? (st.choices ?? []).map((c, k) => {
-      if (c.person && followed.has(c.person.qid)) return '';
-      const where = c.person ? 'quelques moments de sa vie, puis retour ici' : c.poi ? `${c.poi.title}, puis retour ici` : c.step ? `${c.step.place} · ${formatWhen(c.step)}, puis la route reprend` : '';
-      return `<button type="button" class="cross-detour${st.chosen === k ? ' on' : ''}" data-act="choice" data-i="${k}" title="Un crochet : quelques pas de côté, puis retour sur la route">
-          ${c.person ? face(c.person) : '<span class="cross-icon" aria-hidden="true">↪</span>'}
-          <span class="cross-text"><b>${esc(c.label)}</b><small>${esc(where)}</small></span>
-        </button>`;
-    }).join('') : '';
+    const choices = st.text ? (st.choices ?? []).flatMap((c, k) => (c.person && followed.has(c.person.qid) ? [] : [`<button type="button" class="pl-chip cr${st.chosen === k ? ' on' : ''}" data-act="choice" data-i="${k}" title="Un crochet : ${c.person ? 'quelques moments de sa vie' : c.poi ? `un pas par ${esc(c.poi.title)}` : `${esc(c.step?.place ?? '')}, une étape`}, puis la file reprend">↪ ${esc(c.label)}</button>`])) : [];
     const asked = new Set((st.choices ?? []).flatMap((c) => (c.person ? [c.person.qid] : [])));
-    const people = this.leads.map((l, i) => {
-      if (l.kind !== 'person' || l.hero || asked.has(l.person.qid) || followed.has(l.person.qid)) return '';
-      return `<div class="cross-person">${face(l.person)}<span class="cross-text"><b>${esc(l.person.name)}</b><small>${esc(l.person.role)}</small></span>
-          <button type="button" class="cn-go cn-crochet" data-act="lead" data-i="${i}" data-how="detour" title="Quelques moments de sa vie autour de celui-ci, puis retour ici">↪ crochet</button><button type="button" class="cn-go" data-act="lead" data-i="${i}" data-how="full" title="Toute son histoire : vous la suivez désormais">⑂ sa vie</button></div>`;
-    }).join('');
-    const detours = crochet
-      ? (next ? `<button type="button" class="cross-detour" data-act="back" title="${resumes}">
-          <span class="cross-icon" aria-hidden="true">↩</span><span class="cross-text"><b>Revenir tout de suite à ${esc(backTo?.place ?? parent!.walk.title)}</b><small>${resumes}</small></span>
-        </button>` : '')
-      : choices + people;
-    return `<div class="film-cross" role="group" aria-label="Où aller ensuite ?">
-        <div class="cross-title">${next ? 'Où aller ensuite ?' : 'Et maintenant ?'}</div>
-        ${on}
-        ${detours ? `<div class="cross-group crochet"><div class="cross-label">${crochet ? '↩ Revenir' : '↪ Faire un crochet'} <span>· ${crochet ? 'pas de crochet dans un crochet' : 'on revient ici'}</span></div>${detours}</div>` : ''}
-        ${route ? `<div class="cross-group route"><div class="cross-label">⑂ Changer de route <span>· aller simple</span></div>${route}</div>` : ''}
-      </div>`;
+    const people = this.leads.flatMap((l, i) => (l.kind === 'person' && !l.hero && !asked.has(l.person.qid) && !followed.has(l.person.qid)
+      ? [`<button type="button" class="pl-chip cr" data-act="lead" data-i="${i}" data-how="detour" title="Quelques moments de sa vie autour de celui-ci, puis la file reprend">↪ ${esc(l.person.name)}</button>`]
+      : []));
+    return [...choices, ...people].slice(0, MAX_CHIPS).join('');
   }
 
-  /** Around the step, folded: the place's own story, what led there and what it caused, what happened meanwhile and close by. */
-  private aroundView(p: Path): string {
-    const doors = this.stepDoors(p);
-    const place = this.leads.map((l, i) => (l.kind === 'place'
-      ? `<button type="button" class="film-door" data-act="lead" data-i="${i}" data-how="full" title="Entrer dans l’histoire de ce lieu : ses lieux, ses chemins"><span>⤷</span><span><b>${esc(l.poi.title)}</b><small>son histoire</small></span></button>`
-      : '')).join('');
-    const door = (kind: keyof StepDoors, icon: string, label: string) => {
-      const d = doors?.[kind];
-      return d ? `<button type="button" class="film-door" data-act="door" data-kind="${kind}" title="${esc(d.hint)}"><span>${icon}</span><span><b>${esc(d.poi.title)}</b><small>${label}</small></span></button>` : '';
+  /** The file on time: a bead per step around the one now, at its date; the one now gold, the crochets dashed blue. */
+  private frieze(): string {
+    const from = Math.max(0, this.q.at - FRIEZE_BEFORE);
+    const to = Math.min(this.q.items.length, this.q.at + FRIEZE_AFTER);
+    this.shownFrom = from;
+    const at = (i: number) => {
+      const t = stepOf(this.q, i)!.step;
+      return t.when ?? t.year;
     };
-    const st = p.walk.steps[p.step]!;
-    const near = (st.near ?? []).map((c, k) => `<div class="film-near">
-        <button type="button" class="film-door" data-act="near" data-i="${k}" title="Un détour par « ${esc(c.title)} », puis retour ici"><span>⤴</span><span><b>${esc(c.title)}</b><small>${esc(formatYear(c.date_start))} · détour</small></span></button>
-        <button type="button" class="sc-icon" data-act="near-card" data-i="${k}" title="Sa fiche" aria-label="Sa fiche">📄</button>
-      </div>`).join('');
-    const rows = `${place}${door('cause', '⏪', 'ce qui a mené ici')}${door('effect', '⏩', 'ce que ça a causé')}${door('meanwhile', '🌍', 'pendant ce temps')}`;
-    if (!rows && !near) return '';
-    return `<details class="film-around"${this.around ? ' open' : ''}>
-        <summary>Explorer autour <span>· lieux, causes, pendant ce temps</span></summary>
-        <div class="film-around-body">${rows}${near ? `<div class="film-forks-title">Tout près, au même moment</div>${near}` : ''}</div>
-      </details>`;
-  }
-
-  /**
-   * The reel along the bottom, where the timeline was: each step with its
-   * picture, place and date (its theme when the walk crosses the world at one
-   * moment); ⑂ where the story may turn. A crochet's reel rises above the
-   * path it leaves, which stays under it, dimmed, the step it comes back to marked.
-   */
-  private reel(p: Path): string {
-    const w = p.walk;
-    const last = p.step + 1 >= w.steps.length;
-    const parent = p.kind === 'detour' && p.parent ? this.journal.get(p.parent.id) : undefined;
-    const own = this.thumbs(p, true);
-    const nav = (inner: string, cls = '') => `<div class="film-reel${cls}">
-        <button type="button" class="sc-icon" data-act="prev" ${p.step === 0 ? 'disabled' : ''} aria-label="Étape précédente" title="Étape précédente (←)">◂</button>
-        <div class="film-thumbs" role="group" aria-label="Étapes">${inner}</div>
-        <button type="button" class="sc-icon film-next" data-act="next" ${last ? 'disabled' : ''} aria-label="Étape suivante" title="Étape suivante (→)">▸</button>
-      </div>`;
-    if (!parent) return nav(own);
-    const back = parent.walk.steps[p.parent!.step];
-    const ret = `<span class="film-thumb film-return" title="La fin du crochet : retour à ${esc(back?.place ?? parent.walk.title)}"><span class="film-thumb-place">↩ ${esc(back?.place ?? '')}</span><span class="film-thumb-date">retour</span></span>`;
-    return `${nav(own + ret, ' film-reel-crochet')}
-      <div class="film-reel film-reel-under" aria-label="Le chemin d’où part ce crochet">
-        <span class="film-under-label">${esc(parent.walk.title)}</span>
-        <div class="film-thumbs">${this.thumbs(parent, false, p.parent!.step)}</div>
+    const years = Array.from({ length: to - from }, (_, k) => at(from + k));
+    let lo = Math.min(...years);
+    let hi = Math.max(...years);
+    if (hi - lo < 4) {
+      lo -= 5;
+      hi += 5;
+    }
+    const pad = (hi - lo) * 0.04;
+    lo -= pad;
+    hi += pad;
+    const x = (y: number) => ((y - lo) / (hi - lo)) * 100;
+    const tick = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000].find((t) => (hi - lo) / t <= 6) ?? 10_000;
+    const ticks: number[] = [];
+    for (let y = Math.ceil(lo / tick) * tick; y <= hi; y += tick) ticks.push(y);
+    const firstSeen = Math.min(...years.slice(0, this.q.at - from + 1));
+    const now = at(this.q.at);
+    const beads = years.map((y, k) => {
+      const i = from + k;
+      const it = this.q.items[i]!;
+      const t = stepOf(this.q, i)!.step;
+      const state = i === this.q.at ? 'now' : i < this.q.at ? 'done' : 'todo';
+      return `<button type="button" class="pl-bead ${state}${it.crochet ? ' cr' : ''}${it.added ? ' added' : ''}" style="left:${x(y).toFixed(2)}%" data-act="goto" data-i="${i}" title="${esc(`${this.label(i)}. ${t.place} · ${formatWhen(t)}`)}" aria-label="${esc(`Étape ${this.label(i)}, ${t.place}, ${formatWhen(t)}`)}"><span>${esc(this.label(i))}</span></button>`;
+    }).join('');
+    return `<div class="pl-frieze" aria-label="La file sur le temps">
+        <div class="pl-axis"></div>
+        <div class="pl-lived" style="left:${x(Math.min(firstSeen, now)).toFixed(2)}%;width:${Math.abs(x(now) - x(firstSeen)).toFixed(2)}%"></div>
+        ${ticks.map((y) => `<span class="pl-tick" style="left:${x(y).toFixed(2)}%">${esc(formatYear(Math.round(y)))}</span>`).join('')}
+        ${beads}
       </div>`;
   }
 
-  /** A path's steps as frames: the one played lit (`playing`), or the one a crochet comes back to marked (`mark`). */
-  private thumbs(a: Path, playing: boolean, mark = -1): string {
-    const w = a.walk;
-    const kids = this.journal.children(w.id);
-    const label = threadOf(w) === 'era';
-    return w.steps.map((s, j) => {
-      const turns = (s.forks?.length ?? 0) + kids.filter((k) => k.parent!.step === j && !k.walk.id.startsWith(`${w.id}|bifurcation|${j}|`)).length;
-      const state = playing ? (j === a.step ? ' on' : j <= a.seen ? ' done' : '') : (j === mark ? ' mark' : j <= a.seen ? ' done' : '');
-      const act = playing ? `data-act="dot" data-i="${j}"` : `data-act="tree-step" data-id="${esc(w.id)}" data-step="${j}"`;
-      return `<button type="button" class="film-thumb${state}${s.text ? '' : ' unwritten'}" ${act} title="${esc(`${j + 1}. ${s.place} · ${formatWhen(s)}${s.beat ? ` — ${s.beat}` : ''}`)}">
-          ${thumbOf(s) ? `<img alt="" src="${esc(viaServer(thumbOf(s)!))}" referrerpolicy="no-referrer" loading="lazy">` : ''}
-          <span class="film-thumb-n">${j + 1}${label ? ` · ${esc(s.label)}` : ''}</span>
-          <span class="film-thumb-place">${esc(s.place)}</span>
-          <span class="film-thumb-date">${esc(formatWhen(s))}</span>
-          ${turns ? `<span class="film-thumb-fork" aria-label="bifurcation">⑂</span>` : ''}
-        </button>`;
-    }).join('');
-  }
-
-  /** How many paths the tree of the path played holds (its trunk and every branch). */
-  private familyOf(p: Path): number {
-    const root = this.ancestors(p)[0] ?? p;
-    const seen = new Set<string>();
-    const walk = (a: Path) => {
-      if (seen.has(a.walk.id)) return;
-      seen.add(a.walk.id);
-      this.journal.children(a.walk.id).forEach(walk);
-    };
-    walk(root);
-    return seen.size;
-  }
-
-  /**
-   * A path's steps down a line, the branches hanging under the step they
-   * leave: taken (plain, opened when on the way to the path played) or
-   * planned and not taken yet (dashed, a click takes them).
-   */
-  private treeSteps(a: Path, p: Path | null, line: Set<string>, depth = 0): string {
-    const kids = this.journal.children(a.walk.id);
-    return a.walk.steps.map((s, j) => {
-      const here = p?.walk.id === a.walk.id && p.step === j && !this.paused;
-      const state = here ? ' here' : j <= a.seen ? ' seen' : '';
-      const hanging = kids.filter((k) => k.parent!.step === j);
-      const taken = new Set(hanging.map((k) => k.walk.id));
-      const branches = hanging.map((k) => {
-        const open = line.has(k.walk.id) && depth < 6;
-        const n = k.walk.steps.length;
-        return `<li class="tr-branch ${k.kind}${open ? ' open' : ''}">
-            <button type="button" class="tr-head" data-act="path" data-id="${esc(k.walk.id)}" title="${k.done ? 'Revivre ce chemin' : 'Reprendre ce chemin'}">
-              <span class="tr-icon" aria-hidden="true">${KIND_ICONS[k.kind]}</span><span class="tr-text"><b>${esc(k.walk.title)}</b><small>${KIND_LABELS[k.kind]} · ${k.done ? 'terminé' : `${k.seen + 1}/${n}`}</small></span>
-            </button>
-            ${open ? `<ol class="tr">${this.treeSteps(k, p, line, depth + 1)}</ol>` : ''}
-          </li>`;
-      }).join('');
-      const ghosts = (s.forks ?? []).map((f, k) => (taken.has(`${a.walk.id}|bifurcation|${j}|${k}`) ? '' : `<li class="tr-branch ghost">
-          <button type="button" class="tr-head" data-act="tree-fork" data-id="${esc(a.walk.id)}" data-step="${j}" data-i="${k}" title="Une autre suite, pas encore prise : la prendre">
-            <span class="tr-icon" aria-hidden="true">┄</span><span class="tr-text"><b>${esc(f.label)}</b><small>${f.hero ? `avec ${esc(f.hero.name)} · ` : ''}${f.steps[0] ? `${esc(f.steps[0].place)} · ` : ''}pas encore prise</small></span>
-          </button>
-        </li>`)).join('');
-      return `<li class="tr-step${state}">
-          <button type="button" class="tr-row" data-act="tree-step" data-id="${esc(a.walk.id)}" data-step="${j}">
-            <span class="tr-dot" aria-hidden="true"></span>
-            <span class="tr-text"><b>${esc(s.place)}</b><small>${esc(formatWhen(s))}${s.beat ? ` · ${esc(s.beat)}` : ''}</small></span>
-          </button>
-          ${branches || ghosts ? `<ul class="tr-branches">${branches}${ghosts}</ul>` : ''}
-        </li>`;
-    }).join('');
-  }
-
-  /** Titanic › étape 4 › Andrews (détour): the paths it hangs from, shown only when it does. */
-  private crumbs(p: Path): string {
-    const chain = [...this.ancestors(p), p];
-    if (chain.length < 2) return '';
-    const parts = chain.slice(0, -1).map((a, k) => {
-      const at = chain[k + 1]!.parent!.step;
-      return `<button type="button" class="cn-crumb" data-act="crumb" data-id="${esc(a.walk.id)}" data-step="${at}" title="Revenir à ce chemin, à l’étape d’où part la branche">${esc(a.walk.title)} · ${at + 1}</button><span class="cn-sep" aria-hidden="true">›</span>`;
-    }).join('');
-    return `<nav class="cn-crumbs" aria-label="Fil des chemins">${parts}<span class="cn-crumb here">${KIND_LABELS[p.kind].toLowerCase()}</span></nav>`;
-  }
-
-  private drawerView(d: Drawer, p: Path | null): string {
-    const body = d === 'here' && this.here ? this.hereView(this.here, p)
-      : d === 'tree' ? this.forestView(p)
-      : d === 'plan' && p ? `<div class="cn-kicker">Plan des chemins <span class="cn-aside">· pris en plein, non pris en pointillés</span></div>
-          ${this.crumbs(p)}
-          <ol class="tr">${this.treeSteps(this.ancestors(p)[0] ?? p, p, new Set([...this.ancestors(p), p].map((a) => a.walk.id)))}</ol>
-          <footer class="sc-foot"><button type="button" class="sc-link" data-act="drawer" data-view="tree">Les plans de tous mes chemins ›</button></footer>`
-      : d === 'suites' && p ? this.suites(p)
-      : this.pathsView(p);
-    return `<section class="film-drawer panel" role="dialog" aria-label="Chemins">
-        <button type="button" class="sc-icon film-drawer-close" data-act="close-drawer" title="Fermer (Échap)" aria-label="Fermer">✕</button>
+  private panelView(p: Panel): string {
+    const body = p === 'here' && this.here ? this.hereView(this.here)
+      : p === 'routes' ? this.routesView()
+      : p === 'suites' ? this.suites()
+      : this.queueView();
+    return `<section class="pl-panel panel" role="dialog" aria-label="La file">
+        <button type="button" class="sc-icon pl-panel-close" data-act="close-panel" title="Fermer (Échap)" aria-label="Fermer">✕</button>
         <div class="cn-body">${body}</div>
       </section>`;
   }
 
-  /** The end of a path: ways on, never a dead end. */
-  private suites(p: Path): string {
-    const parent = p.parent && this.journal.get(p.parent.id);
-    const st = p.walk.steps[p.step]!;
-    this.leads = stepLeads(p.walk, p.step);
-    this.afterShown = p.walk.after ?? [];
-    this.walksShown = throughPlace(this.mergedKnown(), p.walk, p.step);
+  /** The file: seen, now, next (crochets grouped, each movable and removable), the routes set aside. */
+  private queueView(): string {
+    const q = this.q;
+    const row = (i: number, cls: string, tools: boolean) => {
+      const it = q.items[i]!;
+      const t = stepOf(q, i)!.step;
+      return `<div class="pl-row ${cls}">
+          <button type="button" class="pl-row-main" data-act="goto" data-i="${i}" title="${esc(stepOf(q, i)!.walk.title)}">
+            <span class="pl-n">${esc(this.label(i))}</span><span class="pl-row-place">${esc(t.place)}</span><span class="pl-row-when">${esc(formatWhen(t))}</span>
+          </button>
+          ${tools ? `<button type="button" class="pl-tool" data-act="up" data-key="${esc(it.key)}" aria-label="Monter ${esc(t.place)}" title="Plus tôt">↑</button><button type="button" class="pl-tool" data-act="down" data-key="${esc(it.key)}" aria-label="Descendre ${esc(t.place)}" title="Plus tard">↓</button><button type="button" class="pl-tool" data-act="remove" data-key="${esc(it.key)}" aria-label="Retirer ${esc(t.place)}" title="Retirer">×</button>` : ''}
+        </div>`;
+    };
+    if (q.at < 0) return '<div class="cn-kicker">La file</div><p class="cn-empty">Rien dans la file. Ouvrez une fiche : « Partir sur un fil » propose ses parcours, « + À la file » y ajoute le lieu.</p>';
+    const seenFrom = Math.max(0, q.at - SEEN_SHOWN);
+    const seen = Array.from({ length: q.at - seenFrom }, (_, k) => row(seenFrom + k, 'seen', false)).join('');
+    let next = '';
+    for (let i = q.at + 1; i < q.items.length; i++) {
+      const it = q.items[i]!;
+      if (it.crochet && q.items[i - 1]?.crochet !== it.crochet) {
+        const group: string[] = [];
+        let k = i;
+        while (q.items[k]?.crochet === it.crochet) group.push(row(k++, 'cr', false));
+        const w = q.walks[it.crochet];
+        next += `<div class="pl-group">
+            <div class="pl-group-head"><span>↪ Crochet · ${esc(w?.title ?? '')}</span><button type="button" class="pl-tool" data-act="remove" data-key="${esc(it.key)}" aria-label="Retirer ce crochet" title="Retirer ce crochet">×</button></div>
+            ${group.join('')}
+            <div class="pl-group-foot">puis la file reprend d’elle-même</div>
+          </div>`;
+        i = k - 1;
+      } else next += row(i, it.added ? 'added' : 'next', true);
+    }
+    const shelf = q.shelf.map((sh, k) => `<div class="pl-shelf">
+        <span class="pl-shelf-text"><b>⑂ ${esc(sh.title)}</b><small>mise de côté à ${esc(sh.from)} · ${sh.items.length} étape${sh.items.length > 1 ? 's' : ''}</small></span>
+        <button type="button" class="cn-go" data-act="shelf" data-i="${k}">Prendre cette route</button>
+      </div>`).join('');
+    return `<div class="cn-kicker">La file <span class="cn-aside">· gardée dans ce navigateur</span></div>
+      ${seen ? `<div class="pl-label pl-sec">Déjà vu</div>${seen}` : ''}
+      <div class="pl-label pl-sec now">Maintenant</div>${row(q.at, 'now', false)}
+      <div class="pl-label pl-sec">À suivre</div>${next || '<p class="cn-empty">Rien ensuite.</p>'}
+      ${shelf ? `<div class="pl-label pl-sec">Routes non prises</div>${shelf}<p class="pl-hint">« Bifurquer » remplace la suite ; l’ancienne suite est rangée ici.</p>` : ''}
+      ${next ? '<footer class="sc-foot"><button type="button" class="sc-link" data-act="clear">Vider la suite</button></footer>' : ''}`;
+  }
+
+  /** "Bifurquer": another route from the step now, one way: what comes next is set aside. */
+  private routesView(): string {
+    const s = stepOf(this.q, this.q.at);
+    if (!s) return '<p class="cn-empty">Rien ne joue.</p>';
+    const { walk, step: st } = s;
+    this.leads = stepLeads(walk, s.item.step);
+    const row = (act: string, icon: string, title: string, sub: string, extra = '') =>
+      `<button type="button" class="cross-fork" data-act="${act}" ${extra}><span class="cross-icon" aria-hidden="true">${icon}</span><span class="cross-text"><b>${title}</b><small>${sub}</small></span></button>`;
+    const forks = (st.forks ?? []).map((f, k) => `<button type="button" class="cross-fork" data-act="fork" data-i="${k}">
+        ${f.hero ? face(f.hero) : '<span class="cross-icon" aria-hidden="true">⑂</span>'}
+        <span class="cross-text"><b>${esc(f.label)}</b><small>${f.hero ? `avec ${esc(f.hero.name)} · ` : ''}${f.steps[0] ? `${esc(f.steps[0].place)} · ${esc(formatWhen(f.steps[0]))}` : ''}</small></span>
+      </button>`).join('');
+    const lives = this.leads.map((l, i) => (l.kind === 'person'
+      ? `<button type="button" class="cross-fork" data-act="lead" data-i="${i}" data-how="full">${face(l.person)}<span class="cross-text"><b>Toute la vie ${esc(of(l.person.name))}</b><small>${l.hero ? 'le personnage de ce chemin' : esc(l.person.role)}</small></span></button>`
+      : '')).join('');
+    const thread = threadOf(walk);
+    const place = st.poi && thread !== 'place' ? row('thread', '⌛', 'Rester ici à travers les siècles', `${esc(st.poi.title)}, d’époque en époque`, 'data-kind="place"') : '';
+    const era = thread !== 'era' ? row('thread', '◍', `Le monde vers ${esc(formatYear(st.year))}`, 'une époque, plusieurs thèmes', 'data-kind="era"') : '';
+    return `<div class="cn-kicker">⑂ Bifurquer <span class="cn-aside">· la suite est mise de côté, et reste dans la file</span></div>
+      <h2 class="cn-title">Depuis ${esc(st.place)}</h2>
+      <div class="pl-routes">${forks}${lives}${place}${era}</div>`;
+  }
+
+  /** The end of the file: ways on, never a dead end. */
+  private suites(): string {
+    const s = stepOf(this.q, this.q.at);
+    if (!s) return '<p class="cn-empty">Rien ne joue.</p>';
+    const { walk, step: st } = s;
+    this.leads = stepLeads(walk, s.item.step);
+    this.afterShown = walk.after ?? [];
+    this.walksShown = throughPlace(this.mergedKnown(), walk, s.item.step);
     const after = this.afterShown.map((l, i) => `<div class="cn-fork">
         <span class="cn-fork-mark cn-place" aria-hidden="true">⏩</span>
         <span class="cn-fork-text"><b>${esc(l.poi.title)}</b><small>${esc(`${l.label} · ${formatYear(l.year)}`)}</small></span>
@@ -1158,54 +966,52 @@ export class Carnet {
         <span class="cn-fork-text"><b>${esc(l.person.name)}</b><small>${esc(l.hero ? 'Le personnage de ce chemin' : l.person.role)}</small></span>
         <button type="button" class="cn-go" data-act="lead" data-i="${i}" data-how="full">Tout son chemin</button>
       </div>` : '')).join('');
-    const others = this.walksShown.map((w, i) => this.walkRow(w, i, p)).join('');
-    return `<div class="cn-kicker">Fin de « ${esc(p.walk.title)} »</div>
+    const others = this.walksShown.map((w, i) => this.walkRow(w, i)).join('');
+    const shelf = this.q.shelf.length ? '<button type="button" class="sc-btn cn-back" data-act="panel" data-view="queue">⑂ Reprendre une route mise de côté</button>' : '';
+    return `<div class="cn-kicker">Fin de la file</div>
       <h2 class="cn-title">Et ensuite ?</h2>
-      ${parent ? `<button type="button" class="sc-btn sc-primary cn-back" data-act="back">↩ Revenir à « ${esc(parent.walk.title)} » · étape ${p.parent!.step + 1}</button>` : ''}
+      ${shelf}
       ${people ? `<section class="cn-forks"><div class="cn-forks-title">Suivre un personnage</div>${people}</section>` : ''}
       ${after ? `<section class="cn-forks"><div class="cn-forks-title">Ce que ça a engendré</div>${after}</section>` : ''}
       ${others ? `<section class="cn-forks"><div class="cn-forks-title">D’autres chemins par ${esc(st.place)}</div>${others}</section>` : ''}
-      <footer class="sc-foot"><button type="button" class="sc-link cn-finish" data-act="finish">Terminer ce chemin ✓</button></footer>`;
+      <footer class="sc-foot"><button type="button" class="sc-link cn-finish" data-act="finish">Terminer et ranger le lecteur ✓</button></footer>`;
   }
 
-  /** Walks known: met on cards and searches, and the paths started. */
+  /** Walks known: met on cards and searches, and those of the file. */
   private mergedKnown(): ScenarioWalk[] {
-    const out = new Map<string, ScenarioWalk>();
-    for (const p of this.journal.list()) out.set(p.walk.id, p.walk);
+    const out = new Map<string, ScenarioWalk>(Object.entries(this.q.walks));
     for (const w of this.known()) if (!out.has(w.id)) out.set(w.id, w);
     return [...out.values()];
   }
 
-  /** A walk offered: its state (start, resume, played) and, while another is played, branching off to it. */
-  private walkRow(w: ScenarioWalk, i: number, playing: Path | null): string {
-    const known = this.journal.get(w.id);
-    const mine = this.current === w.id && !this.paused;
-    const go = mine ? 'En cours ●' : known && !known.done ? `Reprendre · étape ${known.step + 1} ▸` : known?.done ? 'Revivre ↺' : 'Commencer ▸';
+  /** A walk offered: read it (what comes next is set aside), or take it up where it was left. */
+  private walkRow(w: ScenarioWalk, i: number): string {
+    const p = this.progressOf(w.id);
+    const now = stepOf(this.q, this.q.at)?.walk.id === w.id;
+    const go = now ? 'En cours ●' : p && !p.done ? `Reprendre · étape ${p.step + 1} ▸` : p?.done ? 'Relire ↺' : 'Lire ▸';
     const who = `${THREAD_LABELS[threadOf(w)]}${w.hero ? ` · ${esc(w.hero.name)}` : ''}`;
-    const branch = playing && playing.walk.id !== w.id
-      ? `<button type="button" class="cn-go" data-act="branch" data-i="${i}" title="L’ouvrir comme une branche du chemin en cours">⑂ Bifurquer ici</button>`
-      : '';
-    return `<div class="cn-walk${mine ? ' playing' : ''}">
+    return `<div class="cn-walk${now ? ' playing' : ''}">
         <div class="cn-walk-badges"><span class="story-sc-kind ${w.invented ? 'invented' : 'real'}">${who}</span><span class="story-sc-len">${w.steps.length} étapes${w.from ? ` · ${esc(w.from.title)}` : ''}</span></div>
-        <div class="cn-walk-title">🎭 ${esc(w.title)}</div>
+        <div class="cn-walk-title">${esc(w.title)}</div>
         <div class="cn-walk-premise">${esc(w.premise)}</div>
         <div class="cn-walk-acts">
-          <button type="button" class="sc-btn sc-primary" data-act="walk" data-i="${i}" ${mine ? 'disabled' : ''}>${go}</button>${branch}
+          <button type="button" class="sc-btn sc-primary" data-act="walk" data-i="${i}" ${now ? 'disabled' : ''} title="${stepOf(this.q, this.q.at) ? 'La suite de la file est mise de côté' : ''}">${go}</button>
         </div>
       </div>`;
   }
 
-  private hereView(h: Here, p: Path | null): string {
+  private hereView(h: Here): string {
     this.leads = [];
     this.afterShown = [];
     this.walksShown = h.walks;
-    const year = p?.walk.steps[p.step]?.year;
+    const s = stepOf(this.q, this.q.at);
+    const year = s?.step.year;
     const life = h.person
       ? `<div class="cn-fork cn-life">
           ${face(h.person)}
           <span class="cn-fork-text"><b>Suivre la vie de ${esc(h.person.name)}</b><small>Étape par étape, à travers les fiches de sa vie</small></span>
-          ${p && year !== undefined ? `<button type="button" class="cn-go" data-act="life" data-how="detour" title="Quelques étapes de sa vie autour de ${esc(formatYear(year))}">Un détour (${esc(formatYear(year))})</button>` : ''}
-          <button type="button" class="cn-go cn-go-main" data-act="life" data-how="full">Tout son chemin ▸</button>
+          ${s && year !== undefined ? `<button type="button" class="cn-go cn-crochet" data-act="life" data-how="detour" title="Quelques étapes de sa vie autour de ${esc(formatYear(year))}, puis la file reprend">↪ Un crochet (${esc(formatYear(year))})</button>` : ''}
+          <button type="button" class="cn-go cn-go-main" data-act="life" data-how="full">Toute sa vie ▸</button>
         </div>`
       : '';
     const state = h.status === 'pending' ? `<div class="sc-note"><span class="sc-note-dot" aria-hidden="true"></span>${h.walks.length ? 'L’IA écrit d’autres chemins…' : 'L’IA trace les chemins qui passent ici…'}</div>`
@@ -1216,49 +1022,12 @@ export class Carnet {
       <div class="cn-kicker">Chemins qui passent par</div>
       <h2 class="cn-title">${esc(h.title)}</h2>
       ${life}
-      <div class="cn-walks">${h.walks.map((w, i) => this.walkRow(w, i, p)).join('')}</div>
+      <div class="cn-walks">${h.walks.map((w, i) => this.walkRow(w, i)).join('')}</div>
       ${state}
       ${h.poi ? '<footer class="sc-foot"><button type="button" class="sc-link" data-act="card">Explorer sa fiche et tous ses lieux ⤷</button></footer>' : ''}`;
   }
-
-  private pathsView(p: Path | null): string {
-    const paths = this.journal.list();
-    if (!paths.length) {
-      return `<div class="cn-kicker">Mes chemins</div>
-        <p class="cn-empty">Aucun chemin commencé. Ouvrez une fiche : « ▶ Parcourir cette histoire » propose ses parcours.</p>`;
-    }
-    const rows = paths.map((a) => {
-      const n = a.walk.steps.length;
-      const parent = a.parent && this.journal.get(a.parent.id);
-      const meta = [parent ? `${KIND_LABELS[a.kind]} de « ${parent.walk.title} »` : KIND_LABELS[a.kind], a.walk.hero?.name ?? THREAD_LABELS[threadOf(a.walk)]].filter(Boolean).join(' · ');
-      const mine = a.walk.id === p?.walk.id;
-      return `<div class="cn-path${mine ? ' playing' : ''}">
-          <button type="button" class="cn-path-main" data-act="path" data-id="${esc(a.walk.id)}" title="${a.done ? 'Revivre ce chemin' : 'Reprendre à l’étape où vous étiez'}">
-            <b>${esc(a.walk.title)}</b>
-            <small>${esc(meta)}</small>
-            <span class="cn-bar" aria-hidden="true"><i style="width:${Math.round(((a.seen + 1) / n) * 100)}%"></i></span>
-            <small class="cn-path-state">${mine ? (this.paused ? `En pause · étape ${a.step + 1}/${n}` : `En cours · étape ${a.step + 1}/${n}`) : a.done ? 'Terminé · revivre ↺' : `Reprendre · étape ${a.step + 1}/${n} ▸`}</small>
-          </button>
-          ${mine ? '' : `<button type="button" class="cn-forget" data-act="forget" data-id="${esc(a.walk.id)}" title="Oublier ce chemin" aria-label="Oublier ce chemin">×</button>`}
-        </div>`;
-    }).join('');
-    return `<div class="cn-kicker">Mes chemins <span class="cn-aside">· gardés dans ce navigateur</span></div>
-      <div class="cn-paths">${rows}</div>
-      <footer class="sc-foot"><button type="button" class="sc-link" data-act="drawer" data-view="tree">⑂ Voir les arbres des chemins</button></footer>`;
-  }
-
-  /** Every story explored, as a tree each: its trunk's steps, the branches under the step they leave. */
-  private forestView(p: Path | null): string {
-    const roots = this.journal.list().filter((a) => !(a.parent && this.journal.get(a.parent.id)));
-    if (!roots.length) return '<div class="cn-kicker">Les arbres des chemins</div><p class="cn-empty">Aucun chemin exploré pour le moment.</p>';
-    const line = new Set(p ? [...this.ancestors(p), p].map((a) => a.walk.id) : []);
-    return `<div class="cn-kicker">Les arbres des chemins <span class="cn-aside">· pris en plein, non pris en pointillés</span></div>
-      ${roots.map((r, i) => `<details class="tr-root"${i === 0 || line.has(r.walk.id) ? ' open' : ''}>
-          <summary><b>${esc(r.walk.title)}</b><small>${esc(r.walk.hero?.name ?? THREAD_LABELS[threadOf(r.walk)])} · ${r.done ? 'terminé' : `${r.seen + 1}/${r.walk.steps.length}`}</small></summary>
-          <ol class="tr">${this.treeSteps(r, p, line)}</ol>
-        </details>`).join('')}`;
-  }
 }
+
 
 /** Scenarios met so far, for the search bar (kept in this browser only). */
 const LIBRARY_KEY = 'orbis:scenarios';
@@ -1282,10 +1051,12 @@ export class ScenarioLibrary {
     return this.walks;
   }
 
-  /** Remembers scenarios shown on a card or written for a person (the latest first). */
+  /** Remembers scenarios shown on a card or written for a person (the latest first); a place added alone is no scenario. */
   add(walks: ScenarioWalk[]): void {
-    const ids = new Set(walks.map((w) => w.id));
-    this.walks = [...walks, ...this.walks.filter((w) => !ids.has(w.id))].slice(0, LIBRARY_MAX);
+    const kept = walks.filter((w) => !w.id.startsWith('card|'));
+    if (!kept.length) return;
+    const ids = new Set(kept.map((w) => w.id));
+    this.walks = [...kept, ...this.walks.filter((w) => !ids.has(w.id))].slice(0, LIBRARY_MAX);
     try {
       localStorage.setItem(LIBRARY_KEY, JSON.stringify(this.walks));
     } catch {

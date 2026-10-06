@@ -166,6 +166,8 @@ export interface WalkStep {
   beat?: string;
   /** What happened there, in paragraphs (a blank line between them); empty until written, when the visitor gets there. */
   text: string;
+  /** The same moment told in two or three sentences, for the player (the paragraphs are read in the card). */
+  recit?: string | null;
   cast: StoryPerson[];
   /** The stop of the card's story it walks through (`ScenarioWalk.from`): its text is written from it. */
   stop?: number;
@@ -227,6 +229,8 @@ export interface StepChoice {
 export interface StepResponse {
   status: StoryStatus;
   text: string | null;
+  /** Two or three sentences for the player. */
+  recit: string | null;
   /** The people present, as the writer placed them. */
   cast: StoryPerson[];
   choices: StepChoice[];
@@ -301,6 +305,27 @@ const MAX_AFTER = 3;
 /** "10 avr. 1912" when the day is known, else "1912". */
 export function formatWhen(s: { year: number; when?: number | null }): string {
   return s.when != null ? formatDay(s.when) : formatYear(s.year);
+}
+
+/** A short story: at least this long, then whole sentences up to the most. */
+const RECIT_MIN = 140;
+const RECIT_MAX = 320;
+
+/**
+ * A step told short, for the player: the writer's own, else the first
+ * sentences of its text (whole ones, as many as fit). Pure, for tests.
+ */
+export function recitOf(s: { recit?: string | null; text: string }): string {
+  if (s.recit) return s.recit;
+  const first = s.text.split(/\n\s*\n/)[0]?.trim() ?? '';
+  const sentences = first.match(/[^.!?…]+[.!?…]+(?:\s|$)|[^.!?…]+$/g) ?? [];
+  let out = '';
+  for (const x of sentences) {
+    if (out.length >= RECIT_MIN || (out && out.length + x.length > RECIT_MAX)) break;
+    out += x;
+  }
+  out = out.trim();
+  return out.length > RECIT_MAX ? `${out.slice(0, RECIT_MAX - 1).replace(/\s+\S*$/, '')}…` : out;
 }
 
 /** A stop of a card's story as a step of a walk. */
