@@ -9,39 +9,43 @@ import { greatCircle } from './living.ts';
 // named points (gold where it happened, blue its origins, rose what it led
 // to), the places its article only cites as small dots. A place with its
 // own card is ringed: a door into its own story. Cleared with the card.
-// While the file plays, its steps instead, numbered as on the player's
-// frieze, the one now in gold, the route lived drawn plain, the route ahead
-// dashed; from the step now, where it may go, as the player offers it: the way on (an arrow),
-// another route (a plain line, one way) and the places of its crochets (blue
-// dashes, they come back), each clickable.
-
-/** Where a path may go from the step played. */
-export interface RouteOption {
-  key: string;
-  kind: 'next' | 'fork' | 'detour';
-  label: string;
-  lat: number;
-  lon: number;
-}
-
-const OPTION_COLORS: Record<RouteOption['kind'], string> = { next: '#f2c66d', fork: '#f4ead6', detour: '#7fb3e0' };
+// While the file plays, only the steps beside the one now: the next one
+// joined by a plain arrow, the one before by dashes, nothing more (the
+// routes the step may take are offered by the scenario's card, not drawn).
+// The step now is a pin of its own, kept on the map when the visitor goes
+// elsewhere: a click on it brings the scenario back.
 
 const PHASE_COLORS: Record<StoryPhase, string> = { before: '#5b8fd1', during: '#d9a441', after: '#d673b1' };
 /** Names of the main places show from this far (meters), the dots from farther. */
 const LABEL_FAR = 9_000_000;
+const GOLD = '#f2c66d';
+const IVORY = '#f4ead6';
+const NIGHT = '#07090d';
+
+/** A step beside the one now, as drawn: before it or after it. */
+export interface StepAround {
+  step: WalkStep;
+  label: string;
+}
 
 export class StoryLayer {
   private points: PointPrimitiveCollection;
   private labels: LabelCollection;
   private lines: PolylineCollection;
-  private options: RouteOption[] = [];
+  /** The step now: on its own, not cleared with the rest. */
+  private pinPoints: PointPrimitiveCollection;
+  private pinLabels: LabelCollection;
+  private pin: WalkStep | null = null;
   private stops: StoryStop[] = [];
-  private steps: WalkStep[] = [];
+  /** The steps drawn beside the one now: -1 before it, 1 after it. */
+  private around = new Map<number, WalkStep>();
 
   constructor(private viewer: Viewer) {
     this.points = viewer.scene.primitives.add(new PointPrimitiveCollection());
     this.labels = viewer.scene.primitives.add(new LabelCollection({ scene: viewer.scene }));
     this.lines = viewer.scene.primitives.add(new PolylineCollection());
+    this.pinPoints = viewer.scene.primitives.add(new PointPrimitiveCollection());
+    this.pinLabels = viewer.scene.primitives.add(new LabelCollection({ scene: viewer.scene }));
   }
 
   private line(a: { lat: number; lon: number }, b: { lat: number; lon: number }, material: Material, width: number): void {
@@ -50,68 +54,77 @@ export class StoryLayer {
     this.lines.add({ positions: pts.map(([lat, lon]) => Cartesian3.fromDegrees(lon, lat, 600)), width, material });
   }
 
-  /** The steps of the file, numbered (`labels`, else from 1); `at`: the one now; `options`: where it may go from there. */
-  showWalk(steps: WalkStep[], at: number, options: RouteOption[] = [], labels: string[] = []): void {
+  /** The steps beside the one now: the next joined by a plain arrow, the one before by dashes. */
+  showWalk(now: WalkStep, prev: StepAround | null, next: StepAround | null): void {
     this.clear();
-    this.steps = steps;
-    this.options = options;
-    const gold = Color.fromCssColorString('#d9a441');
-    const ivory = Color.fromCssColorString('#f4ead6');
-    steps.forEach((s, j) => {
-      const b = steps[j + 1];
-      if (!b || (b.lat === s.lat && b.lon === s.lon)) return;
-      const lived = j < at;
-      this.line(s, b, lived ? Material.fromType('Color', { color: gold.withAlpha(0.7) }) : Material.fromType('PolylineDash', { color: ivory.withAlpha(0.35), dashLength: 12 }), lived ? 2.5 : 1.5);
-    });
-    const here = steps[at];
-    if (here) {
-      options.forEach((o, k) => {
-        const color = Color.fromCssColorString(OPTION_COLORS[o.kind]);
-        const far = o.lat !== here.lat || o.lon !== here.lon;
-        if (far) {
-          this.line(here, o, o.kind === 'next' ? Material.fromType('PolylineArrow', { color: color.withAlpha(0.95) })
-            : o.kind === 'fork' ? Material.fromType('Color', { color: color.withAlpha(0.7) })
-            : Material.fromType('PolylineDash', { color: color.withAlpha(0.9), dashLength: 8 }), o.kind === 'next' ? 9 : 2.5);
-        }
-        if (o.kind === 'next' || !far) return;
-        const position = Cartesian3.fromDegrees(o.lon, o.lat, 1500);
-        this.points.add({
-          position, id: { option: k }, pixelSize: o.kind === 'fork' ? 11 : 8, color: color.withAlpha(0.95),
-          outlineColor: Color.fromCssColorString('#07090d').withAlpha(0.85), outlineWidth: 2,
-          scaleByDistance: new NearFarScalar(3e5, 1.3, 2e7, 0.7), disableDepthTestDistance: 5e6,
-        });
-        this.labels.add({
-          position, id: { option: k }, text: `${o.kind === 'fork' ? '⑂ ' : '↪ '}${o.label}`,
-          font: '600 12px "Inter Variable", system-ui, sans-serif',
-          fillColor: color, outlineColor: Color.fromCssColorString('#07090d').withAlpha(0.9), outlineWidth: 3, style: LabelStyle.FILL_AND_OUTLINE,
-          verticalOrigin: VerticalOrigin.BOTTOM, horizontalOrigin: HorizontalOrigin.CENTER, pixelOffset: new Cartesian2(0, -10),
-          distanceDisplayCondition: new DistanceDisplayCondition(0, 2e7), disableDepthTestDistance: 5e6,
-        });
-      });
+    const same = (a: WalkStep, b: WalkStep) => a.lat === b.lat && a.lon === b.lon;
+    if (prev && !same(prev.step, now)) {
+      this.line(prev.step, now, Material.fromType('PolylineDash', { color: Color.fromCssColorString(IVORY).withAlpha(0.6), dashLength: 12 }), 2);
     }
-    steps.forEach((s, j) => {
-      const position = Cartesian3.fromDegrees(s.lon, s.lat, 1500);
-      const on = j === at;
+    if (next && !same(next.step, now)) {
+      this.line(now, next.step, Material.fromType('PolylineArrow', { color: Color.fromCssColorString(GOLD).withAlpha(0.95) }), 9);
+    }
+    for (const [side, a] of [[-1, prev], [1, next]] as const) {
+      if (!a || same(a.step, now)) continue;
+      this.around.set(side, a.step);
+      const position = Cartesian3.fromDegrees(a.step.lon, a.step.lat, 1500);
       this.points.add({
-        position, id: { step: j },
-        pixelSize: on ? 14 : 9,
-        color: Color.fromCssColorString(on ? '#f2c66d' : j < at ? '#d9a441' : '#f4ead6').withAlpha(on ? 1 : 0.75),
-        outlineColor: Color.fromCssColorString('#07090d').withAlpha(0.85), outlineWidth: 2,
-        scaleByDistance: new NearFarScalar(3e5, 1.3, 2e7, 0.7),
-        disableDepthTestDistance: 5e6,
+        position, id: { step: side }, pixelSize: 9,
+        color: Color.fromCssColorString(side < 0 ? '#d9a441' : IVORY).withAlpha(0.8),
+        outlineColor: Color.fromCssColorString(NIGHT).withAlpha(0.85), outlineWidth: 2,
+        scaleByDistance: new NearFarScalar(3e5, 1.3, 2e7, 0.7), disableDepthTestDistance: 5e6,
       });
       this.labels.add({
-        position, id: { step: j },
-        text: on ? `${labels[j] ?? j + 1}. ${s.place}` : labels[j] ?? String(j + 1),
-        font: `${on ? 700 : 600} 12px "Inter Variable", system-ui, sans-serif`,
-        fillColor: Color.fromCssColorString(on ? '#f2c66d' : '#f4ead6'), outlineColor: Color.fromCssColorString('#07090d').withAlpha(0.9),
+        position, id: { step: side }, text: `${a.label}. ${a.step.place}`,
+        font: '600 12px "Inter Variable", system-ui, sans-serif',
+        fillColor: Color.fromCssColorString(IVORY).withAlpha(side < 0 ? 0.75 : 1), outlineColor: Color.fromCssColorString(NIGHT).withAlpha(0.9),
         outlineWidth: 3, style: LabelStyle.FILL_AND_OUTLINE,
         verticalOrigin: VerticalOrigin.BOTTOM, horizontalOrigin: HorizontalOrigin.CENTER, pixelOffset: new Cartesian2(0, -10),
-        distanceDisplayCondition: new DistanceDisplayCondition(0, 2e7),
-        disableDepthTestDistance: 5e6,
+        distanceDisplayCondition: new DistanceDisplayCondition(0, 2e7), disableDepthTestDistance: 5e6,
       });
-    });
+    }
     this.viewer.scene.requestRender();
+  }
+
+  /**
+   * The scenario's pin: the step now, a little larger than the others, its
+   * number and place written; it stays while the visitor looks elsewhere
+   * (`paused`: drawn a touch quieter). Null takes it away.
+   */
+  setPin(step: WalkStep | null, label = '', paused = false): void {
+    this.pinPoints.removeAll();
+    this.pinLabels.removeAll();
+    this.pin = step;
+    if (step) {
+      const position = Cartesian3.fromDegrees(step.lon, step.lat, 1800);
+      this.pinPoints.add({
+        position, id: { pin: true }, pixelSize: 18,
+        color: Color.fromCssColorString(GOLD).withAlpha(paused ? 0.85 : 1),
+        outlineColor: Color.fromCssColorString(paused ? IVORY : NIGHT).withAlpha(0.9), outlineWidth: paused ? 2.5 : 3,
+        scaleByDistance: new NearFarScalar(3e5, 1.35, 2e7, 0.8), disableDepthTestDistance: 5e6,
+      });
+      this.pinLabels.add({
+        position, id: { pin: true }, text: paused ? `◎ ${label}. ${step.place}` : `${label}. ${step.place}`,
+        font: '700 13px "Inter Variable", system-ui, sans-serif',
+        fillColor: Color.fromCssColorString(GOLD), outlineColor: Color.fromCssColorString(NIGHT).withAlpha(0.9),
+        outlineWidth: 3, style: LabelStyle.FILL_AND_OUTLINE,
+        verticalOrigin: VerticalOrigin.BOTTOM, horizontalOrigin: HorizontalOrigin.CENTER, pixelOffset: new Cartesian2(0, -13),
+        distanceDisplayCondition: new DistanceDisplayCondition(0, 2.5e7), disableDepthTestDistance: 5e6,
+      });
+    }
+    this.viewer.scene.requestRender();
+  }
+
+  /** The scenario's pin's step, if the pin is under the cursor. */
+  pickPin(at: Cartesian2): WalkStep | null {
+    if (!this.pin) return null;
+    const hit = this.viewer.scene.pick(at) as { id?: { pin?: boolean } } | undefined;
+    return hit?.id?.pin ? this.pin : null;
+  }
+
+  /** The step drawn before (-1) or after (1) the one now. */
+  besideStep(side: -1 | 1): WalkStep | null {
+    return this.around.get(side) ?? null;
   }
 
   show(story: Story): void {
@@ -149,28 +162,19 @@ export class StoryLayer {
 
   clear(): void {
     this.stops = [];
-    this.steps = [];
-    this.options = [];
+    this.around.clear();
     this.points.removeAll();
     this.labels.removeAll();
     this.lines.removeAll();
     this.viewer.scene.requestRender();
   }
 
-  /** The path's step under the cursor, if any. */
-  pickStep(at: Cartesian2): { j: number; step: WalkStep } | null {
-    if (!this.steps.length) return null;
+  /** The step beside the one now under the cursor, if any: -1 the one before, 1 the next. */
+  pickStep(at: Cartesian2): -1 | 1 | null {
+    if (!this.around.size) return null;
     const hit = this.viewer.scene.pick(at) as { id?: { step?: number } } | undefined;
-    const j = hit?.id?.step;
-    return typeof j === 'number' && this.steps[j] ? { j, step: this.steps[j]! } : null;
-  }
-
-  /** Where the path may go, under the cursor (a turning point, a detour's place), if any. */
-  pickOption(at: Cartesian2): RouteOption | null {
-    if (!this.options.length) return null;
-    const hit = this.viewer.scene.pick(at) as { id?: { option?: number } } | undefined;
-    const k = hit?.id?.option;
-    return typeof k === 'number' ? this.options[k] ?? null : null;
+    const side = hit?.id?.step;
+    return side === -1 || side === 1 ? side : null;
   }
 
   /** The story's place under the cursor, if any. */

@@ -20,7 +20,7 @@ const views = new ViewService(store, bus, cfg, () => router.hasProvider('extract
 const doors = new DoorService(store, () => normalizeUi(settings.get().ui).meanwhileMaxSpan, router);
 const { clio, borders } = createBorders(cfg);
 const polities = createPolities(cfg, clio, settings);
-// Names, coats of arms and faiths of every realm, completed little by little in the background.
+// Names, coats of arms, faiths and peoples of every realm, completed little by little in the background.
 polities.startRefining();
 const people = createPeople(cfg, settings);
 const flows = createFlows(cfg, router);
@@ -307,6 +307,13 @@ app.get<{ Querystring: { year?: string } }>('/api/polity/faiths', async (req, re
   const year = Number(req.query.year);
   if (!Number.isFinite(year)) return reply.code(400).send({ error: 'année manquante' });
   return polities.faiths(year);
+});
+
+// Peoples and languages of the realms shown at a year (the culture backdrop).
+app.get<{ Querystring: { year?: string } }>('/api/polity/cultures', async (req, reply) => {
+  const year = Number(req.query.year);
+  if (!Number.isFinite(year)) return reply.code(400).send({ error: 'année manquante' });
+  return polities.cultures(year);
 });
 
 // Coats of arms and flags of given items (the sides of the armies shown).

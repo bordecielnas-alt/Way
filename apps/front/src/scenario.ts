@@ -5,9 +5,10 @@ import {
 import type { Entity } from './entity.ts';
 import { viaServer } from './media.ts';
 import {
-  add, clearNext, crochet, emptyQueue, goTo, move, parseQueue, progressOf, remove, start, stepOf, takeShelf, updateStep, type Queue,
+  add, clearNext, crochet, emptyQueue, goTo, move, nearSpan, nearWalks, parseQueue, progressOf, remove, start, stepOf, takeShelf, treeOf, updateStep, type Queue,
+  type Run,
 } from './queue.ts';
-import type { RouteOption } from './storymap.ts';
+import type { StepAround } from './storymap.ts';
 import type { TimeMark } from './timeline.ts';
 
 // The scenario's card, on the left: the step told as an article (its
@@ -63,12 +64,11 @@ const OLD_PATHS_KEY = 'orbis:paths';
 const SAME_PLACE_KM = 40;
 const MAX_FORKS = 3;
 const MAX_DECISIONS = 6;
-/** Crochets offered on a step; the steps drawn on the globe around the one now; on the timeline. */
+/** Crochets offered on a step; the file's steps marked on the timeline, around the one now, of a few scenarios at most. */
 const MAX_CHIPS = 4;
-const ROUTE_BEFORE = 12;
-const ROUTE_AFTER = 16;
 const MARKS_AROUND = 30;
-/** Steps of the file shown in the player, around the one now. */
+const MARKED_SCENARIOS = 3;
+/** Steps of the file shown in the player, around the one now (of its scenario and the one before). */
 const PIPS = 9;
 /** Steps seen listed in the file's panel. */
 const SEEN_SHOWN = 8;
@@ -97,23 +97,6 @@ export function throughPlace(walks: ScenarioWalk[], walk: ScenarioWalk, j: numbe
   return walks
     .filter((w) => w.id !== walk.id && w.steps.some((s) => (st.poi && s.poi?.id === st.poi.id) || km(s, st) < SAME_PLACE_KM))
     .slice(0, limit);
-}
-
-/** Where a step may lead, as drawn on the globe: the way on, the turning points, the crochets to a place. Pure, for tests. */
-export function routeOptions(walk: ScenarioWalk, j: number, next: WalkStep | null = walk.steps[j + 1] ?? null): RouteOption[] {
-  const st = walk.steps[j];
-  if (!st) return [];
-  const out: RouteOption[] = [];
-  if (next) out.push({ key: 'next', kind: 'next', label: next.place, lat: next.lat, lon: next.lon });
-  (st.forks ?? []).forEach((f, k) => {
-    const to = f.steps[0];
-    if (to) out.push({ key: `fork:${k}`, kind: 'fork', label: f.label, lat: to.lat, lon: to.lon });
-  });
-  (st.choices ?? []).forEach((c, k) => {
-    const to = c.step ?? c.poi;
-    if (to) out.push({ key: `choice:${k}`, kind: 'detour', label: c.step?.place ?? c.poi!.title, lat: to.lat, lon: to.lon });
-  });
-  return out;
 }
 
 /** The turns taken before a step, oldest first: before the walk (a turning point's), then along it. Pure, for tests. */
@@ -239,14 +222,21 @@ export function stepParts(walk: ScenarioWalk, j: number, writer: string | null):
   return { head, body: `${article}${facts}${who}${pictures}${footer}` };
 }
 
-/** In the scenario's card, in place of the step: the file, the routes to take instead, a place's or person's paths, the ways on at the end. */
-type Panel = 'queue' | 'routes' | 'here' | 'suites';
+/**
+ * In the scenario's card, in place of the step: the file, the routes to take
+ * instead, a place's or person's paths, the ways on at the end, the tree of
+ * the scenarios taken.
+ */
+type Panel = 'queue' | 'routes' | 'here' | 'suites' | 'tree';
 
 /** The scenario's card: open, folded down to its player, or put away (a button brings the file back). */
 type View = 'open' | 'folded' | 'closed';
 
 /** The step now, with its walk and its item in the file. */
 type Playing = NonNullable<ReturnType<typeof stepOf>>;
+
+/** A small tree: a trunk and its branches, drawn in the ink of the buttons. */
+const TREE_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 15V3M8 9 4 5.5M8 7l4-3M4 5.5V3M12 4V2"/><circle cx="8" cy="2.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="4" cy="2.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="12" cy="1.8" r="1.1" fill="currentColor" stroke="none"/></svg>';
 
 /** The step's section in full under its récit: left open, it stays open from step to step. */
 const ARTICLE_KEY = 'orbis:article';
@@ -277,13 +267,13 @@ export class Player {
   private leads: Lead[] = [];
   private walksShown: ScenarioWalk[] = [];
   private afterShown: WalkLead[] = [];
-  /** The items drawn on the globe, from this one. */
-  private shownFrom = 0;
 
   /** A step to show: map, timeline, its card and its people go there; `first`: the file started or taken up again. */
   onStep: (walk: ScenarioWalk, step: number, first: boolean) => void = () => undefined;
-  /** The steps around the one now, and where it may go, to draw on the globe. */
-  onRoute: (steps: WalkStep[], at: number, options: RouteOption[], labels: string[]) => void = () => undefined;
+  /** The step now and those beside it in the file, to draw on the globe. */
+  onRoute: (now: WalkStep, prev: StepAround | null, next: StepAround | null) => void = () => undefined;
+  /** The scenario's pin on the map: the step now, played or paused (null: none, or scenarios off). */
+  onPin: (step: WalkStep | null, label: string, paused: boolean) => void = () => undefined;
   /** A step without its text: to be written. */
   onNeedText: (walk: ScenarioWalk, step: number) => void = () => undefined;
   /** Paused (or nothing plays any more): the people of the step leave the map. */
@@ -448,19 +438,14 @@ export class Player {
     return this.here?.key ?? null;
   }
 
-  /** A step drawn on the globe, chosen there (`j` among those drawn). */
-  showStep(j: number): void {
-    this.goTo(this.shownFrom + j);
+  /** A step beside the one now, chosen on the globe: the one before, or the next. */
+  showStep(side: -1 | 1): void {
+    this.go(side);
   }
 
-  /** Where the step may go, chosen on the globe (`RouteOption.key`). */
-  takeOption(key: string): void {
-    const s = stepOf(this.q, this.q.at);
-    if (!s || !this.playingNow) return;
-    const [kind, n] = key.split(':');
-    if (kind === 'next') this.go(1);
-    else if (kind === 'fork') this.takeFork(s.walk, s.item.step, Number(n));
-    else if (kind === 'choice') this.choose(Number(n));
+  /** The scenario's pin clicked: its card opens on the step now, the camera goes back to it. */
+  back(): void {
+    if (stepOf(this.q, this.q.at)) this.goTo(this.q.at);
   }
 
   /** Drawn again (a place's card opened or closed beside it). */
@@ -739,30 +724,31 @@ export class Player {
       img.remove();
     }));
     this.onMarks(s ? this.marks() : []);
+    this.onPin(s?.step ?? null, s ? this.label(this.q.at) : '', !playing);
     if (playing) this.route();
   }
 
-  /** The steps drawn on the globe around the one now, where the step now may go. */
+  /** The step now on the globe, with the one before it and the next (nothing more: the routes are in the card). */
   private route(): void {
-    const s = stepOf(this.q, this.q.at)!;
-    const from = Math.max(0, this.q.at - ROUTE_BEFORE);
-    this.shownFrom = from;
-    const steps = this.q.items.slice(from, this.q.at + ROUTE_AFTER).map((_, k) => stepOf(this.q, from + k)!.step);
-    const next = stepOf(this.q, this.q.at + 1)?.step ?? null;
-    this.onRoute(steps, this.q.at - from, routeOptions(s.walk, s.item.step, next), steps.map((_, k) => this.label(from + k)));
+    const at = this.q.at;
+    const beside = (i: number): StepAround | null => {
+      const t = stepOf(this.q, i);
+      return t && { step: t.step, label: this.label(i) };
+    };
+    this.onRoute(stepOf(this.q, at)!.step, beside(at - 1), beside(at + 1));
   }
 
-  /** The file's steps around the one now, for the general timeline. */
+  /** The file's steps around the one now, for the general timeline: those of the few scenarios nearest it. */
   private marks(): TimeMark[] {
     const from = Math.max(0, this.q.at - MARKS_AROUND);
     const to = Math.min(this.q.items.length, this.q.at + MARKS_AROUND + 1);
-    return this.q.items.slice(from, to).map((it, k) => {
+    const walks = nearWalks(this.q, MARKED_SCENARIOS);
+    return this.q.items.slice(from, to).flatMap((it, k) => {
       const i = from + k;
+      if (!walks.has(it.walk)) return [];
       const t = stepOf(this.q, i)!.step;
-      return {
-        i, year: t.when ?? t.year, state: i === this.q.at ? 'now' : i < this.q.at ? 'done' : 'todo', crochet: !!it.crochet,
-        title: `${this.label(i)}. ${t.place} · ${formatWhen(t)}`,
-      };
+      const state: TimeMark['state'] = i === this.q.at ? 'now' : i < this.q.at ? 'done' : 'todo';
+      return [{ i, year: t.when ?? t.year, state, crochet: !!it.crochet, title: `${this.label(i)}. ${t.place} · ${formatWhen(t)}` }];
     });
   }
 
@@ -771,11 +757,13 @@ export class Player {
     const close = s
       ? '<button type="button" class="sc-icon" data-act="close" title="Ranger le scénario (la file reste)" aria-label="Ranger le scénario">✕</button>'
       : '<button type="button" class="sc-icon" data-act="close-panel" title="Fermer (Échap)" aria-label="Fermer">✕</button>';
-    if (!s) return `<header class="sc-head"><span class="sc-head-title">Scénarios</span>${close}</header>`;
+    if (!s) return `<header class="sc-head"><div class="sc-head-text"><span class="sc-head-title">Scénarios</span></div>${close}</header>`;
     const { walk, item } = s;
     return `<header class="sc-head">
-        <span class="pl-thread">${item.crochet ? '↪ Crochet' : THREAD_LABELS[threadOf(walk)]}${walk.hero ? ` · ${esc(walk.hero.name)}` : ''}</span>
-        <span class="sc-head-title" title="${esc(walk.premise)}">${esc(walk.title)}</span>
+        <div class="sc-head-text">
+          <span class="pl-thread">${item.crochet ? '↪ Crochet' : THREAD_LABELS[threadOf(walk)]}${walk.hero ? ` · ${esc(walk.hero.name)}` : ''}</span>
+          <span class="sc-head-title" title="${esc(walk.premise)}">${esc(walk.title)}</span>
+        </div>
         ${close}
       </header>`;
   }
@@ -823,9 +811,10 @@ export class Player {
   }
 
   /**
-   * The player, at the card's foot: the file's steps around the one now
-   * (☰ the whole file), back, "Suivant", fold. Folded, the step's name above
-   * it and a way to read it again.
+   * The player, at the card's foot: the steps of the scenario read and of the
+   * one before it, around the step now (☰ the whole file, the tree of the
+   * scenarios taken), back, "Suivant", fold. Folded, the step's name above it
+   * and a way to read it again.
    */
   private foot(s: Playing, open: boolean): string {
     const { walk, step: st, item } = s;
@@ -833,8 +822,9 @@ export class Player {
     const at = this.q.at;
     const next = stepOf(this.q, at + 1);
     const inCrochet = !!item.crochet;
-    const from = Math.max(0, Math.min(at - 3, n - PIPS));
-    const to = Math.min(n, from + PIPS);
+    const span = nearSpan(this.q);
+    const from = Math.max(span.from, Math.min(at - 3, span.to - PIPS));
+    const to = Math.min(span.to, from + PIPS);
     const pips = Array.from({ length: to - from }, (_, k) => {
       const i = from + k;
       const it = this.q.items[i]!;
@@ -861,8 +851,9 @@ export class Player {
         <div class="sc-pips-row">
           ${from > 0 ? '<span class="sc-more" aria-hidden="true">…</span>' : ''}
           <div class="sc-pips" role="group" aria-label="La file, étape ${at + 1} sur ${n}">${pips}</div>
-          ${to < n ? '<span class="sc-more" aria-hidden="true">…</span>' : ''}
+          ${to < span.to ? '<span class="sc-more" aria-hidden="true">…</span>' : ''}
           ${this.paused ? '<button type="button" class="sc-icon" data-act="resume" title="Revenir à l’étape : la caméra y retourne" aria-label="Revenir à l’étape">◎</button>' : ''}
+          <button type="button" class="sc-icon sc-tree-btn${this.panel === 'tree' ? ' on' : ''}" data-act="panel" data-view="tree" title="L’arbre des scénarios pris, comme dans un carnet" aria-label="L’arbre des scénarios">${TREE_ICON}</button>
           <button type="button" class="sc-icon${this.panel === 'queue' ? ' on' : ''}" data-act="panel" data-view="queue" title="La file et l’historique" aria-label="La file et l’historique">☰</button>
         </div>
         <div class="pl-nav">
@@ -890,9 +881,11 @@ export class Player {
     const body = p === 'here' && this.here ? this.hereView(this.here)
       : p === 'routes' ? this.routesView()
       : p === 'suites' ? this.suites()
+      : p === 'tree' ? this.treeView()
       : this.queueView();
     const back = !!stepOf(this.q, this.q.at);
-    return `<section class="pl-panel" aria-label="${p === 'queue' ? 'La file' : p === 'routes' ? 'Bifurquer' : p === 'suites' ? 'Et ensuite' : 'Chemins'}">
+    const name = { queue: 'La file', routes: 'Bifurquer', suites: 'Et ensuite', tree: 'L’arbre des scénarios', here: 'Chemins' }[p];
+    return `<section class="pl-panel" aria-label="${name}">
         ${back ? '<button type="button" class="sc-icon pl-panel-close" data-act="close-panel" title="Revenir à l’étape (Échap)" aria-label="Revenir à l’étape">✕</button>' : ''}
         ${body}
       </section>`;
@@ -940,6 +933,50 @@ export class Player {
       <div class="pl-label pl-sec">À suivre</div>${next || '<p class="cn-empty">Rien ensuite.</p>'}
       ${shelf ? `<div class="pl-label pl-sec">Routes non prises</div>${shelf}<p class="pl-hint">« Bifurquer » remplace la suite ; l’ancienne suite est rangée ici.</p>` : ''}
       ${next ? '<footer class="sc-foot"><button type="button" class="sc-link" data-act="clear">Vider la suite</button></footer>' : ''}`;
+  }
+
+  /**
+   * The scenarios taken, as a tree in a notebook: the trunk goes down from
+   * the first, a crochet branches off and comes back, a route set aside hangs
+   * off where it was left (it may be taken again). A click goes there.
+   */
+  private treeView(): string {
+    const q = this.q;
+    const stems = treeOf(q);
+    if (!stems.length) return '<div class="cn-kicker">L’arbre des scénarios</div><p class="cn-empty">Rien encore : prenez un parcours sur une fiche, l’arbre poussera avec vos choix.</p>';
+    const node = (r: Run, cls: string, mark: string) => {
+      const w = q.walks[r.walk];
+      const first = stepOf(q, r.from)!.step;
+      const last = stepOf(q, r.to - 1)!.step;
+      const state = r.to <= q.at ? 'done' : r.from > q.at ? 'todo' : 'now';
+      const n = r.to - r.from;
+      const where = first.place === last.place ? first.place : `${first.place} → ${last.place}`;
+      const when = formatYear(first.year) === formatYear(last.year) ? formatYear(first.year) : `${formatYear(first.year)} – ${formatYear(last.year)}`;
+      const kind = r.crochet ? 'crochet' : w ? THREAD_LABELS[threadOf(w)] : '';
+      return `<button type="button" class="tr-node ${cls} ${state}" data-act="goto" data-i="${state === 'now' ? q.at : r.from}" title="${esc(w?.premise ?? '')}">
+          <span class="tr-dot" aria-hidden="true">${mark}</span>
+          <span class="tr-text"><b>${esc(w?.title ?? '')}</b><small>${esc([kind, `${n} étape${n > 1 ? 's' : ''}`, where, when].filter(Boolean).join(' · '))}</small>
+          ${state === 'now' ? `<em class="tr-here">vous êtes ici · ${esc(stepOf(q, q.at)!.step.place)}</em>` : ''}</span>
+        </button>`;
+    };
+    const rows = stems.map((st, k) => {
+      const shelves = st.shelves.map((i) => {
+        const sh = q.shelf[i]!;
+        return `<li class="tr-branch shelf"><button type="button" class="tr-node shelf" data-act="shelf" data-i="${i}" title="Prendre cette route : la suite actuelle est mise de côté à son tour">
+            <span class="tr-dot" aria-hidden="true">⑂</span>
+            <span class="tr-text"><b>${esc(sh.title)}</b><small>route non prise · laissée à ${esc(sh.from)} · ${sh.items.length} étape${sh.items.length > 1 ? 's' : ''}</small></span>
+          </button></li>`;
+      }).join('');
+      const crochets = st.crochets.map((r) => `<li class="tr-branch crochet">${node(r, 'crochet', '↪')}</li>`).join('');
+      const turn = st.turn ? `<div class="tr-turn">⑂ bifurcation</div>` : k && !st.turn ? '<div class="tr-turn quiet">la file reprend</div>' : '';
+      return `<li class="tr-stem">${turn}${node(st.run, 'main', st.turn || !k ? '●' : '·')}${crochets || shelves ? `<ul class="tr-branches">${crochets}${shelves}</ul>` : ''}</li>`;
+    }).join('');
+    return `<div class="cn-kicker">L’arbre des scénarios <span class="cn-aside">· gardé dans ce navigateur</span></div>
+      <div class="tr-carnet">
+        <div class="tr-head">Carnet de route</div>
+        <ol class="tr-trunk">${rows}</ol>
+        <p class="tr-legend"><span>● un chemin pris</span><span>↪ un crochet, qui revient</span><span>⑂ une route laissée</span></p>
+      </div>`;
   }
 
   /** "Bifurquer": another route from the step now, one way: what comes next is set aside. */

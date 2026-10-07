@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PoiLite, ScenarioWalk, StoryPerson, WalkStep } from '@way/shared';
-import { routeOptions, stepDecisions, stepLeads, throughPlace } from './scenario.ts';
+import { stepDecisions, stepLeads, throughPlace } from './scenario.ts';
 
 const person = (qid: string, name: string): StoryPerson => ({ qid, name, role: 'Rôle', born: 1850, died: 1912, image: null });
 const card = (id: string, title: string) => ({ id, title }) as PoiLite;
@@ -41,24 +41,9 @@ describe('crossroads of the carnet', () => {
   });
 });
 
-describe('where a step may lead', () => {
+describe('the turns a step knows', () => {
   const cobh = step('Cobh', 51.85, -8.3, null);
   const wreck = step('Naufrage', 41.7, -49.9, null);
-  const carpathia = step('Carpathia', 41.5, -50.1, null);
-
-  it('draws the way on, the turning points and the detours to a place, not those to someone', () => {
-    const at: WalkStep = {
-      ...step('Southampton', 50.9, -1.4, null),
-      forks: [{ label: 'Rester à terre', hero: null, steps: [carpathia] }, { label: 'Vide', hero: null, steps: [] }],
-      choices: [{ label: 'Monter à la radio', person: person('Q5', 'Jack Phillips') }, { label: 'Faire escale à Cobh', step: cobh }],
-    };
-    const w = walk('a', [at, wreck]);
-    expect(routeOptions(w, 0).map((o) => [o.key, o.kind, o.label])).toEqual([
-      ['next', 'next', 'Naufrage'], ['fork:0', 'fork', 'Rester à terre'], ['choice:1', 'detour', 'Cobh'],
-    ]);
-    // The last step goes nowhere planned.
-    expect(routeOptions(w, 1)).toEqual([]);
-  });
 
   it('tells the writer the turns taken: before a turning point’s walk, then along it', () => {
     const taken: WalkStep = { ...cobh, choices: [{ label: 'Faire escale à Cobh', step: cobh }], chosen: 0 };

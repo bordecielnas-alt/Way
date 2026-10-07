@@ -321,9 +321,32 @@ anciennement vus ; importance ≥ 0,75 épinglée. Les clés de recherche des zo
 - **Personnages transversaux** : leurs thèmes viennent de leurs métiers (P106) et fonctions (P39), remontés
   par P279* vers des racines (monarque → pouvoir, clerc → religion…), gardés dans `tags` (`role:<thème>`).
   Un personnage s'affiche si l'un de ses rôles est visible (ou s'il n'en a aucun connu).
-- **Fond des territoires**, exclusif : politique, religieux, aucun. Religion d'un État : P3075 (officielle,
+- **Fond des territoires**, exclusif : politique, religieux, cultures, aucun. Religion d'un État : P3075 (officielle,
   poids ×2) et P140, rang préféré ×3, datées par qualificatifs ; familles par P279*/P361/P140. Les cultes
-  « antiques et traditionnels » ne s'additionnent pas (ce sont des religions distinctes).
+  « antiques et traditionnels » ne s'additionnent pas (ce sont des religions distinctes). Une religion générique
+  dite à côté d'une de ses branches dans la même propriété (« christianisme » et « catholicisme ») ne compte
+  qu'une fois : les Hafsides, qui listent islam, catholicisme, christianisme et judaïsme comme officiels, restent
+  musulmans. Rien de daté autour de l'année : les énoncés sans date, puis le plus proche daté (200 ans au plus,
+  la République romaine de −100 prend les cultes datés de −27). Un État qui ne dit rien prend la religion de sa
+  parenté (prédécesseur, successeur, l'ensemble dont il fait partie : P155/P156/P1365/P1366/P361, requête à
+  part, WDQS planifiant mal l'UNION) ; à défaut son nom (califat, sultanat, émirat → islam ; principauté
+  épiscopale, ordre militaire, États pontificaux → christianisme) ; à défaut, sur la carte, ses voisins quand
+  60 % d'entre eux, deux au moins, s'accordent (teinte plus claire, bord en pointillés ; une estimation n'en
+  nourrit pas d'autre).
+- **Fond « Cultures »** : le peuple de chaque État, en ~20 grandes familles ethnolinguistiques (Latins et
+  Romans, Germaniques, Slaves, Turcs, Sémites, Chinois…, racines de langues vérifiées dans Wikidata). D'abord
+  son peuple (P172, par la langue de ce peuple, P103/P2936), sinon ses langues officielles (P37), sinon celles
+  parlées (P2936), sinon celles de sa parenté. Une langue savante (latin, chinois classique, slavon) ne parle
+  pour un État que s'il n'en dit pas d'autre : la Pologne de 1305 (latin officiel, polonais parlé) est slave.
+  Quand aucune famille ne fait la moitié de la source retenue, parmi trois ou plus, « Plusieurs peuples » (le
+  Saint-Empire : latin, polonais, tchèque, hongrois, italien, allemand). Cherché et rafraîchi comme les
+  religions (cache `cultures`, balayage de fond, priorité au clic).
+- **Couleurs voisines** : sur la carte politique, deux États qui se touchent ou se frôlent (contours à moins
+  d'environ une case de 1° l'un de l'autre) ne portent jamais deux couleurs trop proches (écart CIE76 < 28) :
+  le plus grand garde la sienne (celle de son blason), le plus petit prend la teinte la plus proche de la sienne
+  qui s'écarte de tous ses voisins. Même règle pour les régions d'un territoire découpé. Les palettes des
+  religions et des cultures sont choisies pour que les familles qui se rencontrent (Turcs et Égyptiens, Perses
+  et Byzance) restent bien distinctes.
 - **Lentilles** : filtres tout prêts (Stratège, Pèlerin, Marchand, Savant, Voyageur, Bâtisseur).
 - **Recherche continue** : tant que la vue ne bouge pas, le front demande toutes les 4 s un anneau de
   cellules H3 de plus autour d'elle (8 au plus ; en vue lointaine, les périodes voisines, 4 au plus). Les
@@ -395,7 +418,20 @@ qu'on explore.
   la suite, mise de côté comme route non prise et reprenable ; « + À la file » sur une fiche ajoute le lieu juste
   après l'étape en cours. On avance étape par étape (pas de minuterie). La file est gardée dans le navigateur.
 - **Pas de mode** : un clic ailleurs sur la carte laisse la fiche du scénario telle quelle et donne la caméra au
-  visiteur ; « Suivant » (ou ◎) la ramène aux étapes.
+  visiteur ; « Suivant » (ou ◎) la ramène aux étapes. La pastille du scénario (l'étape en cours, un peu plus
+  grosse, son numéro et son lieu écrits) reste sur la carte pendant ce temps : un clic dessus rouvre la fiche
+  du scénario et y ramène la caméra.
+- **Une carte qui se lit** : sur le globe, seulement l'étape en cours, la précédente (pointillés) et la suivante
+  (flèche pleine) ; plus de traits vers les crochets ni les bifurcations (la fiche les propose). Plus de
+  personnages posés sur la carte par le scénario.
+- **Moins à la fois** : la frise générale marque les étapes de trois scénarios au plus (celui en cours, puis ses
+  voisins dans la file, le précédent d'abord) ; le lecteur montre les pastilles du scénario en cours et du
+  précédent seulement. Un « scénario » est une suite d'étapes d'un même chemin dans la file (`runsOf`).
+- **L'arbre des scénarios**, en carnet : un petit bouton près de ☰ ouvre, dans la fiche du scénario, les
+  chemins pris dessinés comme un arbre sur papier ligné (`treeOf`, pur et testé) : le tronc descend de chemin
+  en chemin (« bifurcation » à l'encre rouge quand on a changé de route, « la file reprend » sinon), un crochet
+  part en branche bleue et revient, une route mise de côté pend là où elle a été laissée, barrée, et se
+  reprend d'un clic ; « vous êtes ici » en or.
 - Pas de voix pour l'instant.
 
 ## Pellicule, crochets et fils (remplacé par le lecteur et la file, sauf les fils)
@@ -429,7 +465,9 @@ rivages anciens.
 - Rôles des personnages et nouvelles catégories : seulement pour les points trouvés après cette version ;
   les anciens gardent leur catégorie (un château reste « monument ») jusqu'à éviction du cache.
 - Fond religieux : seulement pour les années couvertes par Cliopatria, et aussi juste que Wikidata (beaucoup
-  d'États sans religion renseignée, en gris).
+  d'États sans religion renseignée, en gris, ou estimée d'après les voisins).
+- Fond « Cultures » : aussi juste que Wikidata ; la langue officielle d'une cour n'est pas toujours celle de son
+  peuple (la Flandre médiévale, au français officiel, compte parmi les Romans).
 - Wikimedia limite le débit : premier clic sur un territoire parfois lent (jusqu'à une minute) si le serveur vient de beaucoup interroger Wikidata ; ensuite en cache.
 - Le mode multi-services (Redis/BullMQ) n'a pas été exécuté ; le mode conteneur unique est testé.
 - Niveau 2 : testé avec des fournisseurs simulés (tests) et les adaptateurs sans clé en réel ; pas encore

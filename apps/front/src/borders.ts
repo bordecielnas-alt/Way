@@ -3,13 +3,15 @@ import {
   type ImageryProvider, type Viewer,
 } from 'cesium';
 import {
-  formatYear, type Backdrop, type BordersIndex, type BordersPeriod, type Emblem, type EmblemsResponse, type Faith, type FaithsResponse, type PolityLabels,
+  faithByName, formatYear, type Backdrop, type BordersIndex, type BordersPeriod, type Culture, type CulturesResponse, type Emblem, type EmblemsResponse,
+  type Faith, type FaithsResponse, type PolityLabels,
 } from '@way/shared';
 import { setActivity } from './activity.ts';
 import { bounds, type Area, type Region, type Ring } from './divisions.ts';
 import { letter, nameRoots, shortName, type Lettering } from './lettering.ts';
 import { commonsImage, loadImage } from './media.ts';
-import { dominantColor, lighter, withAlpha } from './tint.ts';
+import { neighbors, separate } from './palette.ts';
+import { dominantColor, hslToHex, lighter, withAlpha } from './tint.ts';
 
 /**
  * Dominant colors of emblem files, kept by the browser: known colors show at
@@ -99,27 +101,69 @@ function hue(key: string): number {
   return (h >>> 0) % 360;
 }
 
-/** Religious backdrop: one color per faith family. */
+/**
+ * Religious backdrop: one color per faith family, those of faiths whose
+ * realms met (Persia and Byzantium, India and Tibet) far apart to the eye.
+ */
 export const FAITH_COLORS: Record<Faith, string> = {
   christianity: '#5b8fd9',
   islam: '#3fae6a',
   judaism: '#8fd0f0',
-  zoroastrianism: '#e0a040',
-  hinduism: '#e8733a',
+  zoroastrianism: '#9a4fc0',
+  hinduism: '#f08a2a',
   buddhism: '#f0cf50',
   jainism: '#c9a0e8',
   sikhism: '#e05a8a',
   chinese: '#d24a3c',
   shinto: '#f09a9a',
-  ancient: '#a08466',
-  other: '#9a9a9a',
+  ancient: '#a6875e',
+  other: '#7d8790',
 };
+
+/** Culture backdrop: one color per family of peoples, neighbors on the map (Turks and Egyptians, Slavs and Germans) far apart. */
+export const CULTURE_COLORS: Record<Culture, string> = {
+  latin: '#e0605a',
+  germanic: '#4f7fd6',
+  slavic: '#3fae8a',
+  celtic: '#86c84a',
+  hellenic: '#4cc3e0',
+  baltic: '#e08ac8',
+  iranian: '#8e5fd0',
+  indic: '#f0973a',
+  semitic: '#2f8a3e',
+  afroasiatic: '#e3d6b0',
+  turkic: '#e9d84a',
+  mongolic: '#8f9a36',
+  uralic: '#e0a03c',
+  caucasian: '#a8613e',
+  sinitic: '#c4333a',
+  tibetoburman: '#d993c9',
+  japonic: '#f4a6a0',
+  seasian: '#7fe0c0',
+  austronesian: '#3a8fc0',
+  dravidian: '#c9467e',
+  african: '#b07f34',
+  american: '#d8763a',
+  mixed: '#9c94b8',
+  other: '#8a8a8a',
+};
+
+/** A backdrop that colors each realm by what it is (its faith, its people), looked up on the server. */
+type Trait = 'religion' | 'culture';
+const TRAITS: Record<Trait, { url: string; read: (r: FaithsResponse & CulturesResponse) => Record<string, string>; colors: Record<string, string> }> = {
+  religion: { url: '/api/polity/faiths', read: (r) => r.faiths, colors: FAITH_COLORS },
+  culture: { url: '/api/polity/cultures', read: (r) => r.cultures, colors: CULTURE_COLORS },
+};
+const isTrait = (b: Backdrop): b is Trait => b === 'religion' || b === 'culture';
+/** An unknown realm takes its neighbors' faith or people when this share of them, two at least, agree. */
+const GUESS_SHARE = 0.6;
 
 /** Lookups of the realms' details, shown in the timeline's status while they run. */
 const LOOKUP = {
   names: { label: 'Noms des territoires', title: 'Recherche des noms français des territoires', ai: false },
   emblems: { label: 'Blasons', title: 'Recherche des blasons et drapeaux des territoires', ai: false },
-  faiths: { label: 'Religions', title: 'Recherche de la religion de chaque territoire', ai: false },
+  religion: { label: 'Religions', title: 'Recherche de la religion de chaque territoire', ai: false },
+  culture: { label: 'Peuples', title: 'Recherche du peuple et des langues de chaque territoire', ai: false },
 };
 
 /** Realms are recognized across periods by their Wikidata item, else by name. */
@@ -519,9 +563,10 @@ export class BordersLayer {
   private tints = loadTints();
   private tintTimer: number | undefined;
   private tintsSaveTimer: number | undefined;
-  private faiths: Record<string, Faith> = {};
-  private faithsFrom: number | null = null;
-  private faithsTimer: number | undefined;
+  /** Each realm's faith or people (by item), for the backdrop shown; and for which period and backdrop. */
+  private traits: Record<string, string> = {};
+  private traitsOf: string | null = null;
+  private traitsTimer: number | undefined;
   private emblems: Record<string, Emblem> = {};
   private emblemsFrom: number | null = null;
   private emblemImages = new Map<string, HTMLImageElement | null>();
@@ -534,6 +579,10 @@ export class BordersLayer {
 
   /** Armies' colors found in the period shown (names change it too). */
   private colors = new Map<string, string>();
+  /** Who touches whom, per period (computed once). */
+  private near = new WeakMap<Period, Map<string, Set<string>>>();
+  /** Each realm's color on the political map, set apart from its neighbors' (by realm key). */
+  private realmColors = new Map<string, string>();
   /** Set by the app: the period shown changed (its colors with it). */
   onPeriod: () => void = () => undefined;
 
@@ -624,7 +673,7 @@ export class BordersLayer {
       void this.loadNames(from);
       // Emblems give the realms their colors: asked for whatever the watermarks setting.
       void this.loadEmblems(from);
-      if (this.backdrop === 'religion') void this.loadFaiths(from);
+      if (isTrait(this.backdrop)) void this.loadTraits(from);
       this.onNote(`Frontières de ${formatYear(period.from)}${period.to > period.from ? ` à ${formatYear(period.to)}` : ''}`);
       // Playing forward: the next periods are fetched ahead.
       const ahead = this.index!.events.filter((y) => y > period.to).slice(0, 3);
@@ -675,7 +724,7 @@ export class BordersLayer {
         .sort((a, b) => b.km2 - a.km2)[0];
     }
     const root = shape ? (this.shapes.find((s) => s.id === shape.root) ?? shape) : null;
-    const color = this.tintOf(root?.qid ?? qid) ?? realmColor(hue(root ? realmKey(root) : (qid ?? `n:${name}`)));
+    const color = (root && this.realmColors.get(realmKey(root))) ?? this.tintOf(root?.qid ?? qid) ?? realmColor(hue(root ? realmKey(root) : (qid ?? `n:${name}`)));
     this.colors.set(memo, color);
     return color;
   }
@@ -737,10 +786,15 @@ export class BordersLayer {
     const was = this.quietRealm;
     this.quietRealm = regions?.length ? realm : null;
     if (regions?.length) {
-      const drawn: Drawn[] = regions.map((r) => ({
+      // A vassal with a coat of arms of its own wears its color too; two regions side by side never look alike.
+      const keyed = regions.map((r, k) => ({ key: `${k}`, rings: r.rings, km2: (r.east - r.west) * (r.north - r.south) }));
+      const colors = separate(
+        [...keyed].sort((a, b) => b.km2 - a.km2).map((x) => ({ ...x, color: this.tintOf(regions[Number(x.key)]!.qid) ?? hslToHex(hue(regions[Number(x.key)]!.qid), 0.45, 0.6) })),
+        neighbors(keyed),
+      );
+      const drawn: Drawn[] = regions.map((r, k) => ({
         ...r,
-        // A vassal with a coat of arms of its own wears its color too.
-        fill: ((t) => (t ? withAlpha(t, 0.3) : `hsla(${hue(r.qid)}, 45%, 60%, 0.24)`))(this.tintOf(r.qid)),
+        fill: withAlpha(colors.get(`${k}`)!, this.tintOf(r.qid) ? 0.3 : 0.24),
         stroke: r.estimated ? 'rgba(255, 240, 214, 0.8)' : 'rgba(255, 240, 214, 0.95)',
         dashed: r.estimated,
       }));
@@ -783,24 +837,30 @@ export class BordersLayer {
     // Big realms first: small ones inside or across them stay visible.
     const byId = new Map(period.shapes.map((s) => [s.id, s]));
     const ordered = [...period.shapes].sort((a, b) => (a.parent === null ? 0 : 1) - (b.parent === null ? 0 : 1) || b.km2 - a.km2);
-    const religious = this.backdrop === 'religion';
+    const trait = isTrait(this.backdrop) ? this.backdrop : null;
+    const traits = trait ? this.traitsByRealm(period, trait) : null;
+    this.realmColors = this.backdrop === 'political' ? this.paint(period) : new Map();
     // No backdrop: the bare relief (a click still finds the realm under it).
     for (const s of this.backdrop === 'none' ? [] : ordered) {
       const root = byId.get(s.root) ?? s;
-      const h = hue(realmKey(root));
       const named = !!s.name;
-      // The realm wears the dominant color of its coat of arms (else of its flag), else a hue of its own.
-      const tint = religious ? null : this.tintOf(root.qid);
+      // The realm wears the dominant color of its coat of arms (else of its flag), else a hue of its own,
+      // changed when a neighbor already wears one too close.
+      const color = this.realmColors.get(realmKey(root)) ?? null;
+      const tinted = !!color && !!this.tintOf(root.qid);
       if (s.parent === null) {
-        const faith = religious && s.qid ? this.faiths[s.qid] : undefined;
+        // Faith or people: known, or guessed from the neighbors (lighter, its border dashed).
+        const t = traits?.get(realmKey(s));
+        const tc = t && trait ? TRAITS[trait].colors[t.value] : undefined;
         drawn.push({
           ...s,
-          fill: religious
-            ? (faith ? `${FAITH_COLORS[faith]}66` : 'rgba(150, 150, 150, 0.10)')
-            : tint ? withAlpha(tint, 0.34) : named ? `hsla(${h}, 48%, 58%, 0.30)` : 'rgba(150, 150, 150, 0.08)',
-          stroke: religious
-            ? 'rgba(236, 228, 210, 0.45)'
-            : tint ? lighter(tint, 0.5) : named ? `hsla(${h}, 55%, 80%, 0.85)` : 'rgba(200, 200, 200, 0.25)',
+          fill: traits
+            ? (tc ? withAlpha(tc, t!.guess ? 0.2 : 0.4) : 'rgba(150, 150, 150, 0.10)')
+            : color && named ? withAlpha(color, tinted ? 0.34 : 0.3) : 'rgba(150, 150, 150, 0.08)',
+          stroke: traits
+            ? (tc && t!.guess ? withAlpha(tc, 0.7) : 'rgba(236, 228, 210, 0.45)')
+            : color && named ? withAlpha(lighter(color, 0.5), 0.9) : 'rgba(200, 200, 200, 0.25)',
+          dashed: !!t?.guess,
         });
         if (named && s.main && realmKey(s) !== this.quietRealm) {
           const label = this.displayName(s.name);
@@ -819,7 +879,7 @@ export class BordersLayer {
         }
       } else {
         // A vassal inside its realm: a faint line, as on a strategy map.
-        drawn.push({ ...s, fill: '', stroke: tint ? withAlpha(lighter(tint, 0.7), 0.35) : `hsla(${h}, 40%, 88%, 0.35)`, inner: true });
+        drawn.push({ ...s, fill: '', stroke: color ? withAlpha(lighter(color, 0.7), 0.35) : 'rgba(236, 228, 210, 0.3)', inner: true });
       }
     }
     const layer = new ImageryLayer(new BordersTiles(drawn, 'normal', names, [], this.paper) as unknown as ImageryProvider, { alpha: 0 });
@@ -831,6 +891,70 @@ export class BordersLayer {
     this.anchors = anchors;
     this.showMarks();
     if (this.highlighted) this.highlight(this.highlighted);
+  }
+
+  /**
+   * The political map's colors: each realm its emblem's (else a hue of its
+   * own), the largest keeping theirs, a smaller one changed when a neighbor
+   * already wears one too close.
+   */
+  private paint(period: Period): Map<string, string> {
+    const tops = period.shapes.filter((s) => s.parent === null && s.name);
+    const near = this.nearOf(period);
+    const area = new Map<string, { km2: number; qid: string | null }>();
+    for (const s of tops) {
+      const a = area.get(realmKey(s));
+      area.set(realmKey(s), { km2: (a?.km2 ?? 0) + s.km2, qid: s.qid });
+    }
+    const patches = [...area].sort((a, b) => b[1].km2 - a[1].km2)
+      .map(([key, a]) => ({ key, rings: [], color: this.tintOf(a.qid) ?? hslToHex(hue(key), 0.48, 0.58) }));
+    return separate(patches, near);
+  }
+
+  /** Who touches whom in a period (computed once for it). */
+  private nearOf(period: Period): Map<string, Set<string>> {
+    let near = this.near.get(period);
+    if (!near) {
+      near = neighbors(period.shapes.filter((s) => s.parent === null && s.name).map((s) => ({ key: realmKey(s), rings: s.rings })));
+      this.near.set(period, near);
+    }
+    return near;
+  }
+
+  /**
+   * Each realm's faith or people, by realm key: as the server knows it;
+   * else, for a faith, as its name says it (a caliphate); else guessed from
+   * its neighbors when most of them, two at least, agree (`guess`). Guesses
+   * do not feed other guesses.
+   */
+  private traitsByRealm(period: Period, trait: Trait): Map<string, { value: string; guess: boolean }> {
+    const out = new Map<string, { value: string; guess: boolean }>();
+    if (this.traitsOf !== `${trait}|${period.from}`) return out;
+    const tops = period.shapes.filter((s) => s.parent === null && s.name);
+    for (const s of tops) {
+      const known = s.qid ? this.traits[s.qid] : undefined;
+      const named = trait === 'religion' && (!known || known === 'other') ? faithByName(`${s.name} · ${this.displayName(s.name)}`) : null;
+      const value = named ?? known;
+      if (value && !out.has(realmKey(s))) out.set(realmKey(s), { value, guess: false });
+    }
+    const near = this.nearOf(period);
+    const guesses = new Map<string, string>();
+    for (const s of tops) {
+      const key = realmKey(s);
+      if (out.has(key) && out.get(key)!.value !== 'other') continue;
+      const votes = new Map<string, number>();
+      let n = 0;
+      for (const k of near.get(key) ?? []) {
+        const v = out.get(k);
+        if (!v || v.guess || v.value === 'other' || v.value === 'mixed') continue;
+        n++;
+        votes.set(v.value, (votes.get(v.value) ?? 0) + 1);
+      }
+      const [best, count] = [...votes].sort((a, b) => b[1] - a[1])[0] ?? [null, 0];
+      if (best && count >= 2 && count >= n * GUESS_SHARE) guesses.set(key, best);
+    }
+    for (const [key, value] of guesses) out.set(key, { value, guess: true });
+    return out;
   }
 
   /** French names come from the server progressively (looked up once, then cached). */
@@ -861,9 +985,10 @@ export class BordersLayer {
   setBackdrop(b: Backdrop): void {
     if (b === this.backdrop) return;
     this.backdrop = b;
-    if (b !== 'religion') setActivity('faiths', null);
-    // Asked again each time: faiths looked up since then show up.
-    if (b === 'religion' && this.current) void this.loadFaiths(this.current.from);
+    setActivity('religion', null);
+    setActivity('culture', null);
+    // Asked again each time: faiths and peoples looked up since then show up.
+    if (isTrait(b) && this.current) void this.loadTraits(this.current.from);
     this.show();
   }
 
@@ -877,30 +1002,35 @@ export class BordersLayer {
     if (from === undefined) return;
     clearTimeout(this.emblemsTimer);
     this.emblemsTimer = window.setTimeout(() => void this.loadEmblems(from), 20_000);
-    if (this.backdrop === 'religion') {
-      clearTimeout(this.faithsTimer);
-      this.faithsTimer = window.setTimeout(() => void this.loadFaiths(from), 20_000);
+    if (isTrait(this.backdrop)) {
+      clearTimeout(this.traitsTimer);
+      this.traitsTimer = window.setTimeout(() => void this.loadTraits(from), 20_000);
     }
   }
 
-  /** Faiths of the realms come from the server progressively, like the names. */
-  private async loadFaiths(from: number, attempt = 0): Promise<void> {
-    clearTimeout(this.faithsTimer);
+  /** Faiths or peoples of the realms come from the server progressively, like the names. */
+  private async loadTraits(from: number, attempt = 0): Promise<void> {
+    clearTimeout(this.traitsTimer);
+    const trait = this.backdrop;
+    if (!isTrait(trait)) return;
     try {
-      const r = await fetch(`/api/polity/faiths?year=${from}`);
-      const res = (await r.json()) as FaithsResponse;
-      if (this.current?.from !== from || this.backdrop !== 'religion') return;
-      const changed = this.faithsFrom !== from || JSON.stringify(res.faiths) !== JSON.stringify(this.faiths);
-      this.faiths = res.faiths;
-      this.faithsFrom = from;
+      const r = await fetch(`${TRAITS[trait].url}?year=${from}`);
+      const res = (await r.json()) as FaithsResponse & CulturesResponse;
+      if (this.current?.from !== from || this.backdrop !== trait) return;
+      const got = TRAITS[trait].read(res) ?? {};
+      const of = `${trait}|${from}`;
+      const changed = this.traitsOf !== of || JSON.stringify(got) !== JSON.stringify(this.traits);
+      this.traits = got;
+      this.traitsOf = of;
       if (changed) this.show();
       // Still being looked up: asked again, less and less often. Found: asked again from time to
       // time anyway, the server keeps checking them in the background (like the emblems).
-      setActivity('faiths', res.pending > 0 && attempt < 40 ? LOOKUP.faiths : null);
-      const wait = res.pending > 0 && attempt < 40 ? Math.min(20_000, 4_000 + attempt * 1_000) : 180_000;
-      this.faithsTimer = window.setTimeout(() => {
-        if (document.visibilityState === 'visible') void this.loadFaiths(from, res.pending > 0 ? attempt + 1 : 0);
-        else this.faithsTimer = window.setTimeout(() => void this.loadFaiths(from), 180_000);
+      const more = res.pending > 0 && attempt < 40;
+      setActivity(trait, more ? LOOKUP[trait] : null);
+      const wait = more ? Math.min(20_000, 4_000 + attempt * 1_000) : 180_000;
+      this.traitsTimer = window.setTimeout(() => {
+        if (document.visibilityState === 'visible') void this.loadTraits(from, res.pending > 0 ? attempt + 1 : 0);
+        else this.traitsTimer = window.setTimeout(() => void this.loadTraits(from), 180_000);
       }, wait);
     } catch {
       /* realms stay grey */

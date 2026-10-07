@@ -25,7 +25,10 @@ clé gratuite (Gemini ou Groq), **Tester**, c'est actif tout de suite. Les varia
 [packages/core/providers.default.json](packages/core/providers.default.json)) marchent aussi ; une valeur
 saisie dans les réglages les remplace.
 
-Sur le globe : frontières datées à l'année, noms des royaumes peints sur la carte. Clic sur un territoire
+Sur le globe : frontières datées à l'année, noms des royaumes peints sur la carte, deux États voisins toujours de
+couleurs bien distinctes. Menu **Carte** : fond politique, **religieux** (la religion officielle ou dominante, sinon
+celle de ses prédécesseurs, de son nom ou de ses voisins, en pointillés) ou **cultures** (le peuple de chaque État,
+sinon sa langue, en grandes familles : Latins, Germaniques, Slaves, Turcs, Sémites… ou « Plusieurs peuples »). Clic sur un territoire
 = sa fiche ; nouveau clic dedans = découpage en vassaux et provinces (frontières de l'époque, ou limites
 estimées à défaut), et ainsi de suite. Panneau **Personnages** (en bas à gauche) : suivre un ou plusieurs
 personnages (études, voyages, combats, couronnement…) et afficher les armées en campagne ; rubrique
@@ -53,18 +56,20 @@ pour **l'article**. Les étapes de la vie d'un personnage, et celles des deux fi
 d'après leur propre article. **Le scénario à gauche, l'exploration à droite** : le chemin se lit dans la fiche du
 scénario, à gauche, l'étape comme un article (son image, son lieu et son moment, le récit, puis **Lire l'article** pour
 la section entière), avec à son pied **le lecteur** : les étapes de la file en pastilles et un gros bouton **Suivant**
-qui avance étape par étape. ▾ la replie sur son lecteur ; elle ne se ferme jamais d'elle-même. Ce que vous cliquez sur
+qui avance étape par étape (les pastilles du scénario en cours et du précédent). ▾ la replie sur son lecteur ; elle ne
+se ferme jamais d'elle-même. Le petit arbre près de ☰ montre **l'arbre des scénarios** pris, comme dans un carnet : les
+chemins suivis, les crochets en branches, les routes laissées (reprenables d'un clic). Ce que vous cliquez sur
 la carte ouvre sa propre fiche à droite, et les deux se lisent côte à côte ; chacune s'élargit ou se rétrécit par la
-poignée de son bord intérieur. La frise générale reste en bas, les étapes de la file y sont marquées en or (un clic y
-mène). Les filtres sont réunis en haut, en menus (lentille, thèmes, carte, monde vivant, personnages, échelle) avec
+poignée de son bord intérieur. La frise générale reste en bas, les étapes de la file y sont marquées en or, celles
+de trois scénarios au plus (un clic y mène). Les filtres sont réunis en haut, en menus (lentille, thèmes, carte, monde vivant, personnages, échelle) avec
 l'interrupteur des scénarios. Les étapes sont rangées dans **la file**, comme sur un lecteur de musique : déjà vu,
 maintenant, à suivre (☰ pour la voir, la réordonner, en retirer). Un **crochet** (une personne, un lieu que la section
 lie, ceux de vos thèmes d'abord, en pointillés bleus) glisse quelques étapes en tête de la file, qui reprend d'elle-même
 après ; **Bifurquer** (une bifurcation prévue, toute une vie, ce lieu à travers les siècles, le monde à ce moment)
 remplace la suite, mise de côté comme route non prise ; **+ À la file** sur une fiche y ajoute le lieu. Cliquer ailleurs
-sur la carte ne quitte rien : la caméra est à vous jusqu'à **Suivant** (ou ◎). Sur le globe, les étapes portent les
-numéros de la file (flèche dorée pour la suite, trait plein pour une autre route, pointillés bleus pour un crochet,
-cliquables), et l'étape suivante est écrite en sachant les choix faits.L'IA au travail est nommée dans la barre d'état et sur tout ce qu'elle écrit (étapes,
+sur la carte ne quitte rien : la caméra est à vous jusqu'à **Suivant** (ou ◎), et la pastille dorée du scénario
+reste sur la carte (un clic dessus vous y ramène). Sur le globe, seulement l'étape en cours, la précédente
+(pointillés) et la suivante (flèche dorée), cliquables ; l'étape suivante est écrite en sachant les choix faits. L'IA au travail est nommée dans la barre d'état et sur tout ce qu'elle écrit (étapes,
 parcours, rôles des lieux, flux, fiches traduites ou rédigées). La caméra ne bouge que si l'étape sort de la vue, sans
 changer de hauteur ni d'inclinaison. Boutons
 ◂◂◂ … ▸▸▸ sous la timeline (ou ← ↓ → et Espace) : reculer, pause, avancer, jusqu'au jour près. Sons (et import de vos propres fichiers audio), ouverture
