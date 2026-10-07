@@ -54,7 +54,7 @@ interface AdminResponse {
   queue: { waiting: number; active: number; level2?: { waiting: number; active: number } };
   keys: Record<'pending' | 'done' | 'partial' | 'failed', number>;
   pois: number;
-  realms: { realms: number; named: number; emblems: number; faiths: number; watched?: number };
+  realms: { realms: number; named: number; emblems: number; faiths: number; cultures?: number; watched?: number };
   cache: { bytes: number; maxBytes: number; media: { bytes: number; count: number } };
   level2: { enabled: boolean; mode: 'active' | 'degraded' | 'no-llm' | 'off'; providers: ProviderStatus[] };
 }
@@ -702,7 +702,7 @@ function renderStatus(d: AdminResponse): void {
     card('Zones cherchées', nf.format(d.keys.done), `${d.keys.pending + d.keys.partial} en cours · ${d.keys.failed} en échec`),
     card('File de recherche', nf.format(d.queue.waiting), `${d.queue.active} en cours${q2 ? ` · niveau 2 : ${q2.waiting + q2.active}` : ''}`),
     card('Territoires complétés', `${pct(d.realms.emblems, d.realms.realms)} blasons`,
-      `${pct(d.realms.named, d.realms.realms)} noms français · ${pct(d.realms.faiths, d.realms.realms)} religions, sur ${nf.format(d.realms.realms)} États (complété en arrière-plan)${d.realms.watched ? ` · ${nf.format(d.realms.watched)} suivis de près` : ''}`),
+      `${pct(d.realms.named, d.realms.realms)} noms français · ${pct(d.realms.faiths, d.realms.realms)} religions · ${pct(d.realms.cultures ?? 0, d.realms.realms)} peuples et langues, sur ${nf.format(d.realms.realms)} États (complété en arrière-plan)${d.realms.watched ? ` · ${nf.format(d.realms.watched)} suivis de près` : ''}`),
     card('Stockage', d.mode.store === 'embedded-postgres' ? 'Postgres intégré' : d.mode.store, `file ${d.mode.queue}`),
   ].join('');
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { cellsForPoint, ringAround } from './geo.ts';
-import { CATEGORY_THEME, makeShown, roleTags, THEME_CATEGORIES, THEMES, themesOf } from './themes.ts';
+import { CATEGORY_THEME, faithByName, makeShown, roleTags, THEME_CATEGORIES, THEMES, themesOf } from './themes.ts';
 
 describe('themes', () => {
   it('gives every category but people one theme', () => {
@@ -23,6 +23,20 @@ describe('themes', () => {
     expect(makeShown({ hiddenThemes: [...THEMES], hiddenCats: [], people: true })(nobody)).toBe(true);
     expect(makeShown({ hiddenThemes: [], hiddenCats: [], people: false })(king)).toBe(false);
     expect(makeShown({ hiddenThemes: [], hiddenCats: ['monument'], people: true })({ category: 'monument' })).toBe(false);
+  });
+});
+
+describe('faithByName', () => {
+  it('reads a faith in a realm’s name only when it says one', () => {
+    expect(faithByName('Abbasid Caliphate')).toBe('islam');
+    expect(faithByName('Émirat de Grenade')).toBe('islam');
+    expect(faithByName('Sultanate of Delhi')).toBe('islam');
+    expect(faithByName('Prince-Bishopric of Liège')).toBe('christianity');
+    expect(faithByName('États pontificaux')).toBe('christianity');
+    expect(faithByName('Teutonic Order')).toBe('christianity');
+    expect(faithByName('Kingdom of France')).toBeNull();
+    // A word inside another is no clue.
+    expect(faithByName('Papalotla')).toBeNull();
   });
 });
 

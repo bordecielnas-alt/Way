@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PolityCandidate, SubdivisionRow } from '@way/providers';
-import { faithAt, nameSimilarity, regionsAt, rulersAt, scoreCandidate } from './polity.ts';
+import { cultureAt, faithAt, nameSimilarity, regionsAt, rulersAt, scoreCandidate } from './polity.ts';
 import { normalizeUi } from './settings.ts';
 import { spanYears } from './doors.ts';
 
@@ -97,8 +97,10 @@ describe('faithAt', () => {
     ];
     expect(faithAt(rome, 100)).toBe('ancient');
     expect(faithAt(rome, 450)).toBe('christianity');
-    // Nothing dated around the year: the undated statement.
-    expect(faithAt(rome, -100)).toBe('other');
+    // Nothing dated around the year, the undated statement names no known faith: the nearest dated one.
+    expect(faithAt(rome, -100)).toBe('ancient');
+    // Too far from any of them: the undated one.
+    expect(faithAt(rome, -500)).toBe('other');
     const u = (faith: string, weight = 1) => ({ faith, start: null, end: null, weight });
     expect(faithAt([u('islam'), u('other'), u('other')], 900)).toBe('islam');
     // Most weight wins: the official religion over those merely present.
@@ -108,5 +110,40 @@ describe('faithAt', () => {
     expect(faithAt([u('zoroastrianism'), u('zoroastrianism'), u('ancient'), u('ancient'), u('ancient'), u('ancient')], -400)).toBe('zoroastrianism');
     expect(faithAt([u('ancient')], -400)).toBe('ancient');
     expect(faithAt([], 900)).toBeNull();
+  });
+
+  it('hears the realm’s kin only when it says nothing itself', () => {
+    const kin = (faith: string) => ({ faith, start: null, end: null, weight: 1, kin: true });
+    // A duchy with no religion of its own: the one of the realm it was part of.
+    expect(faithAt([kin('christianity')], 1200)).toBe('christianity');
+    expect(faithAt([{ faith: 'other', start: null, end: null, weight: 1 }, kin('islam')], 1200)).toBe('islam');
+    // Its own outweighs any number of its kin's.
+    expect(faithAt([{ faith: 'islam', start: null, end: null, weight: 1 }, kin('christianity'), kin('christianity')], 1500)).toBe('islam');
+  });
+});
+
+describe('cultureAt', () => {
+  const c = (faith: string, how: 'people' | 'official' | 'used', weight = how === 'people' ? 3 : how === 'official' ? 2 : 1) =>
+    ({ faith, start: null, end: null, weight, how });
+
+  it('reads the people first, then the official languages, then those used', () => {
+    // Hungary: Hungarian and (learned) Latin official; Latin weighs little.
+    expect(cultureAt([c('uralic', 'official'), c('latin', 'official', 0.4), c('latin', 'used')], 1400)).toBe('uralic');
+    // Its people speak before any number of languages used.
+    expect(cultureAt([c('turkic', 'people'), c('iranian', 'used'), c('iranian', 'used'), c('semitic', 'used')], 1500)).toBe('turkic');
+    expect(cultureAt([c('other', 'official'), c('hellenic', 'used')], 900)).toBe('hellenic');
+    expect(cultureAt([], 900)).toBeNull();
+    // Poland: only Latin official, Polish used; Latin, a learned language, does not speak for it.
+    expect(cultureAt([{ ...c('latin', 'official', 0.4), learned: true }, c('slavic', 'used')], 1305)).toBe('slavic');
+    // Hungary: an unknown official language dated 1000–1844 does not hide the Hungarian stated without dates.
+    expect(cultureAt([c('uralic', 'used'), { ...c('other', 'official'), start: 1000, end: 1844 }, { ...c('uralic', 'official'), start: 1844, end: null }], 1305)).toBe('uralic');
+  });
+
+  it('calls a realm of many peoples by that name rather than by one of them', () => {
+    // The Holy Roman Empire: Latin, Polish, Czech, Hungarian, Italian, German official.
+    const hre = [c('latin', 'official', 0.4), c('slavic', 'official'), c('slavic', 'official'), c('uralic', 'official'), c('latin', 'official'), c('germanic', 'official')];
+    expect(cultureAt(hre, 1500)).toBe('mixed');
+    // Two families: the heavier one.
+    expect(cultureAt([c('hellenic', 'official'), c('latin', 'official', 0.4)], 900)).toBe('hellenic');
   });
 });

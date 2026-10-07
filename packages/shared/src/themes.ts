@@ -93,12 +93,13 @@ export function makeShown(f: ThemeFilter): (p: Pick<PoiLite, 'category' | 'tags'
   };
 }
 
-/** What colors the territories: their realms, their faiths, or nothing (the bare relief). */
-export type Backdrop = 'political' | 'religion' | 'none';
+/** What colors the territories: their realms, their faiths, their peoples and languages, or nothing (the bare relief). */
+export type Backdrop = 'political' | 'religion' | 'culture' | 'none';
 
 export const BACKDROP_LABELS: Record<Backdrop, { label: string; title: string }> = {
   political: { label: 'Politique', title: 'Les États et leurs vassaux' },
   religion: { label: 'Religieux', title: 'La religion officielle ou dominante de chaque État' },
+  culture: { label: 'Cultures', title: 'Le peuple et la langue de chaque État, par grande famille' },
   none: { label: 'Aucun', title: 'Seulement le relief' },
 };
 
@@ -149,6 +150,63 @@ export const FAITH_LABELS: Record<Faith, string> = {
 export interface FaithsResponse {
   /** Wikidata item of a realm -> its faith at that year. */
   faiths: Record<string, Faith>;
+  /** Items still being looked up (poll again). */
+  pending: number;
+}
+
+/**
+ * A realm's faith read from its name alone, when nothing else says it: a
+ * caliphate, a sultanate or an emirate is Muslim, a prince-bishopric or a
+ * military order Christian. Null when the name says nothing.
+ */
+export function faithByName(name: string): Faith | null {
+  // Whole words only (accented letters count as letters): "Papalotla" says nothing.
+  if (/(?<!\p{L})(?:caliphate|califat|sultanate|sultanat|emirate|émirat|imamate|imamat|beylik|khedivate|khédivat)(?!\p{L})/iu.test(name)) return 'islam';
+  if (/(?<!\p{L})(?:prince-bishopric|bishopric|évêché|principauté épiscopale|archbishopric|archevêché|papal|pontifical|pontificaux|crusader|teutonic|teutonique|livonian|hospitaller|hospitaliers|templar|abbey|abbaye)(?!\p{L})/iu.test(name)) {
+    return 'christianity';
+  }
+  return null;
+}
+
+// ---------- peoples and languages of the realms (culture backdrop) ----------
+
+/** Great ethnolinguistic families: a realm's people, else its language, falls in one of them. */
+export const CULTURES = [
+  'latin', 'germanic', 'slavic', 'celtic', 'hellenic', 'baltic', 'iranian', 'indic', 'semitic', 'afroasiatic', 'turkic', 'mongolic',
+  'uralic', 'caucasian', 'sinitic', 'tibetoburman', 'japonic', 'seasian', 'austronesian', 'dravidian', 'african', 'american', 'mixed', 'other',
+] as const;
+export type Culture = (typeof CULTURES)[number];
+
+export const CULTURE_LABELS: Record<Culture, string> = {
+  latin: 'Latins et Romans',
+  germanic: 'Germaniques',
+  slavic: 'Slaves',
+  celtic: 'Celtes',
+  hellenic: 'Grecs',
+  baltic: 'Baltes',
+  iranian: 'Iraniens',
+  indic: 'Indo-Aryens',
+  semitic: 'Sémites',
+  afroasiatic: 'Égyptiens, Berbères, Couchites',
+  turkic: 'Turcs',
+  mongolic: 'Mongols et Toungouses',
+  uralic: 'Finno-Ougriens',
+  caucasian: 'Caucasiens',
+  sinitic: 'Chinois',
+  tibetoburman: 'Tibétains et Birmans',
+  japonic: 'Japonais et Coréens',
+  seasian: 'Tai, Khmers, Viêt',
+  austronesian: 'Austronésiens',
+  dravidian: 'Dravidiens',
+  african: 'Bantous et Niger-Congo',
+  american: 'Amérindiens',
+  mixed: 'Plusieurs peuples',
+  other: 'Autre',
+};
+
+export interface CulturesResponse {
+  /** Wikidata item of a realm -> its people's family at that year. */
+  cultures: Record<string, Culture>;
   /** Items still being looked up (poll again). */
   pending: number;
 }

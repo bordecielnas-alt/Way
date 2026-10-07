@@ -17,7 +17,6 @@ import { aiActivity, currentActivity, onActivity, setActivity } from './activity
 import { BordersLayer, realmKey, type BorderShape } from './borders.ts';
 import { CameraGuide, type Zone } from './camera.ts';
 import { Card, type CardPaths } from './card.ts';
-import { CastLayer, type CastMember } from './cast.ts';
 import { Connection } from './connection.ts';
 import { bounds, contains, divide, type Area, type Region } from './divisions.ts';
 import { Filters, importanceFloor, type Heraldry, type Scale } from './filters.ts';
@@ -344,7 +343,6 @@ card.onStoryPerson = (p) => {
 };
 
 // ---------- scenarios: the scenario's card on the left, its player at its foot, its file ----------
-const cast = new CastLayer(viewer);
 const library = new ScenarioLibrary();
 const player = new Player(document.getElementById('scenario')!, () => library.all);
 const viewContext = () => ({
@@ -424,7 +422,8 @@ const fitCards = () => {
 fitCards();
 // A card opened or closed beside the other: both make room for the globe again.
 new MutationObserver(fitCards).observe(document.body, { attributes: true, attributeFilter: ['class'] });
-player.onRoute = (steps, at, options, labels) => storyMap.showWalk(steps, at, options, labels);
+player.onRoute = (now, prev, next) => storyMap.showWalk(now, prev, next);
+player.onPin = (step, label, paused) => storyMap.setPin(step, label, paused);
 player.onStep = (walk, j, first) => {
   const step = walk.steps[j]!;
   clearTerritory();
@@ -437,17 +436,9 @@ player.onStep = (walk, j, first) => {
       camera.frame(walk.steps, { min: 250_000, max: 7_000_000 }, step);
     } else camera.to(step, { min: 150_000, max: 4_000_000 });
   });
-  // The person followed stands on the spot, with those present.
-  const members: CastMember[] = step.cast.map((p) => ({ name: p.name, role: p.role, image: p.image, you: p.qid === walk.hero?.qid }));
-  if (walk.hero && !step.cast.some((p) => p.qid === walk.hero!.qid)) {
-    members.unshift({ name: walk.hero.name, role: walk.hero.role, image: walk.hero.image, you: true });
-  }
-  cast.show(step, members);
 };
-player.onPause = () => {
-  cast.clear();
-  storyBack();
-};
+// The scenario's pin stays on the map: the card's story comes back around it.
+player.onPause = storyBack;
 /** A card asked for (a place's paths, an entity's menu): it opens on the right, the file waits. */
 function openCard(poi: PoiLite): void {
   player.pause();
@@ -949,15 +940,18 @@ function hover(): void {
     tooltip.lastElementChild!.textContent = figure.presence.text;
     return;
   }
-  const walked = storyMap.pickStep(at);
+  // The scenario's pin, or a step beside it: where a click takes the file.
+  const pin = storyMap.pickPin(at);
+  const side = pin ? null : storyMap.pickStep(at);
+  const walked = pin ?? (side ? storyMap.besideStep(side) : null);
   if (walked) {
     viewer.canvas.style.cursor = 'pointer';
     tooltip.hidden = false;
     tooltip.style.left = `${at.x}px`;
     tooltip.style.top = `${at.y}px`;
     tooltip.innerHTML = '<div class="tooltip-title"></div><div class="tooltip-meta"></div>';
-    tooltip.firstElementChild!.textContent = `${walked.j + 1}. ${walked.step.place}`;
-    tooltip.lastElementChild!.textContent = `${walked.step.label} · ${formatYear(walked.step.year)}`;
+    tooltip.firstElementChild!.textContent = walked.place;
+    tooltip.lastElementChild!.textContent = `${formatYear(walked.year)} · ${pin ? 'revenir au scénario' : side === 1 ? 'l’étape suivante' : 'l’étape précédente'}`;
     return;
   }
   const stop = storyMap.pick(at);
@@ -1036,16 +1030,15 @@ handler.setInputAction((c: { position: Cartesian2 }) => {
     openLiving(alive);
     return;
   }
-  const option = storyMap.pickOption(c.position);
-  if (option) {
+  if (storyMap.pickPin(c.position)) {
     tooltip.hidden = true;
-    player.takeOption(option.key);
+    player.back();
     return;
   }
-  const walked = storyMap.pickStep(c.position);
-  if (walked) {
+  const side = storyMap.pickStep(c.position);
+  if (side) {
     tooltip.hidden = true;
-    player.showStep(walked.j);
+    player.showStep(side);
     return;
   }
   const stop = storyMap.pick(c.position);

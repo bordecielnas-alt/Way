@@ -160,6 +160,81 @@ export function updateStep(q: Queue, walkId: string, j: number, step: WalkStep):
   return { ...q, walks: { ...q.walks, [walkId]: { ...w, steps } } };
 }
 
+/** A stretch of the file read in one walk: its items from `from` to `to` (excluded). */
+export interface Run {
+  walk: string;
+  from: number;
+  to: number;
+  /** A crochet's steps, which come back to the file after them. */
+  crochet: boolean;
+}
+
+/** The file cut into its scenarios, in order: each time the walk read changes, another one starts. */
+export function runsOf(q: Queue): Run[] {
+  const out: Run[] = [];
+  q.items.forEach((it, i) => {
+    const last = out.at(-1);
+    if (last && last.walk === it.walk && last.to === i) last.to = i + 1;
+    else out.push({ walk: it.walk, from: i, to: i + 1, crochet: !!it.crochet });
+  });
+  return out;
+}
+
+/**
+ * The scenarios nearest the step now, at most `max` walks: the one read,
+ * then those just before and after it, by turns (the earlier first).
+ */
+export function nearWalks(q: Queue, max: number): Set<string> {
+  const runs = runsOf(q);
+  const r = runs.findIndex((x) => x.from <= q.at && q.at < x.to);
+  const out = new Set<string>();
+  if (r < 0) return out;
+  for (let d = 0; out.size < max && (r - d >= 0 || r + d < runs.length); d++) {
+    for (const k of d ? [r - d, r + d] : [r]) if (runs[k] && out.size < max) out.add(runs[k].walk);
+  }
+  return out;
+}
+
+/** The items of the scenario read now and of the one before it, for the player: [from, to). */
+export function nearSpan(q: Queue): { from: number; to: number } {
+  const runs = runsOf(q);
+  const r = runs.findIndex((x) => x.from <= q.at && q.at < x.to);
+  if (r < 0) return { from: 0, to: q.items.length };
+  return { from: runs[Math.max(0, r - 1)]!.from, to: runs[r]!.to };
+}
+
+/** A scenario on the tree's trunk: its crochets and the routes set aside from it hang off it. */
+export interface Stem {
+  run: Run;
+  /** Another walk than the stem before: a route taken there (else the file takes up again). */
+  turn: boolean;
+  crochets: Run[];
+  /** Routes set aside where this stem passed (indexes in the shelf). */
+  shelves: number[];
+}
+
+/**
+ * The scenarios taken, as a tree: the trunk is the file's walks in order,
+ * a crochet branches off the scenario before it and comes back, a route not
+ * taken hangs off the last scenario that passed where it was set aside.
+ */
+export function treeOf(q: Queue): Stem[] {
+  const stems: Stem[] = [];
+  for (const r of runsOf(q)) {
+    const last = stems.at(-1);
+    if (r.crochet && last) last.crochets.push(r);
+    else stems.push({ run: r, turn: !!last && last.run.walk !== r.walk, crochets: [], shelves: [] });
+  }
+  const passes = (st: Stem, place: string) =>
+    [st.run, ...st.crochets].some((r) => q.items.slice(r.from, r.to).some((_, k) => stepOf(q, r.from + k)?.step.place === place));
+  q.shelf.forEach((sh, k) => {
+    let at = stems.length - 1;
+    while (at > 0 && !passes(stems[at]!, sh.from)) at--;
+    stems[at]?.shelves.push(k);
+  });
+  return stems;
+}
+
 /** Where the visitor is in a walk: the furthest of its steps reached, and whether all were. */
 export function progressOf(q: Queue, walkId: string): { step: number; done: boolean } | undefined {
   const w = q.walks[walkId];

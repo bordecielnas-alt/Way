@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ScenarioWalk, WalkStep } from '@way/shared';
-import { add, clearNext, crochet, emptyQueue, goTo, move, parseQueue, progressOf, remove, start, stepOf, takeShelf, updateStep, type Queue } from './queue.ts';
+import {
+  add, clearNext, crochet, emptyQueue, goTo, move, nearSpan, nearWalks, parseQueue, progressOf, remove, runsOf, start, stepOf, takeShelf, treeOf, updateStep,
+  type Queue,
+} from './queue.ts';
 
 const step = (place: string, year = 1270): WalkStep => ({ place, label: 'Étape', year, lat: 0, lon: 0, poi: null, text: '', cast: [] });
 const walk = (id: string, places: string[]): ScenarioWalk => ({
@@ -96,5 +99,33 @@ describe('the file', () => {
     const after = add(back, walk('card|acre', ['Acre']));
     expect(new Set(after.items.map((x) => x.key)).size).toBe(after.items.length);
     expect(parseQueue(null)).toEqual(emptyQueue());
+  });
+
+  it('cuts the file into its scenarios, and keeps the nearest ones', () => {
+    // Tabriz (soie), Bagdad Maragha (a crochet), Ayas Venise (soie again).
+    let q = goTo(crochet(start(emptyQueue(), soie, 3), bagdad), 3);
+    expect(runsOf(q).map((r) => `${r.walk}:${r.from}-${r.to}${r.crochet ? '*' : ''}`)).toEqual(['soie:0-1', 'bagdad:1-3*', 'soie:3-5']);
+    // The player: the scenario read and the one before it.
+    expect(nearSpan(q)).toEqual({ from: 1, to: 5 });
+    expect(nearSpan(goTo(q, 0))).toEqual({ from: 0, to: 1 });
+    // The timeline: the one read, then those around it, the earlier first.
+    q = start(q, polo);
+    expect([...nearWalks(q, 3)]).toEqual(['polo', 'soie', 'bagdad']);
+    expect([...nearWalks(q, 2)]).toEqual(['polo', 'soie']);
+    expect([...nearWalks(goTo(q, 1), 2)]).toEqual(['bagdad', 'soie']);
+  });
+
+  it('draws the scenarios taken as a tree: crochets and routes set aside branch off', () => {
+    // soie from Tabriz, a crochet to Bagdad, back to Ayas, then polo taken there (Venise set aside).
+    let q = goTo(crochet(start(emptyQueue(), soie, 3), bagdad), 3);
+    q = start(q, polo);
+    const tree = treeOf(q);
+    expect(tree.map((s) => [s.run.walk, s.turn, s.crochets.map((c) => c.walk), s.shelves])).toEqual([
+      ['soie', false, ['bagdad'], []],
+      ['soie', false, [], [0]],
+      ['polo', true, [], []],
+    ]);
+    expect(q.shelf[0]!.from).toBe('Ayas');
+    expect(treeOf(emptyQueue())).toEqual([]);
   });
 });

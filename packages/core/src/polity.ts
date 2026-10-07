@@ -3,7 +3,10 @@ import { dirname } from 'node:path';
 import {
   background, coolingUntil, interactive, polity, wikipedia, type PolityCandidate, type PolityDetails, type SubdivisionRow,
 } from '@way/providers';
-import type { EmblemsResponse, Faith, FaithsResponse, PolityInfo, PolityLabels, PolityRulerInfo, SubdivisionItem, SubdivisionsResponse } from '@way/shared';
+import {
+  faithByName, type Culture, type CulturesResponse, type EmblemsResponse, type Faith, type FaithsResponse, type PolityInfo, type PolityLabels,
+  type PolityRulerInfo, type SubdivisionItem, type SubdivisionsResponse,
+} from '@way/shared';
 import type { DatedFaith, DatedFile, ItemEmblems } from '@way/providers';
 import { listSnapshots, snapshotFor, SNAPSHOTS_BEFORE } from './borders.ts';
 import type { Cliopatria } from './cliopatria.ts';
@@ -84,6 +87,8 @@ interface CacheFile {
   emblems: Record<string, CachedEmblems>;
   /** Religions of those items (the religious backdrop). */
   faiths: Record<string, CachedFaiths>;
+  /** Peoples and languages of those items (the culture backdrop), kept as faiths are. */
+  cultures: Record<string, CachedFaiths>;
   /** Clicks on each realm (decayed score and when last counted): the refresh follows them. */
   interest: Record<string, { n: number; at: number }>;
 }
@@ -275,15 +280,32 @@ export function rulersAt(rulers: PolityDetails['rulers'], year: number): PolityR
   return [...(before ? [out(before, 'before')] : []), ...(after ? [out(after, 'after')] : [])];
 }
 
+/** A statement dated around a year counts; with none, one dated less than this far away is better than nothing. */
+const NEAR_YEARS = 200;
+
 /**
- * The faith in force at a year: among statements dated around it (else the
- * undated ones), the known family with the most weight (preferred rank,
- * official religion, number of statements); "other" only when nothing else.
+ * The statements that speak for a year: those dated around it, else the
+ * undated ones (also when those dated name no known family: Hungary's
+ * "Latin of the kingdom" dated 1000–1844 does not hide its Hungarian); then
+ * the dated ones nearest the year (up to NEAR_YEARS away): the Roman
+ * Republic of −100 is told by the cults dated from −27 rather than by an
+ * undated "other".
  */
-export function faithAt(list: DatedFaith[], year: number): Faith | null {
+function poolAt(list: DatedFaith[], year: number): DatedFaith[] {
   const fits = (f: DatedFaith) => (f.start === null || f.start <= year) && (f.end === null || f.end >= year);
+  const known = (pool: DatedFaith[]) => pool.some((f) => f.faith !== 'other');
   const dated = list.filter((f) => (f.start !== null || f.end !== null) && fits(f));
-  const pool = dated.length ? dated : list.filter((f) => f.start === null && f.end === null);
+  const undated = list.filter((f) => f.start === null && f.end === null);
+  const pool = known(dated) ? dated : known(undated) ? undated : dated.length ? dated : undated;
+  if (known(pool)) return pool;
+  const away = (f: DatedFaith) => (f.end !== null && f.end < year ? year - f.end : f.start !== null && f.start > year ? f.start - year : 0);
+  const near = list.filter((f) => f.faith !== 'other' && (f.start !== null || f.end !== null) && away(f) <= NEAR_YEARS);
+  const best = Math.min(...near.map(away));
+  return near.length ? near.filter((f) => away(f) === best) : pool;
+}
+
+/** The family with the most weight in a pool ("ancient" cults do not add up); "other" when none is known, null when empty. */
+function heaviest(pool: DatedFaith[]): string | null {
   if (!pool.length) return null;
   const score = new Map<string, number>();
   for (const f of pool) {
@@ -294,18 +316,62 @@ export function faithAt(list: DatedFaith[], year: number): Faith | null {
   }
   let best: string | null = null;
   for (const [f, n] of score) if (best === null || n > score.get(best)!) best = f;
-  return (best ?? 'other') as Faith;
+  return best ?? 'other';
+}
+
+/** The realm's own statements first; its kin's only when its own name no known family. */
+function ownFirst(list: DatedFaith[], year: number, pick: (pool: DatedFaith[]) => string | null): string | null {
+  const own = pick(poolAt(list.filter((f) => !f.kin), year));
+  if (own && own !== 'other') return own;
+  return pick(poolAt(list.filter((f) => f.kin), year)) ?? own;
+}
+
+/**
+ * The faith in force at a year: among statements dated around it (else the
+ * undated ones, else the nearest dated), the known family with the most
+ * weight (preferred rank, official religion, number of statements); the
+ * realm's kin speak only when it says nothing; "other" only when nothing else.
+ */
+export function faithAt(list: DatedFaith[], year: number): Faith | null {
+  return ownFirst(list, year, heaviest) as Faith | null;
+}
+
+/** Below this share of its best source, a realm's first family does not speak for it: "mixed". */
+const MIXED_SHARE = 0.5;
+const SOURCES = ['people', 'official', 'used'] as const;
+
+/**
+ * A realm's people at a year, as a family: its people if Wikidata gives it,
+ * else its official languages, else those used; a learned language (Latin
+ * in Poland) speaks only when the realm states no other;
+ * "mixed" when no family holds half of that source among three or more
+ * (the Holy Roman Empire, Austria-Hungary).
+ */
+export function cultureAt(list: DatedFaith[], year: number): Culture | null {
+  return ownFirst(list, year, (pool) => {
+    const spoken = pool.filter((f) => f.faith !== 'other' && !f.learned);
+    const use = spoken.length ? spoken : pool.filter((f) => f.faith !== 'other');
+    const source = SOURCES.find((h) => use.some((f) => (f.how ?? 'used') === h));
+    if (!source) return heaviest(pool);
+    const from = use.filter((f) => (f.how ?? 'used') === source);
+    const score = new Map<string, number>();
+    for (const f of from) score.set(f.faith, (score.get(f.faith) ?? 0) + (f.weight ?? 1));
+    const total = [...score.values()].reduce((x, y) => x + y, 0);
+    const [best, n] = [...score].sort((x, y) => y[1] - x[1])[0]!;
+    return score.size >= 3 && n < total * MIXED_SHARE ? 'mixed' : best;
+  }) as Culture | null;
 }
 
 const KIND_WORD = /empire|royaume|république|sultanat|califat|khanat|émirat|cité|principauté|duché|confédération|dynastie|état/i;
 
 export class PolityService {
-  private cache: CacheFile = { resolutions: {}, details: {}, subdivisions: {}, labels: {}, emblems: {}, faiths: {}, interest: {} };
+  private cache: CacheFile = { resolutions: {}, details: {}, subdivisions: {}, labels: {}, emblems: {}, faiths: {}, cultures: {}, interest: {} };
   /** Chores for a realm just clicked: they pass before the rest of the background work. */
   private urgent = new Set<string>();
   private labelQueue = new Set<string>();
   private emblemQueue = new Set<string>();
   private faithQueue = new Set<string>();
+  private cultureQueue = new Set<string>();
   /** Background refreshes of stale entries, run after the map names. */
   private chores = new Map<string, () => Promise<unknown>>();
   private inflight = new Map<string, Promise<Resolution | null>>();
@@ -329,7 +395,7 @@ export class PolityService {
         const raw = JSON.parse(readFileSync(file, 'utf8')) as Partial<CacheFile>;
         this.cache = {
           resolutions: raw.resolutions ?? {}, details: raw.details ?? {}, subdivisions: raw.subdivisions ?? {}, labels: raw.labels ?? {},
-          emblems: raw.emblems ?? {}, faiths: raw.faiths ?? {}, interest: raw.interest ?? {},
+          emblems: raw.emblems ?? {}, faiths: raw.faiths ?? {}, cultures: raw.cultures ?? {}, interest: raw.interest ?? {},
         };
       } catch {
         /* corrupt cache: rebuilt on demand */
@@ -523,15 +589,53 @@ export class PolityService {
     const period = year >= SNAPSHOTS_BEFORE ? this.clio?.period(year) : null;
     if (!period) return { faiths: {}, pending: 0 };
     const faiths: FaithsResponse['faiths'] = {};
-    for (const qid of new Set(period.features.filter((f) => f.qid && this.itemFits(f, period.from)).map((f) => f.qid!))) {
+    for (const f of period.features) {
+      const qid = f.qid;
+      if (!qid || faiths[qid] || !this.itemFits(f, period.from)) continue;
       const hit = this.cache.faiths[qid];
       if (this.faithStale(qid)) this.faithQueue.add(qid);
-      const f = hit ? faithAt(hit.list, period.from) : null;
-      if (f) faiths[qid] = f;
+      const found = hit ? faithAt(hit.list, period.from) : null;
+      // Nothing known: its name may say it (a caliphate, a prince-bishopric).
+      const l = this.cache.labels[qid];
+      const named = !found || found === 'other' ? faithByName([f.name, l?.en, l?.fr].filter(Boolean).join(' · ')) : null;
+      const faith = named ?? found;
+      if (faith) faiths[qid] = faith;
     }
     const unnamed = period.features.some((f) => f.qid && !this.cache.labels[f.qid]);
     if (this.faithQueue.size) this.chore('faiths', () => this.fetchFaiths());
     return { faiths, pending: this.faithQueue.size + (unnamed ? 1 : 0) };
+  }
+
+  /**
+   * The people of each realm shown at a year (its ethnic group, else its
+   * languages), as a family, for the culture backdrop. Unknown ones are
+   * looked up in the background, as faiths are.
+   */
+  cultures(year: number): CulturesResponse {
+    const period = year >= SNAPSHOTS_BEFORE ? this.clio?.period(year) : null;
+    if (!period) return { cultures: {}, pending: 0 };
+    const cultures: CulturesResponse['cultures'] = {};
+    for (const qid of new Set(period.features.filter((f) => f.qid && this.itemFits(f, period.from)).map((f) => f.qid!))) {
+      const hit = this.cache.cultures[qid];
+      if (this.cultureStale(qid)) this.cultureQueue.add(qid);
+      const c = hit ? cultureAt(hit.list, period.from) : null;
+      if (c) cultures[qid] = c;
+    }
+    const unnamed = period.features.some((f) => f.qid && !this.cache.labels[f.qid]);
+    if (this.cultureQueue.size) this.chore('cultures', () => this.fetchCultures());
+    return { cultures, pending: this.cultureQueue.size + (unnamed ? 1 : 0) };
+  }
+
+  private async fetchCultures(): Promise<void> {
+    const ids = this.batch(this.cultureQueue);
+    const got = await polity.itemCultures(ids);
+    const at = Date.now();
+    for (const id of ids) {
+      this.cache.cultures[id] = { list: got.get(id) ?? [], at, v: polity.CULTURES_VERSION };
+      this.cultureQueue.delete(id);
+    }
+    this.scheduleSave();
+    if (this.cultureQueue.size) this.chore('cultures', () => this.fetchCultures());
   }
 
   private async fetchFaiths(): Promise<void> {
@@ -598,32 +702,37 @@ export class PolityService {
     const labels = pick((q) => this.labelStale(q));
     const emblems = pick((q) => !!this.cache.labels[q] && this.emblemStale(q));
     const faiths = pick((q) => !!this.cache.labels[q] && this.faithStale(q));
+    const cultures = pick((q) => !!this.cache.labels[q] && this.cultureStale(q));
     for (const q of labels) this.labelQueue.add(q);
     for (const q of emblems) this.emblemQueue.add(q);
     for (const q of faiths) this.faithQueue.add(q);
+    for (const q of cultures) this.cultureQueue.add(q);
     if (labels.length) this.chore('labels', () => this.fetchLabels());
     if (emblems.length) this.chore('emblems', () => this.fetchEmblems());
     if (faiths.length) this.chore('faiths', () => this.fetchFaiths());
-    const n = labels.length + emblems.length + faiths.length + cards;
+    if (cultures.length) this.chore('cultures', () => this.fetchCultures());
+    const n = labels.length + emblems.length + faiths.length + cultures.length + cards;
     if (n) {
-      console.log(`[polity] refining: ${labels.length} names, ${emblems.length} emblems, ${faiths.length} faiths, ${cards} watched cards`);
+      console.log(`[polity] refining: ${labels.length} names, ${emblems.length} emblems, ${faiths.length} faiths, ${cultures.length} peoples, ${cards} watched cards`);
     }
     return n;
   }
 
   /** How complete the background knowledge of the realms is (Réglages page). */
-  refineStats(): { realms: number; named: number; emblems: number; faiths: number; watched: number } {
+  refineStats(): { realms: number; named: number; emblems: number; faiths: number; cultures: number; watched: number } {
     const all = this.clio?.allQids() ?? [];
     let named = 0;
     let emblems = 0;
     let faiths = 0;
+    let cultures = 0;
     for (const q of all) {
       if (this.cache.labels[q]?.fr) named++;
       const e = this.cache.emblems[q];
       if (e && (e.coa.length || e.flag.length)) emblems++;
       if (this.cache.faiths[q]?.list.length) faiths++;
+      if (this.cache.cultures[q]?.list.length) cultures++;
     }
-    return { realms: all.length, named, emblems, faiths, watched: this.watched().length };
+    return { realms: all.length, named, emblems, faiths, cultures, watched: this.watched().length };
   }
 
   private async fetchEmblems(): Promise<void> {
@@ -810,6 +919,11 @@ export class PolityService {
     if (!hit || hit.v !== polity.FAITHS_VERSION) return true;
     return Date.now() - hit.at > (hit.list.length ? this.freshMs(qid) : this.missingMs(qid));
   }
+  private cultureStale(qid: string): boolean {
+    const hit = this.cache.cultures[qid];
+    if (!hit || hit.v !== polity.CULTURES_VERSION) return true;
+    return Date.now() - hit.at > (hit.list.length ? this.freshMs(qid) : this.missingMs(qid));
+  }
   /** The card: its government and rulers are the political side, looked after like the emblems. */
   private detailsStale(qid: string): boolean {
     const d = this.cache.details[qid];
@@ -854,6 +968,10 @@ export class PolityService {
     if (this.faithStale(qid)) {
       this.faithQueue.add(qid);
       add('faiths', () => this.fetchFaiths());
+    }
+    if (this.cultureStale(qid)) {
+      this.cultureQueue.add(qid);
+      add('cultures', () => this.fetchCultures());
     }
     if (this.cache.details[qid] && this.detailsStale(qid)) add(`d:${qid}`, () => this.fetchDetails(qid));
     if (this.regionsStale(qid)) add(`s:${qid}`, () => this.fetchSubdivisions(qid));

@@ -427,6 +427,34 @@ export interface DatedFaith {
   end: number | null;
   /** How much the statement counts: preferred rank and official religion weigh more. */
   weight: number;
+  /**
+   * Said of a kin of the realm (what it followed or was followed by, what it
+   * was part of): counted only when the realm itself says nothing.
+   */
+  kin?: boolean;
+  /** For a people's or language's statement: where it comes from (its people first, then its official language, then those used). */
+  how?: 'people' | 'official' | 'used';
+  /** A learned language (Latin, Classical Chinese): it never speaks for a realm that states a language of its own. */
+  learned?: boolean;
+}
+
+/** A realm's kin, whose religion or language it likely shared: predecessor, successor, the realm it was part of. */
+const KIN = 'wdt:P155|wdt:P156|wdt:P1365|wdt:P1366|wdt:P361';
+
+/** What the kin of realms state (best rank only, undated): `path` the property asked, 50 realms per query. */
+async function kinRows(qids: string[], path: string): Promise<{ item: string; value: string }[]> {
+  const out: { item: string; value: string }[] = [];
+  for (let i = 0; i < qids.length; i += 50) {
+    const q = `
+SELECT DISTINCT ?item ?v WHERE {
+  VALUES ?item { ${qids.slice(i, i + 50).map((x) => `wd:${x}`).join(' ')} }
+  ?item ${KIN} ?k . ?k ${path} ?v .
+}`;
+    for (const b of await sparql(q, 30_000)) {
+      if (b.v?.value.includes('/entity/Q')) out.push({ item: qidOf(b.item!.value), value: qidOf(b.v.value) });
+    }
+  }
+  return out;
 }
 
 /** Root religions, by family key: a statement matches the root it descends from. */
@@ -446,8 +474,8 @@ const FAITH_ROOTS: [string, string[]][] = [
   ['ancient', ['Q29536', 'Q9134', 'Q855270', 'Q337547', 'Q478186', 'Q12153518', 'Q4492323']],
 ];
 
-/** Bumped when FAITH_ROOTS change: cached answers are then looked up again. */
-export const FAITHS_VERSION = 3;
+/** Bumped when FAITH_ROOTS or the lookup change: cached answers are then looked up again. */
+export const FAITHS_VERSION = 5;
 
 /** Religion item -> family, for the life of the process (a few hundred at most). */
 const faithFamilies = new Map<string, string>();
@@ -480,11 +508,14 @@ SELECT ?rel ?root WHERE {
 
 /**
  * Religions of realms (their family: christianity, islam…), deprecated
- * statements left out, 50 per query. A religion with no known family
- * counts as `other`.
+ * statements left out, 50 per query; with those of their kin (`kin`), for
+ * the realms that state none. A religion with no known family counts as
+ * `other`. "Christianity" stated beside "Catholicism" in the same property
+ * says it once, not twice (the Hafsids list Islam, Catholicism, Christianity
+ * and Judaism as official: the Christian minority must not outweigh Islam).
  */
 export async function itemFaiths(qids: string[]): Promise<Map<string, DatedFaith[]>> {
-  const rows: { item: string; rel: string; start: number | null; end: number | null; weight: number }[] = [];
+  const rows: { item: string; rel: string; start: number | null; end: number | null; weight: number; kin: boolean; official?: boolean }[] = [];
   for (let i = 0; i < qids.length; i += 50) {
     const q = `
 SELECT ?item ?rel ?s ?e ?official ?rank WHERE {
@@ -501,13 +532,144 @@ SELECT ?item ?rel ?s ?e ?official ?rank WHERE {
         item: qidOf(b.item!.value), rel: qidOf(b.rel.value),
         start: b.s?.value ? parseYear(b.s.value) : null, end: b.e?.value ? parseYear(b.e.value) : null,
         weight: (b.official?.value === 'true' ? 2 : 1) * (b.rank?.value.endsWith('PreferredRank') ? 3 : 1),
+        kin: false, official: b.official?.value === 'true',
       });
     }
   }
+  // The realms that state none: their kin's (a query of its own, WDQS plans the UNION badly).
+  const silent = qids.filter((x) => !rows.some((r) => r.item === x));
+  for (const r of await kinRows(silent, 'wdt:P140|wdt:P3075')) rows.push({ item: r.item, rel: r.value, start: null, end: null, weight: 1, kin: true });
   await faithFamiliesOf([...new Set(rows.map((r) => r.rel))]);
+  const roots = new Set(FAITH_ROOTS.flatMap(([, ids]) => ids));
+  const family = (rel: string) => faithFamilies.get(rel) ?? 'other';
+  const generic = (r: (typeof rows)[number]) => roots.has(r.rel) && rows.some((o) =>
+    o !== r && o.item === r.item && o.kin === r.kin && o.official === r.official && o.rel !== r.rel && family(o.rel) === family(r.rel));
   const out = new Map<string, DatedFaith[]>();
-  for (const { item, rel, ...r } of rows) {
-    (out.get(item) ?? out.set(item, []).get(item)!).push({ faith: faithFamilies.get(rel) ?? 'other', ...r });
+  for (const row of rows) {
+    if (generic(row)) continue;
+    const { item, rel, kin, official: _, ...r } = row;
+    (out.get(item) ?? out.set(item, []).get(item)!).push({ faith: family(rel), ...r, ...(kin ? { kin } : {}) });
+  }
+  return out;
+}
+
+/**
+ * Root languages of each ethnolinguistic family (ids checked against
+ * Wikidata): a language falls in the family of the first root it descends from.
+ */
+const CULTURE_ROOTS: [string, string[]][] = [
+  // Latin and the Romance languages (Latino-Faliscan holds Latin itself).
+  ['latin', ['Q19814', 'Q33478', 'Q397']],
+  ['germanic', ['Q21200']],
+  ['slavic', ['Q23526', 'Q33251', 'Q35499']],
+  ['celtic', ['Q25293']],
+  ['hellenic', ['Q2042538', 'Q9129', 'Q35497', 'Q107358']],
+  ['baltic', ['Q33136']],
+  ['iranian', ['Q33527']],
+  ['indic', ['Q33577', 'Q11059']],
+  ['semitic', ['Q34049', 'Q35518', 'Q28602']],
+  ['afroasiatic', ['Q50868', 'Q34610803', 'Q25448', 'Q33248']],
+  ['turkic', ['Q34090']],
+  ['mongolic', ['Q33750', 'Q34230']],
+  ['uralic', ['Q34113']],
+  ['caucasian', ['Q34030', 'Q8785']],
+  ['sinitic', ['Q33857', 'Q7850', 'Q37041']],
+  ['tibetoburman', ['Q34064']],
+  ['japonic', ['Q33612', 'Q11263525', 'Q9176']],
+  ['seasian', ['Q34171', 'Q33199']],
+  ['austronesian', ['Q49228']],
+  ['dravidian', ['Q33311']],
+  ['african', ['Q33838', 'Q33146', 'Q33705']],
+  ['american', ['Q5218', 'Q34073', 'Q33738']],
+];
+
+/**
+ * Learned languages a court wrote in without speaking them (Latin in
+ * Hungary or Poland, Classical Chinese in Japan, Church Slavonic in
+ * Wallachia): they count little next to the realm's own.
+ */
+const LEARNED = new Set(['Q397', 'Q1163234', 'Q37041', 'Q33251', 'Q35499']);
+
+/** Bumped when CULTURE_ROOTS or the lookup change: cached answers are then looked up again. */
+export const CULTURES_VERSION = 2;
+
+/** Language item -> family, for the life of the process. */
+const cultureFamilies = new Map<string, string>();
+
+async function cultureFamiliesOf(langs: string[]): Promise<void> {
+  const roots = new Map<string, string>();
+  for (const [family, ids] of CULTURE_ROOTS) for (const id of ids) roots.set(id, family);
+  const missing = langs.filter((r) => !cultureFamilies.has(r));
+  const rank = (f: string) => CULTURE_ROOTS.findIndex(([x]) => x === f);
+  for (let i = 0; i < missing.length; i += 60) {
+    const chunk = missing.slice(i, i + 60);
+    const q = `
+SELECT ?lang ?root WHERE {
+  VALUES ?lang { ${chunk.map((x) => `wd:${x}`).join(' ')} }
+  VALUES ?root { ${[...roots.keys()].map((r) => `wd:${r}`).join(' ')} }
+  { ?lang wdt:P279* ?root } UNION { ?lang wdt:P361 ?x . ?x wdt:P279* ?root }
+}`;
+    const found = new Map<string, string>();
+    for (const b of await sparql(q, 30_000)) {
+      const lang = qidOf(b.lang!.value);
+      const family = roots.get(qidOf(b.root!.value))!;
+      const cur = found.get(lang);
+      if (cur === undefined || rank(family) < rank(cur)) found.set(lang, family);
+    }
+    for (const r of chunk) cultureFamilies.set(r, found.get(r) ?? 'other');
+  }
+}
+
+/**
+ * The peoples and languages of realms, as families (latin, germanic,
+ * turkic…): the ethnic group Wikidata gives (through its language) weighs
+ * most, then the official language, then the languages used; learned
+ * languages count little; those of their kin (`kin`) for the realms that
+ * state none. Reuses `DatedFaith` (its `faith` is the family).
+ */
+export async function itemCultures(qids: string[]): Promise<Map<string, DatedFaith[]>> {
+  const rows: { item: string; lang: string; start: number | null; end: number | null; weight: number; kin: boolean; how: 'people' | 'official' | 'used' }[] = [];
+  const weigh = (lang: string, how: number, preferred: boolean) => how * (preferred ? 3 : 1) * (LEARNED.has(lang) ? 0.2 : 1);
+  for (let i = 0; i < qids.length; i += 50) {
+    const items = qids.slice(i, i + 50).map((x) => `wd:${x}`).join(' ');
+    // Languages, dated; then peoples, through their language: two queries, WDQS plans their UNION badly.
+    const languages = `
+SELECT ?item ?lang ?s ?e ?official ?rank WHERE {
+  VALUES ?item { ${items} }
+  VALUES (?p ?ps ?official) { (p:P37 ps:P37 true) (p:P2936 ps:P2936 false) }
+  ?item ?p ?st . ?st ?ps ?lang ; wikibase:rank ?rank .
+  FILTER(?rank != wikibase:DeprecatedRank)
+  OPTIONAL { ?st pq:P580 ?s }
+  OPTIONAL { ?st pq:P582 ?e }
+}`;
+    for (const b of await sparql(languages, 30_000)) {
+      if (!b.lang?.value.includes('/entity/Q')) continue;
+      const lang = qidOf(b.lang.value);
+      rows.push({
+        item: qidOf(b.item!.value), lang,
+        start: b.s?.value ? parseYear(b.s.value) : null, end: b.e?.value ? parseYear(b.e.value) : null,
+        weight: weigh(lang, b.official?.value === 'true' ? 2 : 1, !!b.rank?.value.endsWith('PreferredRank')), kin: false,
+        how: b.official?.value === 'true' ? 'official' : 'used',
+      });
+    }
+    const peoples = `
+SELECT ?item ?lang WHERE {
+  VALUES ?item { ${items} }
+  ?item wdt:P172 ?people . ?people wdt:P103|wdt:P2936 ?lang .
+}`;
+    for (const b of await sparql(peoples, 30_000)) {
+      if (!b.lang?.value.includes('/entity/Q')) continue;
+      const lang = qidOf(b.lang.value);
+      rows.push({ item: qidOf(b.item!.value), lang, start: null, end: null, weight: weigh(lang, 3, false), kin: false, how: 'people' });
+    }
+  }
+  const silent = qids.filter((x) => !rows.some((r) => r.item === x));
+  for (const r of await kinRows(silent, 'wdt:P37')) rows.push({ item: r.item, lang: r.value, start: null, end: null, weight: weigh(r.value, 1, false), kin: true, how: 'official' });
+  await cultureFamiliesOf([...new Set(rows.map((r) => r.lang))]);
+  const out = new Map<string, DatedFaith[]>();
+  for (const { item, lang, kin, ...r } of rows) {
+    const learned = LEARNED.has(lang);
+    (out.get(item) ?? out.set(item, []).get(item)!).push({ faith: cultureFamilies.get(lang) ?? 'other', ...r, ...(kin ? { kin } : {}), ...(learned ? { learned } : {}) });
   }
   return out;
 }

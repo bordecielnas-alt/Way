@@ -1,8 +1,8 @@
 import {
-  ALL_THEMES, BACKDROP_LABELS, CATEGORY_LABELS, CATEGORY_THEME, FAITH_LABELS, FAITHS, LENSES, makeShown, THEME_CATEGORIES, THEME_LABELS, THEMES,
+  ALL_THEMES, BACKDROP_LABELS, CATEGORY_LABELS, CATEGORY_THEME, CULTURE_LABELS, CULTURES, FAITH_LABELS, FAITHS, LENSES, makeShown, THEME_CATEGORIES, THEME_LABELS, THEMES,
   themesOf, type Backdrop, type Category, type Lens, type PoiLite, type Theme, type ThemeFilter,
 } from '@way/shared';
-import { FAITH_COLORS } from './borders.ts';
+import { CULTURE_COLORS, FAITH_COLORS } from './borders.ts';
 import { GEOGRAPHY, type Geography } from './geography.ts';
 import { CATEGORY_COLORS, PEOPLE_COLOR, THEME_COLORS } from './icons.ts';
 import { LIVING, type Living } from './living.ts';
@@ -52,7 +52,7 @@ export class Filters {
   private scaleButtons = new Map<Scale, HTMLButtonElement>();
   private peopleButton: HTMLButtonElement;
   private toggleAll: HTMLButtonElement;
-  private legend: HTMLElement;
+  private legends: HTMLElement[];
 
   constructor(
     private root: HTMLElement,
@@ -87,9 +87,13 @@ export class Filters {
         <div class="scale" role="group" aria-label="Fond des territoires">${(Object.keys(BACKDROP_LABELS) as Backdrop[]).map(
           (b) => `<button type="button" data-backdrop="${b}" title="${BACKDROP_LABELS[b].title}">${BACKDROP_LABELS[b].label}</button>`,
         ).join('')}</div>
-        <div class="faith-legend" hidden>${FAITHS.map(
+        <div class="faith-legend" data-legend="religion" hidden>${FAITHS.map(
           (f) => `<span class="faith"><span class="chip-dot" style="background:${FAITH_COLORS[f]}"></span>${FAITH_LABELS[f]}</span>`,
-        ).join('')}<span class="faith"><span class="chip-dot unknown"></span>Inconnue</span></div>
+        ).join('')}<span class="faith"><span class="chip-dot unknown"></span>Inconnue</span><span class="faith guess"><span class="chip-dot guess"></span>Pointillés : d’après les voisins</span></div>
+        <div class="faith-legend" data-legend="culture" hidden>${CULTURES.filter((c) => c !== 'other').map(
+          (c) => `<span class="faith"><span class="chip-dot" style="background:${CULTURE_COLORS[c]}"></span>${CULTURE_LABELS[c]}</span>`,
+        ).join('')}<span class="faith"><span class="chip-dot unknown"></span>Inconnu</span><span class="faith guess"><span class="chip-dot guess"></span>Pointillés : d’après les voisins</span>
+          <span class="faith-note">Son peuple selon Wikidata, sinon sa langue officielle (le latin des chancelleries compte peu).</span></div>
         <div class="filters-title fpop-sub">Géographie</div>
         <div class="geo-chips" role="group" aria-label="Géographie">${GEOGRAPHY.map(
           (g) => `<button type="button" class="chip" data-geo="${g.key}" title="${g.title}"><span class="chip-dot" style="background:${g.color}"></span>${g.label}</button>`,
@@ -157,7 +161,7 @@ export class Filters {
     });
 
     // ---------- backdrop, scale, layers ----------
-    this.legend = root.querySelector('.faith-legend')!;
+    this.legends = [...root.querySelectorAll<HTMLElement>('[data-legend]')];
     root.querySelectorAll<HTMLButtonElement>('[data-backdrop]').forEach((b) => {
       const v = b.dataset.backdrop as Backdrop;
       this.backdropButtons.set(v, b);
@@ -265,7 +269,7 @@ export class Filters {
 
   /** The current choice of each menu, written on its button: a closed menu still says what it does. */
   private summarize(): void {
-    if (!this.legend) return; // still being built
+    if (!this.legends) return; // still being built
     const sum = (id: string, text: string) => {
       const el = this.root.querySelector<HTMLElement>(`.fmenu[data-sec="${id}"] .fsec-sum`);
       if (el) el.textContent = text;
@@ -338,7 +342,7 @@ export class Filters {
 
   private syncBackdrop(): void {
     for (const [v, b] of this.backdropButtons) b.setAttribute('aria-pressed', String(v === this.backdrop));
-    this.legend.hidden = this.backdrop !== 'religion';
+    for (const l of this.legends) l.hidden = l.dataset.legend !== this.backdrop;
     this.syncLenses();
   }
 
